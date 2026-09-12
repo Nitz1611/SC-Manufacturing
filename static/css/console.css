@@ -1165,13 +1165,48 @@ body {
 }
 
 /* ── INLINE PANELS (compare + chart detail) ── */
+.panel-overlay-host {
+  position: relative;
+  min-height: 280px;
+}
+
+.panel-overlay-host.hidden-view { display: none !important; }
+
 .inline-panel {
-  margin-top: 16px;
   border: 1px solid rgba(0, 102, 204, 0.2);
   border-radius: var(--radius-sm);
   background: linear-gradient(135deg, #f8fbfe 0%, #eef6fc 100%);
   overflow: hidden;
   animation: panelSlide 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.inline-panel.overlay-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 40px rgba(0, 40, 85, 0.14);
+  animation: overlayFadeIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes overlayFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.overlay-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+}
+
+.inline-panel.overlay-panel .compare-chart-wrap {
+  height: 220px;
+  margin-bottom: 12px;
 }
 
 .inline-panel-header {
@@ -1216,6 +1251,10 @@ body {
 }
 
 .inline-panel-body { padding: 18px; }
+
+.inline-panel.overlay-panel .inline-panel-header {
+  flex-shrink: 0;
+}
 
 .data-table tbody tr.cat-row.compare-active td,
 .data-table tbody tr.cat-row.detail-active td {

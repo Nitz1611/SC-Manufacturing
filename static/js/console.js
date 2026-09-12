@@ -368,6 +368,15 @@
     bindLineHeatmapEvents();
   }
 
+  function getOverlayHost(fromEl, cardBody) {
+    return fromEl?.closest('.panel-overlay-host') || cardBody?.querySelector('.panel-overlay-host:not(.hidden-view)') || cardBody;
+  }
+
+  function mountOverlayPanel(host, panel) {
+    panel.classList.add('overlay-panel');
+    host.appendChild(panel);
+  }
+
   function closeInlinePanel() {
     state.compareCategory = null;
     state.detailCategory = null;
@@ -404,7 +413,7 @@
         </div>
         <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
       </div>
-      <div class="inline-panel-body">
+      <div class="inline-panel-body overlay-panel-body">
         <div class="compare-chart-wrap"><canvas id="compare-chart"></canvas></div>
         <div class="table-scroll">
           <table class="data-table compare-table">
@@ -427,14 +436,11 @@
         </div>
       </div>`;
 
-    cardBody.appendChild(panel);
+    mountOverlayPanel(getOverlayHost(anchorEl, cardBody), panel);
     anchorEl?.classList.add('compare-active');
 
     panel.querySelector('.inline-panel-close').addEventListener('click', () => {
       closeInlinePanel();
-      state.compareMode = false;
-      document.querySelectorAll('.compare-btn-card.active').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.compare-hint').forEach(h => h.remove());
     });
 
     requestAnimationFrame(() => {
@@ -465,7 +471,7 @@
     });
   }
 
-  function openCategoryDetailPanel(category, cardBody) {
+  function openCategoryDetailPanel(category, overlayHost) {
     closeInlinePanel();
     state.detailCategory = category;
 
@@ -481,12 +487,12 @@
     panel.innerHTML = `
       <div class="inline-panel-header">
         <div>
-          <div class="inline-panel-title">${category} — Period Detail</div>
-          <div class="inline-panel-sub">${site} · click × to close</div>
+          <div class="inline-panel-title">Detailed View — ${category}</div>
+          <div class="inline-panel-sub">${site} · period breakdown</div>
         </div>
         <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
       </div>
-      <div class="inline-panel-body">
+      <div class="inline-panel-body overlay-panel-body">
         <div class="inline-detail-grid">
           <div class="compare-chart-wrap"><canvas id="detail-chart"></canvas></div>
           <div class="category-detail-stats">
@@ -496,22 +502,19 @@
           </div>
         </div>
         <div class="table-scroll" style="margin-top:16px">
-          <table class="data-table compare-table">
+          <table class="data-table compare-table heatmap-table">
             <thead><tr><th>Metric</th>${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}<th>Avg</th></tr></thead>
             <tbody><tr>
               <td>Unplanned DT %</td>
-              ${vals.map(v => `<td class="${valClass(v)}">${fmtPct(v)}</td>`).join('')}
-              <td class="${valClass(avg)}">${fmtPct(avg)}</td>
+              ${vals.map(v => heatTd(v, 8)).join('')}
+              ${heatTd(avg, 12, 'col-total')}
             </tr></tbody>
           </table>
         </div>
       </div>`;
 
-    cardBody.appendChild(panel);
+    mountOverlayPanel(overlayHost, panel);
     panel.querySelector('.inline-panel-close').addEventListener('click', closeInlinePanel);
-
-    const row = cardBody.querySelector(`.cat-row[data-category="${CSS.escape(category)}"]`);
-    if (row) row.classList.add('detail-active');
 
     requestAnimationFrame(() => {
       destroyChart('detail-chart');
@@ -533,8 +536,81 @@
           ...CHART_DEFAULTS,
           plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
           scales: {
-            y: { beginAtZero: true, ticks: { callback: v => v + '%' }, grid: { color: 'rgba(0,40,85,0.06)' } },
-            x: { grid: { display: false } },
+            y: { beginAtZero: true, ...PRO_AXIS, ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' } },
+            x: { ...PRO_AXIS },
+          },
+        },
+      });
+    });
+  }
+
+  function openLineDetailPanel(line, overlayHost) {
+    closeInlinePanel();
+    state.detailCategory = line;
+
+    const site = activeSite();
+    const vals = lineValuesForSite(site, line);
+    const avg = avgOf(vals);
+    const peak = Math.max(...vals);
+    const peakIdx = vals.indexOf(peak);
+
+    const panel = document.createElement('div');
+    panel.id = 'inline-panel';
+    panel.className = 'inline-panel';
+    panel.innerHTML = `
+      <div class="inline-panel-header">
+        <div>
+          <div class="inline-panel-title">Detailed View — ${line}</div>
+          <div class="inline-panel-sub">${site} · line period breakdown</div>
+        </div>
+        <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="inline-panel-body overlay-panel-body">
+        <div class="inline-detail-grid">
+          <div class="compare-chart-wrap"><canvas id="detail-chart"></canvas></div>
+          <div class="category-detail-stats">
+            <div class="detail-stat"><div class="detail-stat-label">Average DT %</div><div class="detail-stat-value">${fmtPct(avg)}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${PERIODS[peakIdx]} · ${fmtPct(peak)}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">vs 5% Target</div><div class="detail-stat-value ${avg >= 5 ? 'val-high' : 'val-low'}">${avg >= 5 ? 'Above target' : 'Below target'}</div></div>
+          </div>
+        </div>
+        <div class="table-scroll" style="margin-top:16px">
+          <table class="data-table compare-table heatmap-table">
+            <thead><tr><th>Metric</th>${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}<th>Avg</th></tr></thead>
+            <tbody><tr>
+              <td>Unplanned DT %</td>
+              ${vals.map(v => heatTd(v, 14)).join('')}
+              ${heatTd(avg, 14, 'col-total')}
+            </tr></tbody>
+          </table>
+        </div>
+      </div>`;
+
+    mountOverlayPanel(overlayHost, panel);
+    panel.querySelector('.inline-panel-close').addEventListener('click', closeInlinePanel);
+
+    requestAnimationFrame(() => {
+      destroyChart('detail-chart');
+      const canvas = document.getElementById('detail-chart');
+      if (!canvas || typeof Chart === 'undefined') return;
+      state.charts['detail-chart'] = new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels: PERIODS,
+          datasets: [{
+            label: `${line} DT %`,
+            data: vals,
+            backgroundColor: PERIOD_COLORS,
+            borderRadius: { topLeft: 4, topRight: 4 },
+            borderSkipped: false,
+          }],
+        },
+        options: {
+          ...CHART_DEFAULTS,
+          plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, max: 14, ...PRO_AXIS, ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' } },
+            x: { ...PRO_AXIS },
           },
         },
       });
@@ -882,7 +958,7 @@
         </div>
       </div>
       <div class="data-card-body">
-        <div id="view-heatmap-table" class="category-table-view">${buildHeatmapTable(false)}</div>
+        <div id="view-heatmap-table" class="panel-overlay-host category-table-view">${buildHeatmapTable(false)}</div>
       </div>
     </div>`;
   }
@@ -931,11 +1007,11 @@
     overview.innerHTML = `
       ${metricStripHTML()}${aiSummaryHTML()}
       ${dataCard('Unplanned DT % by Category',
-        `<div id="view-category-table" class="category-table-view">${buildHeatmapTable(true)}</div>
-         <div id="view-category-chart" class="hidden-view"><div class="chart-wrap chart-wrap-pro"><canvas id="chart-category"></canvas></div></div>`, 'category', true)}
+        `<div id="view-category-table" class="panel-overlay-host category-table-view">${buildHeatmapTable(true)}</div>
+         <div id="view-category-chart" class="hidden-view panel-overlay-host"><div class="chart-wrap chart-wrap-pro"><canvas id="chart-category"></canvas></div></div>`, 'category', true)}
       ${dataCard('Unplanned DT % by Line/Category',
-        `<div id="view-line-table">${buildLineHeatmapTable()}</div>
-         <div id="view-line-chart" class="hidden-view"><div class="chart-wrap tall chart-wrap-pro"><canvas id="chart-line"></canvas></div></div>`, 'line')}
+        `<div id="view-line-table" class="panel-overlay-host">${buildLineHeatmapTable()}</div>
+         <div id="view-line-chart" class="hidden-view panel-overlay-host"><div class="chart-wrap tall chart-wrap-pro"><canvas id="chart-line"></canvas></div></div>`, 'line')}
       <div class="overview-grid-3">
         ${dataCard('Unplanned DT % by Day of Week', '<div class="chart-wrap short"><canvas id="chart-dow"></canvas></div>')}
         ${dataCard('Unplanned DT Hours by Reason', '<div class="chart-wrap short"><canvas id="chart-reason"></canvas></div>')}
@@ -987,6 +1063,7 @@
   }
 
   function toggleCardView(cardId, view) {
+    closeInlinePanel();
     document.querySelectorAll(`.view-toggle-btn[data-card="${cardId}"]`).forEach(b => {
       b.classList.toggle('active', b.dataset.view === view);
     });
@@ -1000,11 +1077,16 @@
       chartEl?.classList.remove('hidden-view');
       if (cardId === 'category') {
         makeGroupedBarChart('chart-category', CATEGORIES, CATEGORY_BASE, 8, (cat, canvas) => {
-          const cardBody = canvas.closest('.data-card-body');
-          if (cardBody) openCategoryDetailPanel(cat, cardBody);
+          const host = canvas.closest('.panel-overlay-host');
+          if (host) openCategoryDetailPanel(cat, host);
         });
       }
-      if (cardId === 'line') makeGroupedBarChart('chart-line', LINES, LINE_BASE, 14);
+      if (cardId === 'line') {
+        makeGroupedBarChart('chart-line', LINES, LINE_BASE, 14, (line, canvas) => {
+          const host = canvas.closest('.panel-overlay-host');
+          if (host) openLineDetailPanel(line, host);
+        });
+      }
     }
   }
 
