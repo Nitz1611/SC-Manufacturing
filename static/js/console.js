@@ -145,6 +145,7 @@
     expandedLineSites: { ABERDEEN: true },
     topSitesCount: 5,
     lineTrendFilter: 'all',
+    cardViews: { category: 'table', line: 'table' },
   };
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -411,6 +412,10 @@
 
   function toggleCompareMode(btn) {
     const cardId = btn.dataset.compareCard || 'category';
+    const cardToggleId = btn.dataset.cardId;
+    const view = cardToggleId ? (state.cardViews[cardToggleId] || 'table') : 'table';
+    if (view === 'chart') return;
+
     const wasActive = btn.classList.contains('active');
 
     document.querySelectorAll('.compare-btn-card').forEach(b => b.classList.remove('active'));
@@ -434,8 +439,8 @@
     if (!cardBody) return;
     const hint = document.createElement('div');
     hint.className = 'compare-hint';
-    hint.textContent = cardId === 'line'
-      ? 'Select a line to open the detailed view across sites.'
+    hint.textContent = cardId === 'line' || cardId === 'line-tab'
+      ? 'Select a line to compare across sites.'
       : 'Select a category to compare across sites.';
     const tableView = cardBody.querySelector('.category-table-view, .panel-overlay-host');
     if (tableView) cardBody.insertBefore(hint, tableView);
@@ -1052,7 +1057,7 @@
           </div>
           <div class="card-header-actions">
             ${exportBtnHTML('line-export-btn')}
-            ${compareButtonHTML('line', 'line')}
+            ${compareButtonHTML('line-tab', 'line', 'table')}
           </div>
         </div>
       </div>
@@ -1197,21 +1202,51 @@
     refreshAllTables();
   }
 
-  function compareButtonHTML(cardId, compareType = 'category') {
-    const label = compareType === 'line' ? 'Detailed view' : 'Compare Category';
-    const title = compareType === 'line'
-      ? 'Open detailed line view across sites'
-      : 'Compare category across sites';
+  function getCompareLabel(compareType, view = 'table') {
+    if (view === 'chart') return 'Detailed view';
+    return compareType === 'line' ? 'Compare Line' : 'Compare Category';
+  }
+
+  function compareButtonId(cardId) {
+    if (cardId === 'heatmap') return 'compare-btn-heatmap';
+    if (cardId === 'line-tab') return 'compare-btn-line-tab';
+    return `compare-btn-${cardId}`;
+  }
+
+  function compareButtonHTML(cardId, compareType = 'category', view = 'table') {
+    const label = getCompareLabel(compareType, view);
+    const btnId = compareButtonId(cardId);
     const cardAttr = compareType === 'line' ? 'line' : cardId === 'heatmap' ? 'heatmap' : 'category';
-    return `<button type="button" class="compare-btn-card" data-compare-card="${cardAttr}" title="${title}">
+    const title = view === 'chart'
+      ? 'Click chart bars for a detailed view'
+      : compareType === 'line'
+        ? 'Compare line across sites'
+        : 'Compare category across sites';
+    return `<button type="button" class="compare-btn-card" id="${btnId}" data-compare-card="${cardAttr}" data-compare-type="${compareType}" data-card-id="${cardId}" title="${title}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
-        ${label}
+        <span class="compare-btn-label">${label}</span>
       </button>`;
+  }
+
+  function updateCompareButtonLabel(cardId) {
+    const btn = document.getElementById(compareButtonId(cardId));
+    if (!btn) return;
+    const compareType = btn.dataset.compareType || 'category';
+    const view = state.cardViews[cardId] || 'table';
+    const label = getCompareLabel(compareType, view);
+    const labelEl = btn.querySelector('.compare-btn-label');
+    if (labelEl) labelEl.textContent = label;
+    btn.title = view === 'chart'
+      ? 'Click chart bars for a detailed view'
+      : compareType === 'line'
+        ? 'Compare line across sites'
+        : 'Compare category across sites';
   }
 
   function categoryCardActions(cardId, includeToggle, exportId = null, compareType = 'category') {
     const exportBtn = exportId ? exportBtnHTML(exportId) : '';
-    const compareBtn = compareButtonHTML(cardId, compareType);
+    const view = includeToggle ? (state.cardViews[cardId] || 'table') : 'table';
+    const compareBtn = compareButtonHTML(cardId, compareType, view);
     const toggle = includeToggle ? `<div class="view-toggle">
         <button type="button" class="view-toggle-btn active" data-view="table" data-card="${cardId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
         <button type="button" class="view-toggle-btn" data-view="chart" data-card="${cardId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>
@@ -1314,6 +1349,14 @@
 
   function toggleCardView(cardId, view) {
     closeInlinePanel();
+    state.cardViews[cardId] = view;
+    updateCompareButtonLabel(cardId);
+    if (view === 'chart') {
+      state.compareMode = false;
+      state.compareContext = null;
+      document.querySelectorAll('.compare-btn-card.active').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.compare-hint').forEach(h => h.remove());
+    }
     document.querySelectorAll(`.view-toggle-btn[data-card="${cardId}"]`).forEach(b => {
       b.classList.toggle('active', b.dataset.view === view);
     });

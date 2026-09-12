@@ -13,10 +13,9 @@
   --border: #e2e8f0;
   --bg: #eef2f7;
   --white: #ffffff;
-  --header-brand-h: 64px;
-  --top-nav-primary-h: 52px;
+  --header-brand-h: 72px;
   --top-nav-secondary-h: 44px;
-  --header-h: calc(var(--header-brand-h) + var(--top-nav-primary-h));
+  --header-h: var(--header-brand-h);
   --banner-nav-bg: #f5f7fa;
   --radius: 14px;
   --radius-sm: 10px;
@@ -58,16 +57,16 @@ body {
 }
 
 .app-banner.has-subnav {
-  --header-h: calc(var(--header-brand-h) + var(--top-nav-primary-h) + var(--top-nav-secondary-h));
+  --header-h: calc(var(--header-brand-h) + var(--top-nav-secondary-h));
 }
 
 .app-header {
   background: linear-gradient(135deg, var(--navy-dark) 0%, var(--navy) 50%, var(--navy-light) 100%);
-  height: var(--header-brand-h);
+  min-height: var(--header-brand-h);
   display: flex;
   align-items: center;
-  padding: 0 24px;
-  gap: 24px;
+  padding: 0 20px;
+  gap: 16px;
 }
 
 .header-brand {
@@ -122,10 +121,11 @@ body {
 }
 
 .header-context {
-  flex: 1;
+  flex-shrink: 0;
   min-width: 0;
   display: flex;
   align-items: center;
+  margin-left: auto;
 }
 
 .context-value {
@@ -219,51 +219,50 @@ body {
   z-index: 1;
 }
 
-/* ── TOP NAVIGATION (inside banner) ── */
+/* ── TOP NAVIGATION ── */
 .banner-nav {
   background: var(--banner-nav-bg);
   border-bottom: 1px solid var(--border);
 }
 
-.top-nav-primary,
-.top-nav-secondary {
+.app-header .top-nav-primary {
+  flex: 1;
+  min-width: 0;
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.app-header .top-nav-primary::-webkit-scrollbar { display: none; }
+
+.top-nav-secondary {
+  display: none;
+  min-height: var(--top-nav-secondary-h);
+  align-items: center;
   gap: 4px;
   padding: 0 20px;
   overflow-x: auto;
   scrollbar-width: none;
 }
 
-.top-nav-primary::-webkit-scrollbar,
 .top-nav-secondary::-webkit-scrollbar { display: none; }
-
-.top-nav-primary {
-  min-height: var(--top-nav-primary-h);
-  align-items: center;
-}
-
-.top-nav-secondary {
-  display: none;
-  min-height: var(--top-nav-secondary-h);
-  align-items: center;
-  border-top: 1px solid rgba(0, 40, 85, 0.06);
-  padding-bottom: 2px;
-}
 
 .top-nav-secondary.visible {
   display: flex;
 }
 
-.top-nav-item {
+.app-header .top-nav-item {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 8px 14px;
   border: none;
   border-radius: 999px;
   background: transparent;
-  color: var(--text-muted);
+  color: rgba(255, 255, 255, 0.72);
   font-family: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -273,37 +272,37 @@ body {
   flex-shrink: 0;
 }
 
-.top-nav-item:hover {
-  color: var(--navy);
-  background: rgba(0, 102, 204, 0.06);
+.app-header .top-nav-item:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
 }
 
-.top-nav-item.active {
+.app-header .top-nav-item.active {
   color: var(--navy);
-  background: var(--blue-soft);
-  box-shadow: inset 0 0 0 1px rgba(0, 102, 204, 0.12);
+  background: #e8f2fc;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
 }
 
-.top-nav-icon {
+.app-header .top-nav-icon {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: rgba(0, 40, 85, 0.05);
+  background: rgba(255, 255, 255, 0.1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
 
-.top-nav-item.active .top-nav-icon {
+.app-header .top-nav-item.active .top-nav-icon {
   background: rgba(0, 102, 204, 0.14);
 }
 
-.top-nav-icon svg {
-  stroke: var(--text-muted);
+.app-header .top-nav-icon svg {
+  stroke: rgba(255, 255, 255, 0.78);
 }
 
-.top-nav-item.active .top-nav-icon svg {
+.app-header .top-nav-item.active .top-nav-icon svg {
   stroke: var(--blue-accent);
 }
 
@@ -1316,21 +1315,21 @@ body {
 @media (max-width: 960px) {
   .header-context { display: none; }
 
-  .top-nav-primary,
+  .app-header .top-nav-primary,
   .top-nav-secondary {
     padding: 0 12px;
   }
 
-  .top-nav-item {
-    padding: 8px 12px;
+  .app-header .top-nav-item {
+    padding: 8px 10px;
     font-size: 12px;
   }
 
-  .top-nav-label {
+  .app-header .top-nav-label {
     display: none;
   }
 
-  .top-nav-item.active .top-nav-label {
+  .app-header .top-nav-item.active .top-nav-label {
     display: inline;
   }
 
