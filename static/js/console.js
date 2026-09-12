@@ -136,7 +136,6 @@
     kpiTab: 'overview',
     filters: {},
     charts: {},
-    expandedNav: 'kpi-overview',
     compareMode: false,
     compareContext: null,
     compareCategory: null,
@@ -149,9 +148,8 @@
   };
 
   document.addEventListener('DOMContentLoaded', () => {
-    buildSidebar();
+    buildTopNav();
     initFilters();
-    initSidebarToggle();
     initCompare();
     renderKpiContent();
     switchPage('kpi-overview', true);
@@ -321,85 +319,72 @@
     return 'val-low';
   }
 
-  /* ── Sidebar ── */
-  function buildSidebar() {
-    const nav = document.getElementById('sidebar-nav');
-    if (!nav) return;
-    nav.innerHTML = '';
+  /* ── Top navigation ── */
+  function buildTopNav() {
+    const primary = document.getElementById('top-nav-primary');
+    const secondary = document.getElementById('top-nav-secondary');
+    if (!primary || !secondary) return;
+    primary.innerHTML = '';
+    secondary.innerHTML = '';
 
     PAGES.forEach(page => {
-      const group = document.createElement('div');
-      group.className = 'sidenav-group' + (page.children ? ' has-children' : '');
-      group.dataset.page = page.id;
-
-      const header = document.createElement('button');
-      header.type = 'button';
-      header.className = 'sidenav-header';
-      header.innerHTML = `
-        <span class="sidenav-icon">${ICONS[page.icon] || ICONS.kpi}</span>
-        <span class="sidenav-text">
-          <span class="sidenav-title">${page.title}</span>
-          <span class="sidenav-desc">${page.desc}</span>
-        </span>
-        ${page.children ? '<span class="sidenav-chevron"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span>' : ''}`;
-
-      header.addEventListener('click', () => onSidebarHeaderClick(page, group));
-      group.appendChild(header);
-
-      if (page.children) {
-        const children = document.createElement('div');
-        children.className = 'sidenav-children';
-        page.children.forEach(child => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'sidenav-child';
-          btn.dataset.tab = child.id;
-          btn.textContent = child.title;
-          btn.title = child.desc;
-          btn.addEventListener('click', e => {
-            e.stopPropagation();
-            collapseAllExcept(page.id);
-            state.expandedNav = page.id;
-            switchPage(page.id, true);
-            switchKpiTab(child.id);
-          });
-          children.appendChild(btn);
-        });
-        group.appendChild(children);
-      }
-
-      nav.appendChild(group);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'top-nav-item';
+      btn.dataset.page = page.id;
+      btn.setAttribute('role', 'tab');
+      btn.innerHTML = `
+        <span class="top-nav-icon">${ICONS[page.icon] || ICONS.kpi}</span>
+        <span class="top-nav-label">${page.title}</span>`;
+      btn.addEventListener('click', () => {
+        if (page.children) {
+          const wasOnPage = state.page === page.id;
+          switchPage(page.id);
+          if (!wasOnPage) switchKpiTab(page.children[0].id, true);
+        } else {
+          switchPage(page.id);
+        }
+      });
+      primary.appendChild(btn);
     });
-    updateSidebarUI();
+
+    const kpiPage = PAGES.find(p => p.id === 'kpi-overview');
+    kpiPage?.children?.forEach(child => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'top-nav-subitem';
+      btn.dataset.tab = child.id;
+      btn.setAttribute('role', 'tab');
+      btn.textContent = child.title;
+      btn.title = child.desc;
+      btn.addEventListener('click', () => {
+        switchPage('kpi-overview', true);
+        switchKpiTab(child.id);
+      });
+      secondary.appendChild(btn);
+    });
+
+    updateTopNavUI();
   }
 
-  function onSidebarHeaderClick(page, group) {
-    collapseAllExcept(null);
-    if (page.children) {
-      const opening = state.expandedNav !== page.id;
-      state.expandedNav = opening ? page.id : null;
-      switchPage(page.id);
-    } else {
-      state.expandedNav = null;
-      switchPage(page.id);
-    }
-  }
+  function updateTopNavUI() {
+    document.querySelectorAll('.top-nav-item').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.page === state.page);
+      btn.setAttribute('aria-selected', btn.dataset.page === state.page ? 'true' : 'false');
+    });
 
-  function collapseAllExcept(pageId) {
-    document.querySelectorAll('.sidenav-group').forEach(g => {
-      g.classList.toggle('expanded', g.dataset.page === pageId && pageId !== null);
-    });
-  }
+    const chrome = document.getElementById('top-chrome');
+    const secondary = document.getElementById('top-nav-secondary');
+    const showSubnav = state.page === 'kpi-overview';
+    chrome?.classList.toggle('has-subnav', showSubnav);
+    secondary?.classList.toggle('visible', showSubnav);
 
-  function updateSidebarUI() {
-    document.querySelectorAll('.sidenav-group').forEach(g => {
-      const pid = g.dataset.page;
-      g.classList.toggle('active', pid === state.page);
-      g.classList.toggle('expanded', pid === state.expandedNav);
+    document.querySelectorAll('.top-nav-subitem').forEach(btn => {
+      const active = showSubnav && btn.dataset.tab === state.kpiTab;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
     });
-    document.querySelectorAll('.sidenav-child').forEach(c => {
-      c.classList.toggle('active', state.page === 'kpi-overview' && c.dataset.tab === state.kpiTab);
-    });
+
     const page = PAGES.find(p => p.id === state.page);
     const child = page?.children?.find(c => c.id === state.kpiTab);
     const crumb = child ? `${page.title} · ${child.title}` : (page?.title || '');
@@ -408,12 +393,6 @@
       el.style.opacity = '0';
       setTimeout(() => { el.textContent = crumb; el.style.opacity = '1'; }, 120);
     }
-  }
-
-  function initSidebarToggle() {
-    document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
-      document.getElementById('sidebar')?.classList.toggle('open');
-    });
   }
 
   /* ── Compare & inline detail panels ── */
@@ -925,13 +904,11 @@
     const current = document.querySelector('.page-panel.active');
     const next = document.getElementById(`page-${pageId}`);
 
-    if (pageId !== 'kpi-overview') state.expandedNav = null;
-
     const run = () => {
       document.querySelectorAll('.page-panel').forEach(p => p.classList.remove('active', 'leaving'));
       next?.classList.add('active');
       state.page = pageId;
-      updateSidebarUI();
+      updateTopNavUI();
       if (pageId === 'kpi-overview') requestAnimationFrame(() => refreshChartsForTab(state.kpiTab));
     };
 
@@ -947,8 +924,7 @@
       p.classList.toggle('active', p.dataset.tab === tabId);
     });
     state.kpiTab = tabId;
-    state.expandedNav = 'kpi-overview';
-    updateSidebarUI();
+    updateTopNavUI();
     requestAnimationFrame(() => refreshChartsForTab(tabId));
   }
 
