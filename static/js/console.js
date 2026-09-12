@@ -1,8 +1,6 @@
 /**
  * Manufacturing Console — Production-grade UI
- * Left expanding sidebar, seeded realistic visuals, PepsiCo palette
  */
-
 (function () {
   'use strict';
 
@@ -11,9 +9,12 @@
     timeframe: { id: 'timeframe', label: 'Timeframe', multi: false, options: ['FY', 'Quarter', 'Month', 'Week'], default: 'FY' },
     year: { id: 'year', label: 'Year', multi: false, options: ['2026', '2025', '2024', '2023'], default: '2026' },
     site: { id: 'site', label: 'Site', multi: false, options: ['All', 'ABERDEEN', 'ARLINGTON', 'FRISCO', 'MODESTO', 'PLANO'], default: 'All' },
-    region: { id: 'region', label: 'Region', multi: true, options: ['North America', 'Latin America', 'Europe', 'Asia Pacific', 'Middle East & Africa'], default: ['All'] },
-    market: { id: 'market', label: 'Market', multi: true, options: ['Snacks', 'Beverages', 'Food', 'Quaker', 'International'], default: ['All'] },
+    region: { id: 'region', label: 'Region', multi: true, options: ['North America', 'Latin America', 'Europe', 'Asia Pacific', 'Middle East & Africa'], default: [] },
+    market: { id: 'market', label: 'Market', multi: true, options: ['Snacks', 'Beverages', 'Food', 'Quaker', 'International'], default: [] },
   };
+
+  const SITES = ['ABERDEEN', 'ARLINGTON', 'FRISCO', 'MODESTO', 'PLANO'];
+  const SITE_MULTIPLIERS = { ABERDEEN: 1.0, ARLINGTON: 0.92, FRISCO: 1.08, MODESTO: 0.85, PLANO: 1.12 };
 
   const PAGES = [
     { id: 'intel-brief', title: 'Intel Brief', desc: 'Executive summary and key alerts', icon: 'brief' },
@@ -34,31 +35,12 @@
   const PERIOD_COLORS = ['#002855','#004080','#0066cc','#0088cc','#00a896','#5c6bc0','#9e9e9e','#ffb74d','#ff9800','#e53935'];
   const CATEGORIES = ['Changeover','Equipment','Facilities','Materials','No Event','Operation','Personnel','Sanitation','Warehouse'];
   const LINES = ['BCP1','FCP1','PTZ3','SUN1','TCS1','DIP1','FUN1','FCC1','PC1','PC2'];
-  const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const DAY_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const REASONS = ['No Event','Unplanned Sanitation','Insufficient Qualified St','Equipment Failure','Material Shortage','Changeover Delay','Operator Error','Utility Outage'];
   const REASON_HOURS = [6241.25, 3107.66, 2890, 2100, 1850, 1200, 980, 650];
   const TREND_DATA = [9.2, 8.8, 9.5, 10.1, 9.8, 10.4, 10.8, 10.2, 10.6];
 
-  const state = { page: 'kpi-overview', kpiTab: 'overview', filters: {}, charts: {}, expanded: 'kpi-overview' };
-
-  /* Seeded PRNG for stable realistic data */
-  function seededRandom(seed) {
-    let s = seed;
-    return () => {
-      s = (s * 16807 + 0) % 2147483647;
-      return (s - 1) / 2147483646;
-    };
-  }
-
-  const rng = seededRandom(42);
-
-  function resetRng(seed) { Object.assign(rng, seededRandom(seed)); }
-
-  function stableVal(base, variance, decimals = 2) {
-    return +(base + (rng() - 0.5) * variance).toFixed(decimals);
-  }
-
-  /* Pre-built realistic category matrix [category][period] */
   const CATEGORY_BASE = {
     Changeover: [0.3, 0.5, 0.4, 0.6, 0.8, 0.7, 0.5, 0.9, 0.6, 0.4],
     Equipment: [2.1, 2.8, 3.0, 2.5, 3.2, 2.9, 3.5, 2.7, 3.1, 2.4],
@@ -97,15 +79,48 @@
     rca: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/></svg>',
   };
 
+  const state = {
+    page: 'kpi-overview',
+    kpiTab: 'overview',
+    filters: {},
+    charts: {},
+    expandedNav: 'kpi-overview',
+    selectedCategory: null,
+    expandedCategory: null,
+  };
+
   document.addEventListener('DOMContentLoaded', () => {
     buildSidebar();
     initFilters();
     initSidebarToggle();
+    initCompare();
     renderKpiContent();
     switchPage('kpi-overview', true);
     switchKpiTab('overview', true);
     document.addEventListener('click', closeSlicersOnOutsideClick);
   });
+
+  /* ── Site/category data helpers ── */
+  function activeSite() {
+    return state.filters.site === 'All' ? 'ABERDEEN' : state.filters.site;
+  }
+
+  function categoryValuesForSite(site, category) {
+    const mult = SITE_MULTIPLIERS[site] || 1;
+    return (CATEGORY_BASE[category] || []).map(v => +(v * mult).toFixed(2));
+  }
+
+  function avgOf(arr) {
+    return arr.reduce((a, b) => a + b, 0) / arr.length;
+  }
+
+  function fmtPct(v) { return v.toFixed(2) + '%'; }
+
+  function valClass(v) {
+    if (v >= 5) return 'val-high';
+    if (v >= 2.5) return 'val-mid';
+    return 'val-low';
+  }
 
   /* ── Sidebar ── */
   function buildSidebar() {
@@ -117,7 +132,6 @@
       const group = document.createElement('div');
       group.className = 'sidenav-group' + (page.children ? ' has-children' : '');
       group.dataset.page = page.id;
-      if (page.id === state.expanded) group.classList.add('expanded');
 
       const header = document.createElement('button');
       header.type = 'button';
@@ -130,21 +144,7 @@
         </span>
         ${page.children ? '<span class="sidenav-chevron"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span>' : ''}`;
 
-      header.addEventListener('click', () => {
-        if (page.children) {
-          const wasExpanded = group.classList.contains('expanded');
-          document.querySelectorAll('.sidenav-group').forEach(g => g.classList.remove('expanded'));
-          if (!wasExpanded || state.page !== page.id) {
-            group.classList.add('expanded');
-            state.expanded = page.id;
-          }
-          switchPage(page.id);
-        } else {
-          document.querySelectorAll('.sidenav-group').forEach(g => g.classList.remove('expanded'));
-          switchPage(page.id);
-        }
-      });
-
+      header.addEventListener('click', () => onSidebarHeaderClick(page, group));
       group.appendChild(header);
 
       if (page.children) {
@@ -159,6 +159,8 @@
           btn.title = child.desc;
           btn.addEventListener('click', e => {
             e.stopPropagation();
+            collapseAllExcept(page.id);
+            state.expandedNav = page.id;
             switchPage(page.id, true);
             switchKpiTab(child.id);
           });
@@ -169,13 +171,32 @@
 
       nav.appendChild(group);
     });
+    updateSidebarUI();
+  }
+
+  function onSidebarHeaderClick(page, group) {
+    collapseAllExcept(null);
+    if (page.children) {
+      const opening = state.expandedNav !== page.id;
+      state.expandedNav = opening ? page.id : null;
+      switchPage(page.id);
+    } else {
+      state.expandedNav = null;
+      switchPage(page.id);
+    }
+  }
+
+  function collapseAllExcept(pageId) {
+    document.querySelectorAll('.sidenav-group').forEach(g => {
+      g.classList.toggle('expanded', g.dataset.page === pageId && pageId !== null);
+    });
   }
 
   function updateSidebarUI() {
     document.querySelectorAll('.sidenav-group').forEach(g => {
       const pid = g.dataset.page;
       g.classList.toggle('active', pid === state.page);
-      g.classList.toggle('expanded', pid === state.expanded && pid === 'kpi-overview');
+      g.classList.toggle('expanded', pid === state.expandedNav);
     });
     document.querySelectorAll('.sidenav-child').forEach(c => {
       c.classList.toggle('active', state.page === 'kpi-overview' && c.dataset.tab === state.kpiTab);
@@ -186,7 +207,7 @@
     const el = document.getElementById('context-breadcrumb');
     if (el) {
       el.style.opacity = '0';
-      setTimeout(() => { el.textContent = crumb; el.style.opacity = '1'; }, 150);
+      setTimeout(() => { el.textContent = crumb; el.style.opacity = '1'; }, 120);
     }
   }
 
@@ -196,7 +217,128 @@
     });
   }
 
-  /* ── Filters (unchanged logic) ── */
+  /* ── Compare ── */
+  function initCompare() {
+    document.getElementById('compare-btn')?.addEventListener('click', () => {
+      if (state.selectedCategory) openComparePanel(state.selectedCategory);
+    });
+  }
+
+  function updateCompareButton() {
+    const btn = document.getElementById('compare-btn');
+    if (!btn) return;
+    btn.disabled = !state.selectedCategory;
+    btn.title = state.selectedCategory
+      ? `Compare "${state.selectedCategory}" across sites`
+      : 'Select a category first';
+  }
+
+  function selectCategory(category) {
+    state.selectedCategory = category;
+    updateCompareButton();
+    document.querySelectorAll('.cat-row').forEach(r => {
+      r.classList.toggle('selected', r.dataset.category === category);
+    });
+  }
+
+  function toggleCategoryDetail(category) {
+    if (state.expandedCategory === category) {
+      state.expandedCategory = null;
+    } else {
+      state.expandedCategory = category;
+      selectCategory(category);
+    }
+    refreshCategoryTable();
+  }
+
+  function openComparePanel(category) {
+    let panel = document.getElementById('compare-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'compare-panel';
+      panel.className = 'compare-panel hidden';
+      document.body.appendChild(panel);
+    }
+
+    const site = activeSite();
+    const rows = SITES.map(s => {
+      const vals = categoryValuesForSite(s, category);
+      const total = avgOf(vals);
+      return { site: s, vals, total, isCurrent: s === site };
+    });
+    const best = rows.reduce((a, b) => a.total < b.total ? a : b);
+    const worst = rows.reduce((a, b) => a.total > b.total ? a : b);
+
+    panel.innerHTML = `
+      <div class="compare-dialog" role="dialog" aria-label="Site comparison">
+        <div class="compare-dialog-header">
+          <div>
+            <div class="compare-dialog-title">${category} — Site Comparison</div>
+            <div class="compare-dialog-sub">Unplanned DT % by period · current site: ${site}</div>
+          </div>
+          <button type="button" class="category-detail-close" id="compare-close" aria-label="Close">×</button>
+        </div>
+        <div class="compare-dialog-body">
+          <div class="compare-chart-wrap"><canvas id="compare-chart"></canvas></div>
+          <div class="table-scroll">
+            <table class="data-table compare-table">
+              <thead><tr>
+                <th>Site</th>
+                ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
+                <th>Avg</th>
+              </tr></thead>
+              <tbody>
+                ${rows.map(r => {
+                  const cls = r.site === best.site ? 'site-best' : r.site === worst.site ? 'site-worst' : '';
+                  return `<tr class="${cls}${r.isCurrent ? ' selected' : ''}">
+                    <td>${r.site}${r.isCurrent ? ' ★' : ''}</td>
+                    ${r.vals.map(v => `<td class="${valClass(v)}">${fmtPct(v)}</td>`).join('')}
+                    <td class="${valClass(r.total)}">${fmtPct(r.total)}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+
+    panel.classList.remove('hidden');
+    panel.addEventListener('click', e => { if (e.target === panel) closeComparePanel(); });
+    document.getElementById('compare-close')?.addEventListener('click', closeComparePanel);
+
+    requestAnimationFrame(() => {
+      destroyChart('compare-chart');
+      const canvas = document.getElementById('compare-chart');
+      if (!canvas || typeof Chart === 'undefined') return;
+      state.charts['compare-chart'] = new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels: SITES,
+          datasets: [{
+            label: `${category} Avg DT %`,
+            data: rows.map(r => +r.total.toFixed(2)),
+            backgroundColor: rows.map(r => r.site === best.site ? '#00a896' : r.site === worst.site ? '#e53935' : '#0066cc'),
+            borderRadius: 6,
+          }],
+        },
+        options: {
+          ...CHART_DEFAULTS,
+          plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, ticks: { callback: v => v + '%' }, grid: { color: 'rgba(0,40,85,0.06)' } },
+            x: { grid: { display: false } },
+          },
+        },
+      });
+    });
+  }
+
+  function closeComparePanel() {
+    document.getElementById('compare-panel')?.classList.add('hidden');
+    destroyChart('compare-chart');
+  }
+
+  /* ── Filters ── */
   function initFilters() {
     const bar = document.getElementById('filter-bar');
     if (!bar) return;
@@ -213,7 +355,6 @@
   function buildSlicer(cfg) {
     const wrap = document.createElement('div');
     wrap.className = 'slicer';
-    wrap.dataset.slicer = cfg.id;
     const trigger = document.createElement('button');
     trigger.type = 'button';
     trigger.className = 'slicer-trigger';
@@ -231,13 +372,11 @@
       searchWrap.className = 'slicer-search-wrap';
       const search = document.createElement('input');
       search.type = 'text'; search.className = 'slicer-search'; search.placeholder = 'Search…';
-      search.addEventListener('input', () => filterOptions(wrap, cfg, search.value));
+      search.addEventListener('input', () => renderSlicerOptions(wrap, cfg, search.value));
       searchWrap.appendChild(search);
       panel.appendChild(searchWrap);
     }
-    const options = document.createElement('div');
-    options.className = 'slicer-options';
-    panel.appendChild(options);
+    panel.appendChild(document.createElement('div')).className = 'slicer-options';
     wrap.appendChild(trigger);
     wrap.appendChild(panel);
     renderSlicerOptions(wrap, cfg);
@@ -247,7 +386,7 @@
   function formatFilterDisplay(cfg) {
     const val = state.filters[cfg.id];
     if (cfg.multi) {
-      if (!val.length) return 'None';
+      if (!val.length) return 'All';
       if (val.length === cfg.options.length) return 'All';
       if (val.length === 1) return val[0];
       return `${val.length} selected`;
@@ -283,6 +422,7 @@
         } else {
           state.filters[cfg.id] = opt;
           closeAllSlicers();
+          refreshCategoryTable();
         }
         refreshSlicer(wrap, cfg);
       });
@@ -290,16 +430,17 @@
     });
   }
 
-  function filterOptions(wrap, cfg, term) { renderSlicerOptions(wrap, cfg, term); }
   function refreshSlicer(wrap, cfg) {
     wrap.querySelector('.slicer-value').textContent = formatFilterDisplay(cfg);
     renderSlicerOptions(wrap, cfg, wrap.querySelector('.slicer-search')?.value || '');
   }
+
   function toggleSlicer(wrap) {
     const wasOpen = wrap.classList.contains('open');
     closeAllSlicers();
     if (!wasOpen) wrap.classList.add('open');
   }
+
   function closeAllSlicers() { document.querySelectorAll('.slicer.open').forEach(s => s.classList.remove('open')); }
   function closeSlicersOnOutsideClick(e) { if (!e.target.closest('.slicer')) closeAllSlicers(); }
 
@@ -309,22 +450,17 @@
     const current = document.querySelector('.page-panel.active');
     const next = document.getElementById(`page-${pageId}`);
 
-    if (pageId === 'kpi-overview') {
-      state.expanded = 'kpi-overview';
-    }
+    if (pageId !== 'kpi-overview') state.expandedNav = null;
 
     const run = () => {
       document.querySelectorAll('.page-panel').forEach(p => p.classList.remove('active', 'leaving'));
       next?.classList.add('active');
       state.page = pageId;
       updateSidebarUI();
-      if (pageId === 'kpi-overview') {
-        requestAnimationFrame(() => refreshChartsForTab(state.kpiTab));
-      }
+      if (pageId === 'kpi-overview') requestAnimationFrame(() => refreshChartsForTab(state.kpiTab));
     };
 
     if (instant || !current) { run(); return; }
-
     current.classList.add('leaving');
     current.classList.remove('active');
     setTimeout(run, 260);
@@ -336,7 +472,7 @@
       p.classList.toggle('active', p.dataset.tab === tabId);
     });
     state.kpiTab = tabId;
-    state.expanded = 'kpi-overview';
+    state.expandedNav = 'kpi-overview';
     updateSidebarUI();
     requestAnimationFrame(() => refreshChartsForTab(tabId));
   }
@@ -346,88 +482,155 @@
     else initTabCharts(tabId);
   }
 
-  /* ── Formatting helpers ── */
-  function fmtPct(v) {
-    return v.toFixed(2) + '%';
-  }
-
-  function valClass(v) {
-    if (v >= 5) return 'val-high';
-    if (v >= 2.5) return 'val-mid';
-    return 'val-low';
-  }
-
-  function sumRow(matrix, key) {
-    const row = matrix[key];
-    return row.reduce((a, b) => a + b, 0) / row.length;
-  }
-
-  /* ── Metric strip ── */
+  /* ── Content builders ── */
   function metricStripHTML() {
-    const dt = 6.24, waste = 3.02, stops = 819, oee = 78.4;
-    return `
-      <div class="metric-strip">
-        <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">${dt.toFixed(2)}%</div><div class="metric-delta up">↑ 1.24pp vs target (5%)</div></div>
-        <div class="metric-card"><div class="metric-label">Waste %</div><div class="metric-value">${waste.toFixed(2)}%</div><div class="metric-delta down">↓ 0.18pp vs prior week</div></div>
-        <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">${stops.toLocaleString()}</div><div class="metric-delta down">↓ 2,451 vs prior week</div></div>
-        <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">${oee.toFixed(1)}%</div><div class="metric-delta neutral">1.6pp below 80% target</div></div>
-      </div>`;
+    return `<div class="metric-strip">
+      <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">6.24%</div><div class="metric-delta up">↑ 1.24pp vs target (5%)</div></div>
+      <div class="metric-card"><div class="metric-label">Waste %</div><div class="metric-value">3.02%</div><div class="metric-delta down">↓ 0.18pp vs prior week</div></div>
+      <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">819</div><div class="metric-delta down">↓ 2,451 vs prior week</div></div>
+      <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">78.4%</div><div class="metric-delta neutral">1.6pp below 80% target</div></div>
+    </div>`;
   }
 
   function aiSummaryHTML() {
-    return `
-      <div class="ai-summary">
-        <div class="ai-summary-icon">✦</div>
-        <div>
-          <div class="ai-summary-label">AI Summary</div>
-          <p class="ai-summary-text">Overall unplanned downtime shows variation across sites, lines, categories, days, and periods. Equipment and Changeover categories drive the largest share at Aberdeen, with BCP1 and SUN1 lines contributing disproportionately. Latest periods (P8–P10) show an upward trend — prioritize Mechanical failure root causes and Shift B handover gaps.</p>
+    return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
+      <div class="ai-summary-label">AI Summary</div>
+      <p class="ai-summary-text">Overall unplanned downtime shows variation across sites, lines, categories, days, and periods. Equipment and Changeover categories drive the largest share at Aberdeen, with BCP1 and SUN1 lines contributing disproportionately. Latest periods (P8–P10) show an upward trend — prioritize Mechanical failure root causes and Shift B handover gaps.</p>
+    </div></div>`;
+  }
+
+  function categoryDetailHTML(category) {
+    const site = activeSite();
+    const vals = categoryValuesForSite(site, category);
+    const avg = avgOf(vals);
+    const peak = Math.max(...vals);
+    const peakIdx = vals.indexOf(peak);
+    return `<div class="category-detail-panel" id="cat-detail-panel">
+      <div class="category-detail-header">
+        <span class="category-detail-title">${category} — ${site} Performance Detail</span>
+        <button type="button" class="category-detail-close" id="cat-detail-close" aria-label="Close">×</button>
+      </div>
+      <div class="category-detail-body">
+        <div class="category-detail-chart"><canvas id="cat-detail-chart"></canvas></div>
+        <div class="category-detail-stats">
+          <div class="detail-stat"><div class="detail-stat-label">Average DT %</div><div class="detail-stat-value">${fmtPct(avg)}</div></div>
+          <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${PERIODS[peakIdx]} · ${fmtPct(peak)}</div></div>
+          <div class="detail-stat"><div class="detail-stat-label">vs 5% Target</div><div class="detail-stat-value ${avg >= 5 ? 'val-high' : 'val-low'}">${avg >= 5 ? 'Above target' : 'Below target'}</div></div>
         </div>
-      </div>`;
+      </div>
+    </div>`;
   }
 
   function buildCategoryTable() {
-    const site = state.filters.site === 'All' ? 'ABERDEEN' : state.filters.site;
-    let rows = '';
-    CATEGORIES.forEach(cat => {
-      const vals = CATEGORY_BASE[cat];
+    const site = activeSite();
+    let rows = CATEGORIES.map(cat => {
+      const vals = categoryValuesForSite(site, cat);
       const cells = vals.map(v => `<td class="${valClass(v)}">${fmtPct(v)}</td>`).join('');
-      const total = sumRow(CATEGORY_BASE, cat);
-      rows += `<tr><td class="indent">${cat}</td><td></td>${cells}<td class="${valClass(total)}">${fmtPct(total)}</td><td class="${valClass(total * 1.1)}">${fmtPct(total * 1.1)}</td></tr>`;
-    });
+      const total = avgOf(vals);
+      const sel = state.selectedCategory === cat ? ' selected' : '';
+      const exp = state.expandedCategory === cat ? ' expanded-detail-open' : '';
+      return `<tr class="cat-row${sel}${exp}" data-category="${cat}">
+        <td>${site}</td>
+        <td><span class="expand-btn" data-expand="${cat}" title="Expand detail">${state.expandedCategory === cat ? '−' : '+'}</span>${cat}</td>
+        ${cells}
+        <td class="${valClass(total)}">${fmtPct(total)}</td>
+        <td class="${valClass(total * 1.08)}">${fmtPct(total * 1.08)}</td>
+      </tr>`;
+    }).join('');
+
     const totals = PERIODS.map((_, i) => {
-      const s = CATEGORIES.reduce((a, c) => a + CATEGORY_BASE[c][i], 0);
+      const s = CATEGORIES.reduce((a, c) => a + categoryValuesForSite(site, c)[i], 0);
       return `<td class="${valClass(s)}">${fmtPct(s)}</td>`;
     }).join('');
-    rows += `<tr class="row-total"><td>Total</td><td></td>${totals}<td>${fmtPct(6.29)}</td><td>${fmtPct(7.12)}</td></tr>`;
+
+    rows += `<tr class="row-total"><td>${site}</td><td>Total</td>${totals}<td>${fmtPct(6.29)}</td><td>${fmtPct(7.12)}</td></tr>`;
+
+    const detail = state.expandedCategory ? categoryDetailHTML(state.expandedCategory) : '';
 
     return `<div class="table-scroll"><table class="data-table"><thead><tr>
       <th>Site</th><th>Year / Category</th>
       ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
-      <th>2026 Total</th><th>Total</th></tr></thead><tbody>
-      <tr><td><span class="expand-btn">−</span>${site}</td><td></td>${PERIODS.map(() => '<td>—</td>').join('')}<td>—</td><td>—</td></tr>
-      ${rows}</tbody></table></div>`;
+      <th>2026 Total</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>${detail}`;
+  }
+
+  function bindCategoryTableEvents() {
+    document.querySelectorAll('.cat-row').forEach(row => {
+      row.addEventListener('click', e => {
+        if (e.target.closest('.expand-btn')) return;
+        selectCategory(row.dataset.category);
+      });
+    });
+    document.querySelectorAll('.expand-btn[data-expand]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        toggleCategoryDetail(btn.dataset.expand);
+      });
+    });
+    document.getElementById('cat-detail-close')?.addEventListener('click', () => {
+      state.expandedCategory = null;
+      refreshCategoryTable();
+    });
+    if (state.expandedCategory) {
+      requestAnimationFrame(() => renderCategoryDetailChart(state.expandedCategory));
+    }
+  }
+
+  function refreshCategoryTable() {
+    const el = document.getElementById('view-category-table');
+    if (!el) return;
+    el.innerHTML = buildCategoryTable();
+    bindCategoryTableEvents();
+  }
+
+  function renderCategoryDetailChart(category) {
+    destroyChart('cat-detail-chart');
+    const canvas = document.getElementById('cat-detail-chart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    const vals = categoryValuesForSite(activeSite(), category);
+    state.charts['cat-detail-chart'] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: PERIODS,
+        datasets: [{
+          label: `${category} DT %`,
+          data: vals,
+          borderColor: '#0066cc',
+          backgroundColor: 'rgba(0,102,204,0.12)',
+          fill: true,
+          tension: 0.35,
+          pointRadius: 5,
+          pointBackgroundColor: '#0066cc',
+        }],
+      },
+      options: {
+        ...CHART_DEFAULTS,
+        plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { callback: v => v + '%' }, grid: { color: 'rgba(0,40,85,0.06)' } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
   }
 
   function buildLineTable() {
-    const site = state.filters.site === 'All' ? 'ABERDEEN' : state.filters.site;
+    const site = activeSite();
     let rows = LINES.map(line => {
       const vals = LINE_BASE[line];
       const cells = vals.map(v => `<td class="${valClass(v)}">${fmtPct(v)}</td>`).join('');
-      const total = sumRow(LINE_BASE, line);
-      return `<tr><td class="indent">${line}</td><td></td>${cells}<td class="${valClass(total)}">${fmtPct(total)}</td><td class="${valClass(total * 1.08)}">${fmtPct(total * 1.08)}</td></tr>`;
+      const total = avgOf(vals);
+      return `<tr><td>${site}</td><td>${line}</td>${cells}<td class="${valClass(total)}">${fmtPct(total)}</td><td class="${valClass(total * 1.08)}">${fmtPct(total * 1.08)}</td></tr>`;
     }).join('');
     const totals = PERIODS.map((_, i) => {
       const s = LINES.reduce((a, l) => a + LINE_BASE[l][i], 0) / LINES.length;
       return `<td class="${valClass(s)}">${fmtPct(s)}</td>`;
     }).join('');
-    rows += `<tr class="row-total"><td>Total</td><td></td>${totals}<td>${fmtPct(6.85)}</td><td>${fmtPct(8.42)}</td></tr>`;
+    rows += `<tr class="row-total"><td>${site}</td><td>Total</td>${totals}<td>${fmtPct(6.85)}</td><td>${fmtPct(8.42)}</td></tr>`;
 
     return `<div class="table-scroll"><table class="data-table"><thead><tr>
       <th>Site</th><th>Line</th>
       ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
-      <th>2026 Total</th><th>Total</th></tr></thead><tbody>
-      <tr><td><span class="expand-btn">−</span>${site}</td><td></td>${PERIODS.map(() => '<td>—</td>').join('')}<td>—</td><td>—</td></tr>
-      ${rows}</tbody></table></div>`;
+      <th>2026 Total</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   function dataCard(title, body, toggleId) {
@@ -443,8 +646,7 @@
     if (!overview) return;
 
     overview.innerHTML = `
-      ${metricStripHTML()}
-      ${aiSummaryHTML()}
+      ${metricStripHTML()}${aiSummaryHTML()}
       ${dataCard('Unplanned DT % by Category',
         `<div id="view-category-table">${buildCategoryTable()}</div>
          <div id="view-category-chart" class="hidden-view"><div class="chart-wrap"><canvas id="chart-category"></canvas></div></div>`, 'category')}
@@ -457,6 +659,7 @@
         ${dataCard('Unplanned DT % by Period Trend', '<div class="chart-wrap short"><canvas id="chart-trend"></canvas></div>')}
       </div>`;
 
+    bindCategoryTableEvents();
     ['category','line'].forEach(id => {
       document.querySelectorAll(`.view-toggle-btn[data-card="${id}"]`).forEach(btn => {
         btn.addEventListener('click', () => toggleCardView(id, btn.dataset.view));
@@ -464,7 +667,9 @@
     });
 
     document.getElementById('kpi-tab-by-category').innerHTML = metricStripHTML() + aiSummaryHTML() +
-      dataCard('Unplanned DT % by Category', '<div class="chart-wrap tall"><canvas id="chart-tab-category"></canvas></div>');
+      dataCard('Unplanned DT % by Category', `<div id="view-category-tab-table">${buildCategoryTable()}</div><div class="chart-wrap tall" style="margin-top:16px"><canvas id="chart-tab-category"></canvas></div>`);
+    bindCategoryTableEvents();
+
     document.getElementById('kpi-tab-by-line').innerHTML = metricStripHTML() + aiSummaryHTML() +
       dataCard('Unplanned DT % by Line/Category', '<div class="chart-wrap tall"><canvas id="chart-tab-line"></canvas></div>');
     document.getElementById('kpi-tab-by-dow').innerHTML = metricStripHTML() + aiSummaryHTML() +
@@ -493,23 +698,17 @@
     }
   }
 
-  /* ── Chart defaults ── */
   const CHART_DEFAULTS = {
     responsive: true,
     maintainAspectRatio: false,
     animation: { duration: 1200, easing: 'easeOutQuart' },
     plugins: {
       legend: { labels: { font: { family: 'Inter', size: 11 }, boxWidth: 12, padding: 14 } },
-      tooltip: {
-        backgroundColor: '#002855',
-        titleFont: { family: 'Inter', weight: '600' },
-        bodyFont: { family: 'Inter' },
-        padding: 12,
-        cornerRadius: 8,
-        displayColors: true,
-      },
+      tooltip: { backgroundColor: '#002855', titleFont: { family: 'Inter', weight: '600' }, bodyFont: { family: 'Inter' }, padding: 12, cornerRadius: 8 },
     },
   };
+
+  const HORIZONTAL_X_TICKS = { maxRotation: 0, minRotation: 0, autoSkip: false, font: { size: 11 } };
 
   function destroyChart(id) {
     if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; }
@@ -519,17 +718,13 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-
     const datasets = PERIODS.map((p, i) => ({
       label: p,
       data: labels.map(l => matrix[l]?.[i] ?? 0),
       backgroundColor: PERIOD_COLORS[i],
       borderRadius: { topLeft: 3, topRight: 3 },
       borderSkipped: false,
-      barPercentage: 0.85,
-      categoryPercentage: 0.78,
     }));
-
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
       data: { labels, datasets },
@@ -537,8 +732,8 @@
         ...CHART_DEFAULTS,
         plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         scales: {
-          y: { beginAtZero: true, max: yMax, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%', font: { size: 11 } } },
-          x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+          y: { beginAtZero: true, max: yMax, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
+          x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
         },
       },
     });
@@ -550,21 +745,18 @@
     if (!canvas || typeof Chart === 'undefined') return;
     const weeks = Object.keys(DOW_DATA);
     const colors = ['#002855', '#0066cc', '#ff9800'];
-
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
       data: {
         labels: DAYS,
-        datasets: weeks.map((w, i) => ({
-          label: w, data: DOW_DATA[w], backgroundColor: colors[i], borderRadius: 4,
-        })),
+        datasets: weeks.map((w, i) => ({ label: w, data: DOW_DATA[w], backgroundColor: colors[i], borderRadius: 4 })),
       },
       options: {
         ...CHART_DEFAULTS,
         plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         scales: {
           y: { beginAtZero: true, max: 20, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
-          x: { grid: { display: false } },
+          x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
         },
       },
     });
@@ -574,28 +766,20 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-
     const ctx = canvas.getContext('2d');
     const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
     grad.addColorStop(0, '#002855');
     grad.addColorStop(1, '#0066cc');
-
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
-      data: {
-        labels: REASONS,
-        datasets: [{
-          label: 'Hours', data: REASON_HOURS,
-          backgroundColor: grad, borderRadius: 4,
-        }],
-      },
+      data: { labels: REASONS, datasets: [{ label: 'Hours', data: REASON_HOURS, backgroundColor: grad, borderRadius: 4 }] },
       options: {
         ...CHART_DEFAULTS,
         indexAxis: 'y',
         plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
         scales: {
           x: { beginAtZero: true, grid: { color: 'rgba(0,40,85,0.06)' } },
-          y: { grid: { display: false } },
+          y: { grid: { display: false }, ticks: { font: { size: 10 } } },
         },
       },
     });
@@ -605,12 +789,10 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-
     const ctx = canvas.getContext('2d');
     const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
     grad.addColorStop(0, 'rgba(0,102,204,0.25)');
     grad.addColorStop(1, 'rgba(0,102,204,0)');
-
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -618,8 +800,7 @@
         datasets: [{
           label: 'Unplanned DT %', data: TREND_DATA,
           borderColor: '#0066cc', backgroundColor: grad, fill: true,
-          tension: 0.42, pointRadius: 5, pointHoverRadius: 7,
-          pointBackgroundColor: '#fff', pointBorderColor: '#0066cc', pointBorderWidth: 2,
+          tension: 0.42, pointRadius: 5, pointBackgroundColor: '#fff', pointBorderColor: '#0066cc', pointBorderWidth: 2,
         }],
       },
       options: {
@@ -628,7 +809,7 @@
         interaction: { intersect: false, mode: 'index' },
         scales: {
           y: { min: 7, max: 11.5, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v.toFixed(1) + '%' } },
-          x: { title: { display: true, text: 'Period', font: { size: 11 } }, grid: { display: false } },
+          x: { title: { display: true, text: 'Period' }, grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
         },
       },
     });
