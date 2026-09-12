@@ -123,6 +123,7 @@
     compareCategory: null,
     detailCategory: null,
     expandedHeatmapSites: { ABERDEEN: true },
+    expandedLineSites: { ABERDEEN: true },
     topSitesCount: 5,
   };
 
@@ -174,22 +175,54 @@
     return arr.reduce((a, b) => a + b, 0) / arr.length;
   }
 
+  function sumOf(arr) { return arr.reduce((a, b) => a + (b || 0), 0); }
+
   function fmtPct(v) { return v.toFixed(2) + '%'; }
 
-  function heatStyle(value, max = 8) {
+  function heatStyle(value, max = 8, isTotalCol = false) {
     if (value == null || Number.isNaN(value)) return { bg: '#ffffff', color: '#9ca3af' };
-    if (value <= 0.05) return { bg: '#ffffff', color: '#374151' };
+    if (value <= 0.05) return { bg: '#faf9f7', color: '#374151' };
     const t = Math.min(1, Math.max(0, value / max));
-    const r = Math.round(255 - t * 175);
-    const g = Math.round(250 - t * 215);
-    const b = Math.round(250 - t * 215);
-    return { bg: `rgb(${r},${g},${b})`, color: t > 0.52 ? '#ffffff' : '#1a2b4a' };
+
+    if (isTotalCol) {
+      const r = Math.round(148 - t * 68);
+      const g = Math.round(132 - t * 72);
+      const b = Math.round(115 - t * 65);
+      return { bg: `rgb(${r},${g},${b})`, color: t > 0.28 ? '#ffffff' : '#1a2b4a' };
+    }
+
+    const stops = [
+      [250, 248, 245],
+      [245, 230, 210],
+      [232, 196, 168],
+      [196, 140, 108],
+      [156, 90, 68],
+      [107, 52, 38],
+      [72, 35, 26],
+    ];
+    const idx = t * (stops.length - 1);
+    const lo = Math.floor(idx);
+    const hi = Math.min(lo + 1, stops.length - 1);
+    const f = idx - lo;
+    const r = Math.round(stops[lo][0] + (stops[hi][0] - stops[lo][0]) * f);
+    const g = Math.round(stops[lo][1] + (stops[hi][1] - stops[lo][1]) * f);
+    const b = Math.round(stops[lo][2] + (stops[hi][2] - stops[lo][2]) * f);
+    return { bg: `rgb(${r},${g},${b})`, color: t > 0.55 ? '#ffffff' : '#1a2b4a' };
   }
 
   function heatTd(value, max = 8, extraClass = '') {
     if (value == null || value === '-') return `<td class="heat-cell heat-empty ${extraClass}">-</td>`;
-    const style = heatStyle(value, max);
+    const isTotalCol = extraClass.includes('col-total');
+    const style = heatStyle(value, max, isTotalCol);
     return `<td class="heat-cell ${extraClass}" style="background:${style.bg};color:${style.color}">${fmtPct(value)}</td>`;
+  }
+
+  function heatmapLegendHTML(compact = false) {
+    return `<div class="heatmap-legend${compact ? ' compact' : ''}">
+      <span class="legend-label">Lower DT %</span>
+      <div class="legend-bar"></div>
+      <span class="legend-label">Higher DT %</span>
+    </div>`;
   }
 
   function valClass(v) {
@@ -330,12 +363,14 @@
   }
 
   function refreshAllTables() {
-    refreshCategoryTable();
-    const heatmap = document.getElementById('view-heatmap-table');
-    if (heatmap) {
-      heatmap.innerHTML = buildHeatmapTable();
-      bindHeatmapTableEvents();
-    }
+    const catOverview = document.getElementById('view-category-table');
+    if (catOverview) catOverview.innerHTML = buildHeatmapTable(true);
+    const heatmapTab = document.getElementById('view-heatmap-table');
+    if (heatmapTab) heatmapTab.innerHTML = buildHeatmapTable(false);
+    const lineEl = document.getElementById('view-line-table');
+    if (lineEl) lineEl.innerHTML = buildLineHeatmapTable();
+    bindHeatmapTableEvents();
+    bindLineHeatmapEvents();
   }
 
   function closeInlinePanel() {
@@ -683,9 +718,81 @@
     </div></div>`;
   }
 
-  function sumOf(arr) { return arr.reduce((a, b) => a + (b || 0), 0); }
+  function lineValuesForSite(site, line) {
+    const mult = SITE_MULTIPLIERS[site] || 1;
+    return (LINE_BASE[line] || []).map(v => +(v * mult * 0.95).toFixed(2));
+  }
 
-  function buildHeatmapTable() {
+  function linePeriodTotalsForSite(site) {
+    return PERIODS.map((_, i) => {
+      const sum = LINES.reduce((a, l) => a + lineValuesForSite(site, l)[i], 0);
+      return +sum.toFixed(2);
+    });
+  }
+
+  function buildLineHeatmapTable() {
+    let rows = '';
+
+    HEATMAP_SITES.forEach(site => {
+      const expanded = !!state.expandedLineSites[site];
+      const sitePeriods = linePeriodTotalsForSite(site);
+      const siteTotal = +sumOf(sitePeriods).toFixed(2);
+      const sitePrevTotal = +(siteTotal * 1.08).toFixed(2);
+      const chevron = expanded ? '▼' : '▶';
+
+      rows += `<tr class="site-row${expanded ? ' expanded' : ''}" data-site="${site}">
+        <td class="site-name-cell">
+          <button type="button" class="line-site-toggle" data-site="${site}" aria-label="Toggle ${site}">${chevron}</button>
+          <span>${site}</span>
+        </td>
+        <td class="cat-label-cell"></td>
+        ${sitePeriods.map(v => heatTd(v, 35)).join('')}
+        ${heatTd(siteTotal, 35, 'col-total')}
+        ${heatTd(sitePrevTotal, 35, 'col-total')}
+      </tr>`;
+
+      if (expanded) {
+        LINES.forEach(line => {
+          const vals = lineValuesForSite(site, line);
+          const total = sumOf(vals);
+          rows += `<tr class="line-detail-row">
+            <td class="site-name-cell indent"></td>
+            <td class="cat-label-cell">${line}</td>
+            ${vals.map(v => heatTd(v, 14)).join('')}
+            ${heatTd(total, 14, 'col-total')}
+            ${heatTd(total * 1.08, 14, 'col-total')}
+          </tr>`;
+        });
+
+        rows += `<tr class="row-total heat-site-total">
+          <td class="site-name-cell indent"></td>
+          <td class="cat-label-cell">Total</td>
+          ${sitePeriods.map(v => heatTd(v, 35)).join('')}
+          ${heatTd(siteTotal, 35, 'col-total')}
+          ${heatTd(sitePrevTotal, 35, 'col-total')}
+        </tr>`;
+      }
+    });
+
+    return `<div class="table-scroll heatmap-scroll">${heatmapLegendHTML(true)}<table class="data-table heatmap-table"><thead>
+      <tr class="header-group"><th rowspan="2">Site</th><th rowspan="2">Line</th>
+        <th colspan="10">2026</th><th colspan="2">Total</th></tr>
+      <tr>${PERIODS.map(p => `<th>${p}</th>`).join('')}<th>2026 Total</th><th>Total</th></tr>
+      </thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  function bindLineHeatmapEvents() {
+    document.querySelectorAll('.line-site-toggle').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const site = btn.dataset.site;
+        state.expandedLineSites[site] = !state.expandedLineSites[site];
+        refreshAllTables();
+      });
+    });
+  }
+
+  function buildHeatmapTable(showLegend = true) {
     const compareReady = state.compareMode ? ' compare-ready' : '';
     let rows = '';
 
@@ -734,7 +841,7 @@
       }
     });
 
-    return `<div class="table-scroll heatmap-scroll"><table class="data-table heatmap-table"><thead>
+    return `<div class="table-scroll heatmap-scroll">${showLegend ? heatmapLegendHTML(true) : ''}<table class="data-table heatmap-table"><thead>
       <tr class="header-group"><th rowspan="2">Site</th><th rowspan="2">Year / Category</th>
         <th colspan="10">2026</th><th colspan="2">Total</th></tr>
       <tr>${PERIODS.map(p => `<th>${p}</th>`).join('')}<th>2026 Total</th><th>Total</th></tr>
@@ -780,52 +887,13 @@
         </div>
       </div>
       <div class="data-card-body">
-        <div id="view-heatmap-table" class="category-table-view">${buildHeatmapTable()}</div>
+        <div id="view-heatmap-table" class="category-table-view">${buildHeatmapTable(false)}</div>
       </div>
     </div>`;
   }
 
-  function buildCategoryTable() {
-    const site = activeSite();
-    const compareReady = state.compareMode ? ' compare-ready' : '';
-
-    let rows = CATEGORIES.map((cat, idx) => {
-      const vals = categoryValuesForSite(site, cat);
-      const cells = vals.map(v => heatTd(v, 8)).join('');
-      const total = sumOf(vals);
-      const prevTotal = total * 1.08;
-      const activeCompare = state.compareCategory === cat ? ' compare-active' : '';
-      const activeDetail = state.detailCategory === cat ? ' detail-active' : '';
-      const siteCell = idx === 0
-        ? `<td class="site-group-cell" rowspan="${CATEGORIES.length}">${site}</td>`
-        : '';
-      return `<tr class="cat-row${compareReady}${activeCompare}${activeDetail}" data-category="${cat}">
-        ${siteCell}
-        <td>${cat}</td>
-        ${cells}
-        ${heatTd(total, 12, 'col-total')}
-        ${heatTd(prevTotal, 12, 'col-total')}
-      </tr>`;
-    }).join('');
-
-    const totals = PERIODS.map((_, i) => {
-      const s = CATEGORIES.reduce((a, c) => a + categoryValuesForSite(site, c)[i], 0);
-      return s;
-    });
-
-    rows += `<tr class="row-total"><td class="site-group-cell">${site}</td><td>Total</td>
-      ${totals.map(v => heatTd(v, 12)).join('')}
-      ${heatTd(6.29, 12, 'col-total')}
-      ${heatTd(7.12, 12, 'col-total')}</tr>`;
-
-    return `<div class="table-scroll"><table class="data-table heatmap-table"><thead><tr>
-      <th>Site</th><th>Year / Category</th>
-      ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
-      <th>2026 Total</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  }
-
   function bindCategoryTableEvents() {
-    document.querySelectorAll('.cat-row').forEach(row => {
+    document.querySelectorAll('.cat-row:not(.heat-cat-row)').forEach(row => {
       row.addEventListener('click', () => {
         if (!state.compareMode) return;
         const category = row.dataset.category;
@@ -836,35 +904,7 @@
   }
 
   function refreshCategoryTable() {
-    ['view-category-table', 'view-category-tab-table'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.innerHTML = buildCategoryTable();
-    });
-    bindCategoryTableEvents();
-  }
-
-  function buildLineTable() {
-    const site = activeSite();
-    let rows = LINES.map(line => {
-      const vals = LINE_BASE[line];
-      const cells = vals.map(v => heatTd(v, 14)).join('');
-      const total = sumOf(vals);
-      return `<tr><td>${site}</td><td>${line}</td>${cells}
-        ${heatTd(total, 14, 'col-total')}
-        ${heatTd(total * 1.08, 14, 'col-total')}</tr>`;
-    }).join('');
-    const totals = PERIODS.map((_, i) => {
-      return LINES.reduce((a, l) => a + LINE_BASE[l][i], 0) / LINES.length;
-    });
-    rows += `<tr class="row-total"><td>${site}</td><td>Total</td>
-      ${totals.map(v => heatTd(v, 14)).join('')}
-      ${heatTd(6.85, 14, 'col-total')}
-      ${heatTd(8.42, 14, 'col-total')}</tr>`;
-
-    return `<div class="table-scroll"><table class="data-table heatmap-table"><thead><tr>
-      <th>Site</th><th>Line</th>
-      ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
-      <th>2026 Total</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    refreshAllTables();
   }
 
   function categoryCardActions(cardId, includeToggle) {
@@ -896,19 +936,20 @@
     overview.innerHTML = `
       ${metricStripHTML()}${aiSummaryHTML()}
       ${dataCard('Unplanned DT % by Category',
-        `<div id="view-category-table" class="category-table-view">${buildCategoryTable()}</div>
-         <div id="view-category-chart" class="hidden-view"><div class="chart-wrap"><canvas id="chart-category"></canvas></div></div>`, 'category', true)}
+        `<div id="view-category-table" class="category-table-view">${buildHeatmapTable(true)}</div>
+         <div id="view-category-chart" class="hidden-view"><div class="chart-wrap chart-wrap-pro"><canvas id="chart-category"></canvas></div></div>`, 'category', true)}
       ${dataCard('Unplanned DT % by Line/Category',
-        `<div id="view-line-table">${buildLineTable()}</div>
-         <div id="view-line-chart" class="hidden-view"><div class="chart-wrap tall"><canvas id="chart-line"></canvas></div></div>`, 'line')}
+        `<div id="view-line-table">${buildLineHeatmapTable()}</div>
+         <div id="view-line-chart" class="hidden-view"><div class="chart-wrap tall chart-wrap-pro"><canvas id="chart-line"></canvas></div></div>`, 'line')}
       <div class="overview-grid-3">
         ${dataCard('Unplanned DT % by Day of Week', '<div class="chart-wrap short"><canvas id="chart-dow"></canvas></div>')}
         ${dataCard('Unplanned DT Hours by Reason', '<div class="chart-wrap short"><canvas id="chart-reason"></canvas></div>')}
         ${dataCard('Unplanned DT % by Period Trend', '<div class="chart-wrap short"><canvas id="chart-trend"></canvas></div>')}
       </div>`;
 
-    bindCategoryTableEvents();
     bindCompareButtons();
+    bindHeatmapTableEvents();
+    bindLineHeatmapEvents();
     ['category','line'].forEach(id => {
       document.querySelectorAll(`.view-toggle-btn[data-card="${id}"]`).forEach(btn => {
         btn.addEventListener('click', () => toggleCardView(id, btn.dataset.view));
@@ -975,12 +1016,61 @@
   const CHART_DEFAULTS = {
     responsive: true,
     maintainAspectRatio: false,
-    animation: { duration: 1200, easing: 'easeOutQuart' },
+    animation: { duration: 900, easing: 'easeOutQuart' },
     plugins: {
-      legend: { labels: { font: { family: 'Inter', size: 11 }, boxWidth: 12, padding: 14 } },
-      tooltip: { backgroundColor: '#002855', titleFont: { family: 'Inter', weight: '600' }, bodyFont: { family: 'Inter' }, padding: 12, cornerRadius: 8 },
+      legend: {
+        labels: {
+          font: { family: 'Inter', size: 11, weight: '500' },
+          boxWidth: 10,
+          boxHeight: 10,
+          usePointStyle: true,
+          pointStyle: 'circle',
+          padding: 16,
+          color: '#475569',
+        },
+      },
+      tooltip: {
+        backgroundColor: 'rgba(0, 40, 85, 0.94)',
+        titleFont: { family: 'Inter', weight: '600', size: 12 },
+        bodyFont: { family: 'Inter', size: 11 },
+        padding: 14,
+        cornerRadius: 10,
+        displayColors: true,
+        boxPadding: 6,
+      },
     },
   };
+
+  const PRO_AXIS = {
+    grid: { color: 'rgba(0, 40, 85, 0.06)', drawTicks: false },
+    border: { display: false },
+    ticks: { color: '#64748b', font: { family: 'Inter', size: 11 } },
+  };
+
+  function proAxisTitle(text) {
+    return { display: true, text, color: '#64748b', font: { family: 'Inter', weight: '600', size: 11 } };
+  }
+
+  function barValueLabelPlugin(decimals = 1) {
+    return {
+      id: 'barValueLabels',
+      afterDatasetsDraw(chart) {
+        const { ctx } = chart;
+        chart.data.datasets.forEach((dataset, i) => {
+          chart.getDatasetMeta(i).data.forEach((bar, idx) => {
+            const val = dataset.data[idx];
+            if (val == null) return;
+            ctx.save();
+            ctx.fillStyle = '#1e293b';
+            ctx.font = '600 11px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(Number(val).toFixed(decimals) + '%', bar.x, bar.y - 8);
+            ctx.restore();
+          });
+        });
+      },
+    };
+  }
 
   const HORIZONTAL_X_TICKS = { maxRotation: 0, minRotation: 0, autoSkip: false, font: { size: 11 } };
 
@@ -1019,8 +1109,8 @@
         },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         scales: {
-          y: { beginAtZero: true, max: yMax, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
-          x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
+          y: { beginAtZero: true, max: yMax, ...PRO_AXIS, title: proAxisTitle('DT %'), ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' } },
+          x: { ...PRO_AXIS, ticks: HORIZONTAL_X_TICKS },
         },
       },
     });
@@ -1112,8 +1202,8 @@
         </div>
         <select class="chart-select" id="${selectId}" aria-label="${title} filter">${opts}</select>
       </div>
-      <div class="data-card-body">
-        <div class="chart-wrap tall"><canvas id="${canvasId}"></canvas></div>
+      <div class="data-card-body chart-body-pro">
+        <div class="chart-wrap tall chart-wrap-pro"><canvas id="${canvasId}"></canvas></div>
       </div>
     </div>`;
   }
@@ -1132,20 +1222,31 @@
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
     const sites = TOP_SITES.slice(0, count);
+    const ctx = canvas.getContext('2d');
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
         labels: PERIODS,
-        datasets: sites.map((site, i) => ({
-          label: site,
-          data: TOP_SITES_TRENDS[site] || PERIODS.map(() => 0),
-          borderColor: TOP_SITE_COLORS[i],
-          backgroundColor: TOP_SITE_COLORS[i],
-          tension: 0.35,
-          pointRadius: 4,
-          pointHoverRadius: 6,
-          borderWidth: 2.5,
-        })),
+        datasets: sites.map((site, i) => {
+          const color = TOP_SITE_COLORS[i];
+          const grad = ctx.createLinearGradient(0, 0, 0, 320);
+          grad.addColorStop(0, color + '35');
+          grad.addColorStop(1, color + '00');
+          return {
+            label: site,
+            data: TOP_SITES_TRENDS[site] || PERIODS.map(() => 0),
+            borderColor: color,
+            backgroundColor: grad,
+            fill: true,
+            tension: 0.42,
+            pointRadius: 5,
+            pointHoverRadius: 8,
+            pointBackgroundColor: '#ffffff',
+            pointBorderColor: color,
+            pointBorderWidth: 2.5,
+            borderWidth: 2.5,
+          };
+        }),
       },
       options: {
         ...CHART_DEFAULTS,
@@ -1154,13 +1255,13 @@
         scales: {
           y: {
             beginAtZero: true,
-            title: { display: true, text: 'DT %', font: { weight: '600', size: 11 } },
-            grid: { color: 'rgba(0,40,85,0.06)' },
-            ticks: { callback: v => v + '%' },
+            ...PRO_AXIS,
+            title: proAxisTitle('DT %'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
           },
           x: {
-            title: { display: true, text: 'Period', font: { weight: '600', size: 11 } },
-            grid: { display: false },
+            ...PRO_AXIS,
+            title: proAxisTitle('Period'),
             ticks: HORIZONTAL_X_TICKS,
           },
         },
@@ -1172,6 +1273,10 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 0, 300);
+    grad.addColorStop(0, '#60a5fa');
+    grad.addColorStop(1, '#2563eb');
     const entries = Object.entries(SITE_DT_TOTALS).sort((a, b) => b[1] - a[1]).slice(0, 8);
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
@@ -1180,51 +1285,32 @@
         datasets: [{
           label: 'Total DT %',
           data: entries.map(e => e[1]),
-          backgroundColor: '#2563eb',
-          borderRadius: 6,
-          barThickness: 28,
+          backgroundColor: grad,
+          hoverBackgroundColor: '#1d4ed8',
+          borderRadius: 8,
+          borderSkipped: false,
+          maxBarThickness: 36,
         }],
       },
       options: {
         ...CHART_DEFAULTS,
-        plugins: {
-          ...CHART_DEFAULTS.plugins,
-          legend: { display: false },
-          datalabels: false,
-          tooltip: CHART_DEFAULTS.plugins.tooltip,
-        },
+        plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
         scales: {
           y: {
             beginAtZero: true,
             max: 30,
-            title: { display: true, text: 'DT %', font: { weight: '600', size: 11 } },
-            grid: { color: 'rgba(0,40,85,0.06)' },
-            ticks: { callback: v => v + '%' },
+            ...PRO_AXIS,
+            title: proAxisTitle('DT %'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
           },
           x: {
-            title: { display: true, text: 'Site', font: { weight: '600', size: 11 } },
-            grid: { display: false },
+            ...PRO_AXIS,
+            title: proAxisTitle('Site'),
             ticks: { ...HORIZONTAL_X_TICKS, font: { size: 10 } },
           },
         },
       },
-      plugins: [{
-        id: 'barValueLabels',
-        afterDatasetsDraw(chart) {
-          const { ctx } = chart;
-          chart.data.datasets.forEach((dataset, i) => {
-            chart.getDatasetMeta(i).data.forEach((bar, idx) => {
-              const val = dataset.data[idx];
-              ctx.save();
-              ctx.fillStyle = '#1a2b4a';
-              ctx.font = '600 11px Inter, sans-serif';
-              ctx.textAlign = 'center';
-              ctx.fillText(val.toFixed(2) + '%', bar.x, bar.y - 6);
-              ctx.restore();
-            });
-          });
-        },
-      }],
+      plugins: [barValueLabelPlugin(2)],
     });
   }
 
@@ -1241,8 +1327,10 @@
           label: 'Total DT %',
           data: entries.map(e => e[1]),
           backgroundColor: entries.map((_, i) => CATEGORY_BAR_COLORS[i % CATEGORY_BAR_COLORS.length]),
-          borderRadius: 6,
-          barThickness: 28,
+          hoverBackgroundColor: entries.map((_, i) => CATEGORY_BAR_COLORS[i % CATEGORY_BAR_COLORS.length]),
+          borderRadius: 8,
+          borderSkipped: false,
+          maxBarThickness: 36,
         }],
       },
       options: {
@@ -1252,34 +1340,18 @@
           y: {
             beginAtZero: true,
             max: 20,
-            title: { display: true, text: 'DT %', font: { weight: '600', size: 11 } },
-            grid: { color: 'rgba(0,40,85,0.06)' },
-            ticks: { callback: v => v + '%' },
+            ...PRO_AXIS,
+            title: proAxisTitle('DT %'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
           },
           x: {
-            title: { display: true, text: 'Category', font: { weight: '600', size: 11 } },
-            grid: { display: false },
+            ...PRO_AXIS,
+            title: proAxisTitle('Category'),
             ticks: { ...HORIZONTAL_X_TICKS, font: { size: 10 } },
           },
         },
       },
-      plugins: [{
-        id: 'catBarLabels',
-        afterDatasetsDraw(chart) {
-          const { ctx } = chart;
-          chart.data.datasets.forEach((dataset, i) => {
-            chart.getDatasetMeta(i).data.forEach((bar, idx) => {
-              const val = dataset.data[idx];
-              ctx.save();
-              ctx.fillStyle = '#1a2b4a';
-              ctx.font = '600 11px Inter, sans-serif';
-              ctx.textAlign = 'center';
-              ctx.fillText(val.toFixed(1) + '%', bar.x, bar.y - 6);
-              ctx.restore();
-            });
-          });
-        },
-      }],
+      plugins: [barValueLabelPlugin(1)],
     });
   }
 

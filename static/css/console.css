@@ -929,11 +929,20 @@ body {
   width: 120px;
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #ffffff 0%, #ffe4e1 25%, #fca5a5 55%, #ef4444 80%, #b91c1c 100%);
-  border: 1px solid #fecaca;
+  background: linear-gradient(90deg, #faf9f7 0%, #f5e6d3 18%, #d4a574 42%, #9c5838 68%, #5c3317 100%);
+  border: 1px solid #e7d5c4;
 }
 
-.heatmap-scroll { border: 1px solid #dbeafe; }
+.heatmap-legend.compact {
+  justify-content: flex-end;
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+
+.heatmap-scroll {
+  border: 1px solid #e7e0d8;
+  padding: 12px 12px 0;
+}
 
 .heatmap-table th {
   text-align: center;
@@ -972,7 +981,8 @@ body {
 
 .site-name-cell.indent { padding-left: 28px; }
 
-.site-toggle {
+.site-toggle,
+.line-site-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -989,7 +999,8 @@ body {
   transition: all 0.15s;
 }
 
-.site-toggle:hover {
+.site-toggle:hover,
+.line-site-toggle:hover {
   background: var(--blue-soft);
   border-color: var(--blue-accent);
 }
@@ -1060,6 +1071,22 @@ body {
 
 .overview-grid-2 .chart-card-pro { margin-bottom: 0; }
 .overview-grid-2 .chart-card-pro .chart-wrap { height: 300px; }
+
+.chart-body-pro {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+}
+
+.chart-wrap-pro {
+  position: relative;
+  padding: 4px 8px 0;
+}
+
+.chart-card-pro .data-card-header {
+  background: linear-gradient(180deg, #fafbfd 0%, #ffffff 100%);
+}
+
+.heatmap-table .line-detail-row td { background: #fcfcfb; }
+.heatmap-table .line-detail-row:hover td { filter: brightness(0.98); }
 
 .hidden-view { display: none !important; }
 
