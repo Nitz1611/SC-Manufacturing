@@ -138,7 +138,9 @@
     charts: {},
     expandedNav: 'kpi-overview',
     compareMode: false,
+    compareContext: null,
     compareCategory: null,
+    compareLine: null,
     detailCategory: null,
     expandedHeatmapSites: { ABERDEEN: true },
     expandedLineSites: { ABERDEEN: true },
@@ -197,6 +199,80 @@
   function sumOf(arr) { return arr.reduce((a, b) => a + (b || 0), 0); }
 
   function fmtPct(v) { return v.toFixed(2) + '%'; }
+
+  function exportBtnHTML(id, title = 'Export data') {
+    return `<button type="button" class="export-btn" id="${id}" title="${title}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+      Export
+    </button>`;
+  }
+
+  function downloadCSV(filename, rows) {
+    const csv = rows.map(row => row.map(cell => {
+      const s = String(cell ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportHeatmapCategoryCSV(filename = 'unplanned-dt-by-category.csv') {
+    const headers = ['Site', 'Category', ...PERIODS.map(p => `2026 ${p}`), '2026 Total', 'Total'];
+    const rows = [headers];
+    HEATMAP_SITES.forEach(site => {
+      const sitePeriods = sitePeriodTotals(site);
+      const siteTotal = +sumOf(sitePeriods).toFixed(2);
+      const sitePrevTotal = +(siteTotal * 1.08).toFixed(2);
+      rows.push([site, '', ...sitePeriods, siteTotal, sitePrevTotal]);
+      CATEGORIES.forEach(cat => {
+        const vals = categoryValuesForSiteHeatmap(site, cat);
+        const total = +sumOf(vals).toFixed(2);
+        rows.push([site, cat, ...vals, total, +(total * 1.08).toFixed(2)]);
+      });
+      rows.push([site, 'Total', ...sitePeriods, siteTotal, sitePrevTotal]);
+    });
+    downloadCSV(filename, rows);
+  }
+
+  function exportLineHeatmapCSV(filename = 'unplanned-dt-by-line.csv') {
+    const headers = ['Site', 'Line', ...PERIODS.map(p => `2026 ${p}`), '2026 Total', 'Total'];
+    const rows = [headers];
+    HEATMAP_SITES.forEach(site => {
+      const sitePeriods = linePeriodTotalsForSite(site);
+      const siteTotal = +sumOf(sitePeriods).toFixed(2);
+      const sitePrevTotal = +(siteTotal * 1.08).toFixed(2);
+      rows.push([site, '', ...sitePeriods, siteTotal, sitePrevTotal]);
+      LINES.forEach(line => {
+        const vals = lineValuesForSite(site, line);
+        const total = +sumOf(vals).toFixed(2);
+        rows.push([site, line, ...vals, total, +(total * 1.08).toFixed(2)]);
+      });
+      rows.push([site, 'Site Total', ...sitePeriods, siteTotal, sitePrevTotal]);
+    });
+    downloadCSV(filename, rows);
+  }
+
+  function bindExportButtons() {
+    const exports = {
+      'export-overview-category': () => exportHeatmapCategoryCSV('overview-unplanned-dt-by-category.csv'),
+      'export-heatmap-category': () => exportHeatmapCategoryCSV('unplanned-dt-by-category.csv'),
+      'export-overview-line': () => exportLineHeatmapCSV('overview-unplanned-dt-by-line.csv'),
+      'line-export-btn': () => exportLineHeatmapCSV('unplanned-dt-by-line.csv'),
+    };
+    Object.entries(exports).forEach(([id, fn]) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.replaceWith(btn.cloneNode(true));
+      document.getElementById(id)?.addEventListener('click', fn);
+    });
+  }
 
   function heatStyle(value, max = 8, isTotalCol = false) {
     if (value == null || Number.isNaN(value)) return { bg: '#ffffff', color: '#9ca3af' };
@@ -355,25 +431,36 @@
   }
 
   function toggleCompareMode(btn) {
-    state.compareMode = !state.compareMode;
-    btn.classList.toggle('active', state.compareMode);
+    const cardId = btn.dataset.compareCard || 'category';
+    const wasActive = btn.classList.contains('active');
+
+    document.querySelectorAll('.compare-btn-card').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.compare-hint').forEach(h => h.remove());
     closeInlinePanel();
 
-    const cardBody = btn.closest('.data-card')?.querySelector('.data-card-body');
-    let hint = cardBody?.querySelector('.compare-hint');
-    if (state.compareMode) {
-      if (!hint && cardBody) {
-        hint = document.createElement('div');
-        hint.className = 'compare-hint';
-        hint.textContent = 'Select a category to compare sites across periods.';
-        const tableView = cardBody.querySelector('.category-table-view');
-        if (tableView) cardBody.insertBefore(hint, tableView);
-        else cardBody.prepend(hint);
-      }
+    if (wasActive) {
+      state.compareMode = false;
+      state.compareContext = null;
     } else {
-      hint?.remove();
+      state.compareMode = true;
+      state.compareContext = cardId;
+      btn.classList.add('active');
+      addCompareHint(btn, cardId);
     }
     refreshAllTables();
+  }
+
+  function addCompareHint(btn, cardId) {
+    const cardBody = btn.closest('.data-card')?.querySelector('.data-card-body');
+    if (!cardBody) return;
+    const hint = document.createElement('div');
+    hint.className = 'compare-hint';
+    hint.textContent = cardId === 'line'
+      ? 'Select a line to compare sites across periods.'
+      : 'Select a category to compare sites across periods.';
+    const tableView = cardBody.querySelector('.category-table-view, .panel-overlay-host');
+    if (tableView) cardBody.insertBefore(hint, tableView);
+    else cardBody.prepend(hint);
   }
 
   function refreshAllTables() {
@@ -400,11 +487,12 @@
 
   function closeInlinePanel() {
     state.compareCategory = null;
+    state.compareLine = null;
     state.detailCategory = null;
     document.querySelectorAll('#inline-panel').forEach(p => p.remove());
     destroyChart('compare-chart');
     destroyChart('detail-chart');
-    document.querySelectorAll('.cat-row, .heat-cat-row').forEach(r => {
+    document.querySelectorAll('.cat-row, .heat-cat-row, .line-detail-row').forEach(r => {
       r.classList.remove('compare-active', 'detail-active');
     });
   }
@@ -472,6 +560,88 @@
         type: 'bar',
         data: {
           labels: compareSites,
+          datasets: PERIODS.map((p, i) => ({
+            label: p,
+            data: rows.map(r => r.vals[i]),
+            backgroundColor: PERIOD_COLORS[i],
+            borderRadius: { topLeft: 3, topRight: 3 },
+            borderSkipped: false,
+          })),
+        },
+        options: {
+          ...CHART_DEFAULTS,
+          plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
+            x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
+          },
+        },
+      });
+    });
+  }
+
+  function openLineComparePanel(line, anchorEl, cardBody) {
+    closeInlinePanel();
+    state.compareLine = line;
+
+    const site = activeSite();
+    const rows = HEATMAP_SITES.map(s => {
+      const vals = lineValuesForSite(s, line);
+      const total = avgOf(vals);
+      return { site: s, vals, total, isCurrent: s === site };
+    });
+    const best = rows.reduce((a, b) => (a.total < b.total ? a : b));
+    const worst = rows.reduce((a, b) => (a.total > b.total ? a : b));
+
+    const panel = document.createElement('div');
+    panel.id = 'inline-panel';
+    panel.className = 'inline-panel';
+    panel.innerHTML = `
+      <div class="inline-panel-header">
+        <div>
+          <div class="inline-panel-title">${line} — Site Comparison</div>
+          <div class="inline-panel-sub">Unplanned DT % by period · current site: ${site}</div>
+        </div>
+        <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="inline-panel-body overlay-panel-body">
+        <div class="compare-chart-wrap"><canvas id="compare-chart"></canvas></div>
+        <div class="table-scroll">
+          <table class="data-table compare-table">
+            <thead><tr>
+              <th>Site</th>
+              ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
+              <th>Avg</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map(r => {
+                const cls = r.site === best.site ? 'site-best' : r.site === worst.site ? 'site-worst' : '';
+                return `<tr class="${cls}${r.isCurrent ? ' selected' : ''}">
+                  <td>${r.site}${r.isCurrent ? ' ★' : ''}</td>
+                  ${r.vals.map(v => heatTd(v, 14).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
+                  ${heatTd(r.total, 14, 'col-total compare-cell')}
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    mountOverlayPanel(getOverlayHost(anchorEl, cardBody), panel);
+    anchorEl?.classList.add('compare-active');
+
+    panel.querySelector('.inline-panel-close').addEventListener('click', () => {
+      closeInlinePanel();
+    });
+
+    requestAnimationFrame(() => {
+      destroyChart('compare-chart');
+      const canvas = document.getElementById('compare-chart');
+      if (!canvas || typeof Chart === 'undefined') return;
+      state.charts['compare-chart'] = new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels: HEATMAP_SITES,
           datasets: PERIODS.map((p, i) => ({
             label: p,
             data: rows.map(r => r.vals[i]),
@@ -724,6 +894,7 @@
           closeAllSlicers();
           closeInlinePanel();
           state.compareMode = false;
+          state.compareContext = null;
           document.querySelectorAll('.compare-btn-card.active').forEach(b => b.classList.remove('active'));
           document.querySelectorAll('.compare-hint').forEach(h => h.remove());
           refreshAllTables();
@@ -830,6 +1001,7 @@
   }
 
   function buildLineHeatmapTable(showLegend = true) {
+    const compareReady = state.compareMode && state.compareContext === 'line' ? ' compare-ready' : '';
     let rows = '';
 
     HEATMAP_SITES.forEach(site => {
@@ -854,7 +1026,8 @@
         LINES.forEach(line => {
           const vals = lineValuesForSite(site, line);
           const total = sumOf(vals);
-          rows += `<tr class="line-detail-row">
+          const activeCompare = state.compareLine === line ? ' compare-active' : '';
+          rows += `<tr class="line-detail-row${compareReady}${activeCompare}" data-line="${line}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${line}</td>
             ${vals.map(v => heatTd(v, 14)).join('')}
@@ -901,10 +1074,13 @@
             <div class="legend-bar"></div>
             <span class="legend-label">Higher DT %</span>
           </div>
-          <button type="button" class="export-btn" id="line-export-btn" title="Export data">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-            Export
-          </button>
+          <div class="card-header-actions">
+            ${exportBtnHTML('line-export-btn')}
+            <button type="button" class="compare-btn-card" data-compare-card="line" title="Compare sites by line">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+              Compare Sites
+            </button>
+          </div>
         </div>
       </div>
       <div class="data-card-body">
@@ -922,10 +1098,19 @@
         refreshAllTables();
       });
     });
+    document.querySelectorAll('.line-detail-row').forEach(row => {
+      row.addEventListener('click', () => {
+        if (!state.compareMode || state.compareContext !== 'line') return;
+        const line = row.dataset.line;
+        if (!line) return;
+        const cardBody = row.closest('.data-card-body');
+        if (cardBody) openLineComparePanel(line, row, cardBody);
+      });
+    });
   }
 
   function buildHeatmapTable(showLegend = true) {
-    const compareReady = state.compareMode ? ' compare-ready' : '';
+    const compareReady = state.compareMode && state.compareContext !== 'line' ? ' compare-ready' : '';
     let rows = '';
 
     HEATMAP_SITES.forEach(site => {
@@ -991,7 +1176,7 @@
     });
     document.querySelectorAll('.heat-cat-row').forEach(row => {
       row.addEventListener('click', () => {
-        if (!state.compareMode) return;
+        if (!state.compareMode || state.compareContext === 'line') return;
         const category = row.dataset.category;
         const cardBody = row.closest('.data-card-body');
         if (cardBody) openComparePanel(category, row, cardBody);
@@ -1015,7 +1200,7 @@
             <div class="legend-bar"></div>
             <span class="legend-label">Higher DT %</span>
           </div>
-          ${categoryCardActions('heatmap', false)}
+          ${categoryCardActions('heatmap', false, 'export-heatmap-category')}
         </div>
       </div>
       <div class="data-card-body">
@@ -1027,7 +1212,7 @@
   function bindCategoryTableEvents() {
     document.querySelectorAll('.cat-row:not(.heat-cat-row)').forEach(row => {
       row.addEventListener('click', () => {
-        if (!state.compareMode) return;
+        if (!state.compareMode || state.compareContext === 'line') return;
         const category = row.dataset.category;
         const cardBody = row.closest('.data-card-body');
         if (cardBody) openComparePanel(category, row, cardBody);
@@ -1039,8 +1224,9 @@
     refreshAllTables();
   }
 
-  function categoryCardActions(cardId, includeToggle) {
-    const compareBtn = `<button type="button" class="compare-btn-card"${cardId ? ` data-compare-card="${cardId}"` : ''} title="Compare sites by category">
+  function categoryCardActions(cardId, includeToggle, exportId = null, compareType = 'category') {
+    const exportBtn = exportId ? exportBtnHTML(exportId) : '';
+    const compareBtn = `<button type="button" class="compare-btn-card"${cardId ? ` data-compare-card="${compareType === 'line' ? 'line' : cardId === 'heatmap' ? 'heatmap' : 'category'}"` : ''} title="${compareType === 'line' ? 'Compare sites by line' : 'Compare sites by category'}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
         Compare Sites
       </button>`;
@@ -1048,15 +1234,15 @@
         <button type="button" class="view-toggle-btn active" data-view="table" data-card="${cardId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
         <button type="button" class="view-toggle-btn" data-view="chart" data-card="${cardId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>
       </div>` : '';
-    return `<div class="card-header-actions">${compareBtn}${toggle}</div>`;
+    return `<div class="card-header-actions">${exportBtn}${compareBtn}${toggle}</div>`;
   }
 
-  function dataCard(title, body, toggleId, compareCard = false) {
+  function dataCard(title, body, toggleId, compareCard = false, exportId = null, compareType = 'category') {
     const actions = (compareCard || toggleId)
-      ? (compareCard ? categoryCardActions(toggleId, !!toggleId) : `<div class="view-toggle">
+      ? (compareCard ? categoryCardActions(toggleId, !!toggleId, exportId, compareType) : `<div class="card-header-actions">${exportId ? exportBtnHTML(exportId) : ''}<div class="view-toggle">
           <button type="button" class="view-toggle-btn active" data-view="table" data-card="${toggleId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
           <button type="button" class="view-toggle-btn" data-view="chart" data-card="${toggleId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>
-        </div>`)
+        </div></div>`)
       : '';
     return `<div class="data-card"><div class="data-card-header"><span class="data-card-title">${title}</span>${actions}</div><div class="data-card-body">${body}</div></div>`;
   }
@@ -1069,10 +1255,10 @@
       ${metricStripHTML()}${aiSummaryHTML()}
       ${dataCard('Unplanned DT % by Category',
         `<div id="view-category-table" class="panel-overlay-host category-table-view">${buildHeatmapTable(true)}</div>
-         <div id="view-category-chart" class="hidden-view panel-overlay-host"><div class="chart-wrap chart-wrap-pro"><canvas id="chart-category"></canvas></div></div>`, 'category', true)}
+         <div id="view-category-chart" class="hidden-view panel-overlay-host"><div class="chart-wrap chart-wrap-pro"><canvas id="chart-category"></canvas></div></div>`, 'category', true, 'export-overview-category')}
       ${dataCard('Unplanned DT % by Line/Category',
         `<div id="view-line-table" class="panel-overlay-host">${buildLineHeatmapTable()}</div>
-         <div id="view-line-chart" class="hidden-view panel-overlay-host"><div class="chart-wrap tall chart-wrap-pro"><canvas id="chart-line"></canvas></div></div>`, 'line')}
+         <div id="view-line-chart" class="hidden-view panel-overlay-host"><div class="chart-wrap tall chart-wrap-pro"><canvas id="chart-line"></canvas></div></div>`, 'line', true, 'export-overview-line', 'line')}
       <div class="overview-grid-3">
         ${dataCard('Unplanned DT % by Day of Week', '<div class="chart-wrap short"><canvas id="chart-dow"></canvas></div>')}
         ${dataCard('Unplanned DT Hours by Reason', '<div class="chart-wrap short"><canvas id="chart-reason"></canvas></div>')}
@@ -1080,6 +1266,7 @@
       </div>`;
 
     bindCompareButtons();
+    bindExportButtons();
     bindHeatmapTableEvents();
     bindLineHeatmapEvents();
     ['category','line'].forEach(id => {
@@ -1109,17 +1296,13 @@
       </div>`;
     bindCategoryTableEvents();
     bindCompareButtons();
+    bindExportButtons();
     bindHeatmapTableEvents();
     bindByCategoryControls();
 
     document.getElementById('kpi-tab-by-line').innerHTML = `
       ${metricStripHTML()}
       ${lineTabSummaryHTML()}
-      ${lineHeatmapCardHTML()}
-      ${chartCardWithSelect('Trend of Unplanned DT %', 'Line-level downtime trend across periods by site.', 'chart-line-trend', 'line-trend-select', [
-        { value: 'all', label: 'All Sites' },
-        ...LINE_TREND_SITES.map(s => ({ value: s, label: s })),
-      ])}
       <div class="overview-grid-2">
         ${chartCardWithSelect('Unplanned DT % by Line – Top 10 Lines', 'Highest unplanned downtime lines across the network.', 'chart-top-lines', 'top-lines-select', [
           { value: 10, label: 'Top 10 Lines' },
@@ -1128,7 +1311,14 @@
         ${chartCardWithSelect('Unplanned DT % by Category (All Sites)', 'Category share of total unplanned downtime', 'chart-line-donut', 'line-donut-select', [
           { value: 'total', label: 'Total DT %' },
         ], 'donut-wrap')}
-      </div>`;
+      </div>
+      ${lineHeatmapCardHTML()}
+      ${chartCardWithSelect('Trend of Unplanned DT %', 'Line-level downtime trend across periods by site.', 'chart-line-trend', 'line-trend-select', [
+        { value: 'all', label: 'All Sites' },
+        ...LINE_TREND_SITES.map(s => ({ value: s, label: s })),
+      ])}`;
+    bindCompareButtons();
+    bindExportButtons();
     bindLineHeatmapEvents();
     bindByLineControls();
     document.getElementById('kpi-tab-by-dow').innerHTML = metricStripHTML() + aiSummaryHTML() +
@@ -1357,7 +1547,13 @@
 
   function chartCardWithSelect(title, subtitle, canvasId, selectId, options, wrapClass = '') {
     const opts = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
-    const wrapCls = `chart-wrap tall chart-wrap-pro${wrapClass ? ' ' + wrapClass : ''}`;
+    const isDonut = wrapClass.includes('donut-wrap');
+    const bodyContent = isDonut
+      ? `<div class="donut-chart-layout">
+          <div class="donut-canvas-wrap"><canvas id="${canvasId}"></canvas></div>
+          <div class="donut-legend" id="${canvasId}-legend" aria-label="Category legend"></div>
+        </div>`
+      : `<div class="chart-wrap tall chart-wrap-pro${wrapClass ? ' ' + wrapClass : ''}"><canvas id="${canvasId}"></canvas></div>`;
     return `<div class="data-card chart-card-pro">
       <div class="data-card-header chart-card-header-pro">
         <div>
@@ -1367,7 +1563,7 @@
         <select class="chart-select" id="${selectId}" aria-label="${title} filter">${opts}</select>
       </div>
       <div class="data-card-body chart-body-pro">
-        <div class="${wrapCls}"><canvas id="${canvasId}"></canvas></div>
+        ${bodyContent}
       </div>
     </div>`;
   }
@@ -1587,10 +1783,6 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, canvas.width || 400, 0);
-    grad.addColorStop(0, '#2563eb');
-    grad.addColorStop(1, '#60a5fa');
     const entries = Object.entries(TOP_LINE_DT).sort((a, b) => b[1] - a[1]).slice(0, count);
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
@@ -1599,7 +1791,8 @@
         datasets: [{
           label: 'DT %',
           data: entries.map(e => e[1]),
-          backgroundColor: grad,
+          backgroundColor: entries.map((_, i) => PERIOD_COLORS[i % PERIOD_COLORS.length]),
+          hoverBackgroundColor: entries.map((_, i) => PERIOD_COLORS[i % PERIOD_COLORS.length]),
           borderRadius: 6,
           barThickness: 18,
         }],
@@ -1648,44 +1841,52 @@
     };
   }
 
+  function renderDonutLegend(canvasId, entries, colors) {
+    const legendEl = document.getElementById(`${canvasId}-legend`);
+    if (!legendEl) return;
+    legendEl.innerHTML = entries.map(([name, value], i) => {
+      const color = colors[name] || PERIOD_COLORS[i % PERIOD_COLORS.length];
+      return `<div class="donut-legend-item">
+        <span class="donut-legend-swatch" style="background:${color}"></span>
+        <span class="donut-legend-label">${name}</span>
+        <span class="donut-legend-value">${Number(value).toFixed(1)}%</span>
+      </div>`;
+    }).join('');
+  }
+
   function makeCategoryDonutChart(canvasId) {
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
     const entries = Object.entries(CATEGORY_DT_TOTALS).sort((a, b) => b[1] - a[1]);
     const total = 10.61;
+    const colors = entries.map(([name], i) => DONUT_CATEGORY_COLORS[name] || PERIOD_COLORS[i % PERIOD_COLORS.length]);
+    renderDonutLegend(canvasId, entries, DONUT_CATEGORY_COLORS);
     state.charts[canvasId] = new Chart(canvas, {
       type: 'doughnut',
       data: {
         labels: entries.map(e => e[0]),
         datasets: [{
           data: entries.map(e => e[1]),
-          backgroundColor: entries.map(([name]) => DONUT_CATEGORY_COLORS[name] || '#9ca3af'),
-          borderWidth: 2,
-          borderColor: '#ffffff',
-          hoverOffset: 6,
+          backgroundColor: colors,
+          borderWidth: 0,
+          spacing: 3,
+          borderRadius: 4,
+          hoverOffset: 8,
         }],
       },
       options: {
         ...CHART_DEFAULTS,
-        cutout: '62%',
+        cutout: '68%',
+        layout: { padding: 8 },
         plugins: {
           ...CHART_DEFAULTS.plugins,
-          legend: {
-            ...CHART_DEFAULTS.plugins.legend,
-            position: 'right',
-            align: 'center',
-            labels: {
-              ...CHART_DEFAULTS.plugins.legend.labels,
-              generateLabels(chart) {
-                const data = chart.data;
-                return data.labels.map((label, i) => ({
-                  text: `${label}  ${data.datasets[0].data[i].toFixed(1)}%`,
-                  fillStyle: data.datasets[0].backgroundColor[i],
-                  fontColor: '#475569',
-                  hidden: false,
-                  index: i,
-                }));
+          legend: { display: false },
+          tooltip: {
+            ...CHART_DEFAULTS.plugins.tooltip,
+            callbacks: {
+              label(ctx) {
+                return ` ${ctx.label}: ${ctx.parsed.toFixed(1)}%`;
               },
             },
           },
@@ -1702,9 +1903,6 @@
     });
     document.getElementById('top-lines-select')?.addEventListener('change', e => {
       makeTopLinesBarChart('chart-top-lines', parseInt(e.target.value, 10));
-    });
-    document.getElementById('line-export-btn')?.addEventListener('click', () => {
-      alert('Export will connect to live data in a future requirement.');
     });
   }
 
