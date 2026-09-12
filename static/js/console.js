@@ -181,33 +181,28 @@
 
   function heatStyle(value, max = 8, isTotalCol = false) {
     if (value == null || Number.isNaN(value)) return { bg: '#ffffff', color: '#9ca3af' };
-    if (value <= 0.05) return { bg: '#faf9f7', color: '#374151' };
+    if (value <= 0.05) return { bg: '#ffffff', color: '#1a2b4a' };
     const t = Math.min(1, Math.max(0, value / max));
-
-    if (isTotalCol) {
-      const r = Math.round(148 - t * 68);
-      const g = Math.round(132 - t * 72);
-      const b = Math.round(115 - t * 65);
-      return { bg: `rgb(${r},${g},${b})`, color: t > 0.28 ? '#ffffff' : '#1a2b4a' };
-    }
+    const intensity = isTotalCol ? Math.min(1, t * 1.08) : t;
 
     const stops = [
-      [250, 248, 245],
-      [245, 230, 210],
-      [232, 196, 168],
-      [196, 140, 108],
-      [156, 90, 68],
-      [107, 52, 38],
-      [72, 35, 26],
+      [255, 255, 255],
+      [255, 244, 240],
+      [255, 228, 220],
+      [255, 200, 188],
+      [255, 168, 150],
+      [255, 130, 110],
+      [255, 100, 88],
+      [244, 76, 66],
     ];
-    const idx = t * (stops.length - 1);
+    const idx = intensity * (stops.length - 1);
     const lo = Math.floor(idx);
     const hi = Math.min(lo + 1, stops.length - 1);
     const f = idx - lo;
     const r = Math.round(stops[lo][0] + (stops[hi][0] - stops[lo][0]) * f);
     const g = Math.round(stops[lo][1] + (stops[hi][1] - stops[lo][1]) * f);
     const b = Math.round(stops[lo][2] + (stops[hi][2] - stops[lo][2]) * f);
-    return { bg: `rgb(${r},${g},${b})`, color: t > 0.55 ? '#ffffff' : '#1a2b4a' };
+    return { bg: `rgb(${r},${g},${b})`, color: '#1a2b4a' };
   }
 
   function heatTd(value, max = 8, extraClass = '') {

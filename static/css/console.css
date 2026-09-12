@@ -929,8 +929,8 @@ body {
   width: 120px;
   height: 10px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #faf9f7 0%, #f5e6d3 18%, #d4a574 42%, #9c5838 68%, #5c3317 100%);
-  border: 1px solid #e7d5c4;
+  background: linear-gradient(90deg, #ffffff 0%, #ffe8e2 22%, #ffc9bb 45%, #ff9a88 70%, #f97066 100%);
+  border: 1px solid #ffd4cc;
 }
 
 .heatmap-legend.compact {
@@ -940,7 +940,7 @@ body {
 }
 
 .heatmap-scroll {
-  border: 1px solid #e7e0d8;
+  border: 1px solid #f0d4ce;
   padding: 12px 12px 0;
 }
 
