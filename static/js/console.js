@@ -49,6 +49,24 @@
     CANTON: [2.42, 2.18, 2.05, 1.92, 2.31, 2.14, 2.48, 2.02, 2.19, 2.06],
     CHARLOTTE: [0.10, 0.08, 0.09, 0.07, 0.11, 0.08, 0.10, 0.07, 0.09, 0.08],
   };
+  const LINE_TREND_SITES = ['ABERDEEN', 'ARLINGTON', 'BELOIT', 'BRIDGEVIEW', 'BROOKHOLLOW', 'CAMBRIDGE'];
+  const LINE_TREND_COLORS = ['#2563eb', '#f59e0b', '#10b981', '#8b5cf6', '#ef4444', '#0ea5e9'];
+  const TOP_LINE_DT = {
+    HP17T1: 36.74, FLK17T1: 28.91, SG808V1: 24.15, SUN1: 22.48, TCS1: 19.82,
+    BCP1: 18.35, FUN1: 16.07, FCP1: 14.22, FCC1: 12.88, PTZ3: 11.54,
+  };
+  const DONUT_CATEGORY_COLORS = {
+    Equipment: '#002855', Operation: '#2563eb', Changeover: '#0ea5e9', Sanitation: '#14b8a6',
+    Materials: '#eab308', 'No Event': '#f97066', Facilities: '#22c55e', Personnel: '#a78bfa', Warehouse: '#9ca3af',
+  };
+  const LINE_TREND_OVERRIDES = {
+    BRIDGEVIEW: [22, 26, 28, 30, 32, 34, 36, 38, 42, 40],
+    ARLINGTON: [8, 10, 12, 11, 9, 13, 12, 14, 11, 10],
+    BELOIT: [5, 6, 7, 8, 6, 7, 8, 7, 6, 5],
+    ABERDEEN: [4, 5, 6, 5, 4, 6, 7, 5, 6, 4],
+    BROOKHOLLOW: [2, 2.2, 2.1, 2.3, 2, 2.2, 2.1, 2.3, 2, 2.1],
+    CAMBRIDGE: [3, 3.5, 4, 3.8, 3.2, 3.6, 4.2, 3.4, 3.1, 3],
+  };
 
   const PAGES = [
     { id: 'intel-brief', title: 'Intel Brief', desc: 'Executive summary and key alerts', icon: 'brief' },
@@ -125,6 +143,7 @@
     expandedHeatmapSites: { ABERDEEN: true },
     expandedLineSites: { ABERDEEN: true },
     topSitesCount: 5,
+    lineTrendFilter: 'all',
   };
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -363,7 +382,9 @@
     const heatmapTab = document.getElementById('view-heatmap-table');
     if (heatmapTab) heatmapTab.innerHTML = buildHeatmapTable(false);
     const lineEl = document.getElementById('view-line-table');
-    if (lineEl) lineEl.innerHTML = buildLineHeatmapTable();
+    if (lineEl) lineEl.innerHTML = buildLineHeatmapTable(true);
+    const lineTabEl = document.getElementById('view-line-tab-table');
+    if (lineTabEl) lineTabEl.innerHTML = buildLineHeatmapTable(false);
     bindHeatmapTableEvents();
     bindLineHeatmapEvents();
   }
@@ -789,6 +810,13 @@
     </div></div>`;
   }
 
+  function lineTabSummaryHTML() {
+    return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
+      <div class="ai-summary-label">AI Summary</div>
+      <p class="ai-summary-text">Line-level downtime is concentrated in a few high-impact line/category combinations. TCS1 and SUN1 at Aberdeen drive disproportionate share, while Bridgeview site totals remain elevated across periods. Prioritize mechanical failures on top lines and standardize changeover procedures across HP17T1 and FLK17T1 performers.</p>
+    </div></div>`;
+  }
+
   function lineValuesForSite(site, line) {
     const mult = SITE_MULTIPLIERS[site] || 1;
     return (LINE_BASE[line] || []).map(v => +(v * mult * 0.95).toFixed(2));
@@ -801,7 +829,7 @@
     });
   }
 
-  function buildLineHeatmapTable() {
+  function buildLineHeatmapTable(showLegend = true) {
     let rows = '';
 
     HEATMAP_SITES.forEach(site => {
@@ -837,7 +865,7 @@
 
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
-          <td class="cat-label-cell">Total</td>
+          <td class="cat-label-cell">Site Total</td>
           ${sitePeriods.map(v => heatTd(v, 35)).join('')}
           ${heatTd(siteTotal, 35, 'col-total')}
           ${heatTd(sitePrevTotal, 35, 'col-total')}
@@ -845,11 +873,44 @@
       }
     });
 
-    return `<div class="table-scroll heatmap-scroll">${heatmapLegendHTML(true)}<table class="data-table heatmap-table"><thead>
+    return `<div class="table-scroll heatmap-scroll">${showLegend ? heatmapLegendHTML(true) : ''}<table class="data-table heatmap-table"><thead>
       <tr class="header-group"><th rowspan="2">Site</th><th rowspan="2">Line</th>
         <th colspan="10">2026</th><th colspan="2">Total</th></tr>
       <tr>${PERIODS.map(p => `<th>${p}</th>`).join('')}<th>2026 Total</th><th>Total</th></tr>
       </thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  function lineHeatmapCardHTML() {
+    return `<div class="data-card heatmap-card">
+      <div class="data-card-header heatmap-header">
+        <div class="heatmap-header-left">
+          <span class="data-card-title">Unplanned DT % by Line/Category</span>
+          <span class="chart-card-sub">Percentage of unplanned downtime across periods (YTD)</span>
+          <div class="status-badges">
+            <span class="status-badge">ACTIVE LINES <strong>${Object.keys(TOP_LINE_DT).length} Lines</strong></span>
+            <span class="status-badge accent">OVERALL DT AVG <strong>10.61%</strong></span>
+          </div>
+        </div>
+        <div class="heatmap-header-right">
+          <select class="chart-select" id="line-view-select" aria-label="View mode">
+            <option value="percentage">Percentage</option>
+            <option value="hours">Hours</option>
+          </select>
+          <div class="heatmap-legend">
+            <span class="legend-label">Lower DT %</span>
+            <div class="legend-bar"></div>
+            <span class="legend-label">Higher DT %</span>
+          </div>
+          <button type="button" class="export-btn" id="line-export-btn" title="Export data">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+            Export
+          </button>
+        </div>
+      </div>
+      <div class="data-card-body">
+        <div id="view-line-tab-table" class="panel-overlay-host">${buildLineHeatmapTable(false)}</div>
+      </div>
+    </div>`;
   }
 
   function bindLineHeatmapEvents() {
@@ -1051,8 +1112,25 @@
     bindHeatmapTableEvents();
     bindByCategoryControls();
 
-    document.getElementById('kpi-tab-by-line').innerHTML = metricStripHTML() + aiSummaryHTML() +
-      dataCard('Unplanned DT % by Line/Category', '<div class="chart-wrap tall"><canvas id="chart-tab-line"></canvas></div>');
+    document.getElementById('kpi-tab-by-line').innerHTML = `
+      ${metricStripHTML()}
+      ${lineTabSummaryHTML()}
+      ${lineHeatmapCardHTML()}
+      ${chartCardWithSelect('Trend of Unplanned DT %', 'Line-level downtime trend across periods by site.', 'chart-line-trend', 'line-trend-select', [
+        { value: 'all', label: 'All Sites' },
+        ...LINE_TREND_SITES.map(s => ({ value: s, label: s })),
+      ])}
+      <div class="overview-grid-2">
+        ${chartCardWithSelect('Unplanned DT % by Line – Top 10 Lines', 'Highest unplanned downtime lines across the network.', 'chart-top-lines', 'top-lines-select', [
+          { value: 10, label: 'Top 10 Lines' },
+          { value: 5, label: 'Top 5 Lines' },
+        ])}
+        ${chartCardWithSelect('Unplanned DT % by Category (All Sites)', 'Category share of total unplanned downtime', 'chart-line-donut', 'line-donut-select', [
+          { value: 'total', label: 'Total DT %' },
+        ], 'donut-wrap')}
+      </div>`;
+    bindLineHeatmapEvents();
+    bindByLineControls();
     document.getElementById('kpi-tab-by-dow').innerHTML = metricStripHTML() + aiSummaryHTML() +
       dataCard('Unplanned DT % by Day of Week', '<div class="chart-wrap tall"><canvas id="chart-tab-dow"></canvas></div>');
     document.getElementById('kpi-tab-by-reason').innerHTML = metricStripHTML() + aiSummaryHTML() +
@@ -1133,6 +1211,7 @@
       id: 'barValueLabels',
       afterDatasetsDraw(chart) {
         const { ctx } = chart;
+        const horizontal = chart.options.indexAxis === 'y';
         chart.data.datasets.forEach((dataset, i) => {
           chart.getDatasetMeta(i).data.forEach((bar, idx) => {
             const val = dataset.data[idx];
@@ -1140,8 +1219,15 @@
             ctx.save();
             ctx.fillStyle = '#1e293b';
             ctx.font = '600 11px Inter, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(Number(val).toFixed(decimals) + '%', bar.x, bar.y - 8);
+            if (horizontal) {
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(Number(val).toFixed(decimals) + '%', bar.x + 6, bar.y);
+            } else {
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'bottom';
+              ctx.fillText(Number(val).toFixed(decimals) + '%', bar.x, bar.y - 8);
+            }
             ctx.restore();
           });
         });
@@ -1269,8 +1355,9 @@
     });
   }
 
-  function chartCardWithSelect(title, subtitle, canvasId, selectId, options) {
+  function chartCardWithSelect(title, subtitle, canvasId, selectId, options, wrapClass = '') {
     const opts = options.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+    const wrapCls = `chart-wrap tall chart-wrap-pro${wrapClass ? ' ' + wrapClass : ''}`;
     return `<div class="data-card chart-card-pro">
       <div class="data-card-header chart-card-header-pro">
         <div>
@@ -1280,7 +1367,7 @@
         <select class="chart-select" id="${selectId}" aria-label="${title} filter">${opts}</select>
       </div>
       <div class="data-card-body chart-body-pro">
-        <div class="chart-wrap tall chart-wrap-pro"><canvas id="${canvasId}"></canvas></div>
+        <div class="${wrapCls}"><canvas id="${canvasId}"></canvas></div>
       </div>
     </div>`;
   }
@@ -1432,6 +1519,195 @@
     });
   }
 
+  function initByLineCharts() {
+    makeLineTrendChart('chart-line-trend', state.lineTrendFilter);
+    makeTopLinesBarChart('chart-top-lines', 10);
+    makeCategoryDonutChart('chart-line-donut');
+  }
+
+  function lineTrendData(site) {
+    if (LINE_TREND_OVERRIDES[site]) return LINE_TREND_OVERRIDES[site];
+    return linePeriodTotalsForSite(site);
+  }
+
+  function makeLineTrendChart(canvasId, filter = 'all') {
+    destroyChart(canvasId);
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === 'undefined') return;
+    const ctx = canvas.getContext('2d');
+    const sites = filter === 'all' ? LINE_TREND_SITES : [filter];
+    state.charts[canvasId] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: PERIODS,
+        datasets: sites.map((site, i) => {
+          const color = LINE_TREND_COLORS[LINE_TREND_SITES.indexOf(site)] || LINE_TREND_COLORS[i];
+          const grad = ctx.createLinearGradient(0, 0, 0, 320);
+          grad.addColorStop(0, color + '35');
+          grad.addColorStop(1, color + '00');
+          return {
+            label: site.charAt(0) + site.slice(1).toLowerCase(),
+            data: lineTrendData(site),
+            borderColor: color,
+            backgroundColor: grad,
+            fill: true,
+            tension: 0.42,
+            pointRadius: 5,
+            pointHoverRadius: 8,
+            pointBackgroundColor: '#ffffff',
+            pointBorderColor: color,
+            pointBorderWidth: 2.5,
+            borderWidth: 2.5,
+          };
+        }),
+      },
+      options: {
+        ...CHART_DEFAULTS,
+        plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
+        interaction: { intersect: false, mode: 'index' },
+        scales: {
+          y: {
+            beginAtZero: true,
+            max: 50,
+            ...PRO_AXIS,
+            title: proAxisTitle('DT %'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
+          },
+          x: {
+            ...PRO_AXIS,
+            title: proAxisTitle('Period'),
+            ticks: HORIZONTAL_X_TICKS,
+          },
+        },
+      },
+    });
+  }
+
+  function makeTopLinesBarChart(canvasId, count = 10) {
+    destroyChart(canvasId);
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === 'undefined') return;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, canvas.width || 400, 0);
+    grad.addColorStop(0, '#2563eb');
+    grad.addColorStop(1, '#60a5fa');
+    const entries = Object.entries(TOP_LINE_DT).sort((a, b) => b[1] - a[1]).slice(0, count);
+    state.charts[canvasId] = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: entries.map(e => e[0]),
+        datasets: [{
+          label: 'DT %',
+          data: entries.map(e => e[1]),
+          backgroundColor: grad,
+          borderRadius: 6,
+          barThickness: 18,
+        }],
+      },
+      options: {
+        ...CHART_DEFAULTS,
+        indexAxis: 'y',
+        plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
+        scales: {
+          x: {
+            beginAtZero: true,
+            max: 40,
+            ...PRO_AXIS,
+            title: proAxisTitle('DT %'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
+          },
+          y: {
+            ...PRO_AXIS,
+            ticks: { font: { size: 11, weight: '600' }, color: '#1a2b4a' },
+          },
+        },
+      },
+      plugins: [barValueLabelPlugin(2)],
+    });
+  }
+
+  function donutCenterPlugin(total) {
+    return {
+      id: 'donutCenter',
+      beforeDraw(chart) {
+        const { ctx, chartArea } = chart;
+        if (!chartArea) return;
+        const x = (chartArea.left + chartArea.right) / 2;
+        const y = (chartArea.top + chartArea.bottom) / 2;
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#1a2b4a';
+        ctx.font = '700 24px Inter, sans-serif';
+        ctx.fillText(total.toFixed(2) + '%', x, y - 6);
+        ctx.font = '500 12px Inter, sans-serif';
+        ctx.fillStyle = '#64748b';
+        ctx.fillText('Total', x, y + 16);
+        ctx.restore();
+      },
+    };
+  }
+
+  function makeCategoryDonutChart(canvasId) {
+    destroyChart(canvasId);
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === 'undefined') return;
+    const entries = Object.entries(CATEGORY_DT_TOTALS).sort((a, b) => b[1] - a[1]);
+    const total = 10.61;
+    state.charts[canvasId] = new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: entries.map(e => e[0]),
+        datasets: [{
+          data: entries.map(e => e[1]),
+          backgroundColor: entries.map(([name]) => DONUT_CATEGORY_COLORS[name] || '#9ca3af'),
+          borderWidth: 2,
+          borderColor: '#ffffff',
+          hoverOffset: 6,
+        }],
+      },
+      options: {
+        ...CHART_DEFAULTS,
+        cutout: '62%',
+        plugins: {
+          ...CHART_DEFAULTS.plugins,
+          legend: {
+            ...CHART_DEFAULTS.plugins.legend,
+            position: 'right',
+            align: 'center',
+            labels: {
+              ...CHART_DEFAULTS.plugins.legend.labels,
+              generateLabels(chart) {
+                const data = chart.data;
+                return data.labels.map((label, i) => ({
+                  text: `${label}  ${data.datasets[0].data[i].toFixed(1)}%`,
+                  fillStyle: data.datasets[0].backgroundColor[i],
+                  fontColor: '#475569',
+                  hidden: false,
+                  index: i,
+                }));
+              },
+            },
+          },
+        },
+      },
+      plugins: [donutCenterPlugin(total)],
+    });
+  }
+
+  function bindByLineControls() {
+    document.getElementById('line-trend-select')?.addEventListener('change', e => {
+      state.lineTrendFilter = e.target.value;
+      makeLineTrendChart('chart-line-trend', state.lineTrendFilter);
+    });
+    document.getElementById('top-lines-select')?.addEventListener('change', e => {
+      makeTopLinesBarChart('chart-top-lines', parseInt(e.target.value, 10));
+    });
+    document.getElementById('line-export-btn')?.addEventListener('click', () => {
+      alert('Export will connect to live data in a future requirement.');
+    });
+  }
+
   function initByCategoryCharts() {
     makeTopSitesLineChart('chart-top-sites', state.topSitesCount);
     makeSiteBarChart('chart-cat-by-site');
@@ -1447,7 +1723,7 @@
   function initTabCharts(tabId) {
     const map = {
       'by-category': () => initByCategoryCharts(),
-      'by-line': () => makeGroupedBarChart('chart-tab-line', LINES, LINE_BASE, 14),
+      'by-line': () => initByLineCharts(),
       'by-dow': () => makeDowChart('chart-tab-dow'),
       'by-reason': () => { makeReasonChart('chart-tab-reason'); makeTrendChart('chart-tab-trend'); },
     };

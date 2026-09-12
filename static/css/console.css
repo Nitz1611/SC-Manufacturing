@@ -1065,6 +1065,33 @@ body {
   box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.08);
 }
 
+.export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: white;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.export-btn:hover {
+  border-color: var(--blue-accent);
+  background: var(--blue-soft);
+  color: var(--blue-accent);
+}
+
+.chart-card-pro .chart-wrap.donut-wrap {
+  height: 320px;
+  max-width: 100%;
+}
+
 .chart-card-pro .chart-wrap {
   height: 320px;
 }
