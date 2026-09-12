@@ -138,6 +138,8 @@
     charts: {},
     compareMode: false,
     compareContext: null,
+    detailMode: false,
+    detailContext: null,
     compareCategory: null,
     compareLine: null,
     detailCategory: null,
@@ -414,7 +416,11 @@
     const cardId = btn.dataset.compareCard || 'category';
     const cardToggleId = btn.dataset.cardId;
     const view = cardToggleId ? (state.cardViews[cardToggleId] || 'table') : 'table';
-    if (view === 'chart') return;
+
+    if (view === 'chart') {
+      toggleDetailMode(btn, cardToggleId, cardId);
+      return;
+    }
 
     const wasActive = btn.classList.contains('active');
 
@@ -432,6 +438,38 @@
       addCompareHint(btn, cardId);
     }
     refreshAllTables();
+  }
+
+  function toggleDetailMode(btn, cardToggleId, cardId) {
+    const wasActive = btn.classList.contains('active');
+    const detailContext = cardId === 'line' ? 'line' : 'category';
+
+    document.querySelectorAll('.compare-btn-card').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.compare-hint').forEach(h => h.remove());
+    closeInlinePanel();
+
+    if (wasActive) {
+      state.detailMode = false;
+      state.detailContext = null;
+    } else {
+      state.detailMode = true;
+      state.detailContext = detailContext;
+      btn.classList.add('active');
+      addDetailHint(btn, cardToggleId, detailContext);
+    }
+  }
+
+  function addDetailHint(btn, cardToggleId, detailContext) {
+    const cardBody = btn.closest('.data-card')?.querySelector('.data-card-body');
+    if (!cardBody) return;
+    const hint = document.createElement('div');
+    hint.className = 'compare-hint';
+    hint.textContent = detailContext === 'line'
+      ? 'Click a line on the chart for detailed view.'
+      : 'Click a category on the chart for detailed view.';
+    const chartView = cardBody.querySelector(`#view-${cardToggleId}-chart`);
+    if (chartView) cardBody.insertBefore(hint, chartView);
+    else cardBody.prepend(hint);
   }
 
   function addCompareHint(btn, cardId) {
@@ -1351,6 +1389,8 @@
     closeInlinePanel();
     state.cardViews[cardId] = view;
     updateCompareButtonLabel(cardId);
+    state.detailMode = false;
+    state.detailContext = null;
     if (view === 'chart') {
       state.compareMode = false;
       state.compareContext = null;
@@ -1370,12 +1410,14 @@
       chartEl?.classList.remove('hidden-view');
       if (cardId === 'category') {
         makeGroupedBarChart('chart-category', CATEGORIES, CATEGORY_BASE, 8, (cat, canvas) => {
+          if (!state.detailMode || state.detailContext !== 'category') return;
           const host = canvas.closest('.panel-overlay-host');
           if (host) openCategoryDetailPanel(cat, host);
         });
       }
       if (cardId === 'line') {
         makeGroupedBarChart('chart-line', LINES, LINE_BASE, 14, (line, canvas) => {
+          if (!state.detailMode || state.detailContext !== 'line') return;
           const host = canvas.closest('.panel-overlay-host');
           if (host) openLineDetailPanel(line, host);
         });

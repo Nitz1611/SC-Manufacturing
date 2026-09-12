@@ -221,8 +221,13 @@ body {
 
 /* ── TOP NAVIGATION ── */
 .banner-nav {
-  background: var(--banner-nav-bg);
-  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--navy-dark) 0%, var(--navy) 50%, var(--navy-light) 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.banner-nav:not(:has(.top-nav-secondary.visible)) {
+  display: none;
 }
 
 .app-header .top-nav-primary {
@@ -316,7 +321,7 @@ body {
   border: none;
   border-radius: 0;
   background: transparent;
-  color: var(--text-muted);
+  color: rgba(255, 255, 255, 0.65);
   font-family: inherit;
   font-size: 12.5px;
   font-weight: 600;
@@ -339,15 +344,15 @@ body {
 }
 
 .top-nav-subitem:hover {
-  color: var(--navy);
+  color: rgba(255, 255, 255, 0.92);
 }
 
 .top-nav-subitem.active {
-  color: var(--blue-accent);
+  color: #ffffff;
 }
 
 .top-nav-subitem.active::after {
-  background: linear-gradient(90deg, var(--blue-accent), #00a896);
+  background: linear-gradient(90deg, #7ec8ff, #00a896);
 }
 
 /* ── WORKSPACE ── */
