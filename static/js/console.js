@@ -85,8 +85,9 @@
     filters: {},
     charts: {},
     expandedNav: 'kpi-overview',
-    selectedCategory: null,
-    expandedCategory: null,
+    compareMode: false,
+    compareCategory: null,
+    detailCategory: null,
   };
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -217,48 +218,56 @@
     });
   }
 
-  /* ── Compare ── */
+  /* ── Compare & inline detail panels ── */
   function initCompare() {
-    document.getElementById('compare-btn')?.addEventListener('click', () => {
-      if (state.selectedCategory) openComparePanel(state.selectedCategory);
+    bindCompareButtons();
+  }
+
+  function bindCompareButtons() {
+    document.querySelectorAll('.compare-btn-card').forEach(btn => {
+      btn.replaceWith(btn.cloneNode(true));
+    });
+    document.querySelectorAll('.compare-btn-card').forEach(btn => {
+      btn.addEventListener('click', () => toggleCompareMode(btn));
     });
   }
 
-  function updateCompareButton() {
-    const btn = document.getElementById('compare-btn');
-    if (!btn) return;
-    btn.disabled = !state.selectedCategory;
-    btn.title = state.selectedCategory
-      ? `Compare "${state.selectedCategory}" across sites`
-      : 'Select a category first';
-  }
+  function toggleCompareMode(btn) {
+    state.compareMode = !state.compareMode;
+    btn.classList.toggle('active', state.compareMode);
+    closeInlinePanel();
 
-  function selectCategory(category) {
-    state.selectedCategory = category;
-    updateCompareButton();
-    document.querySelectorAll('.cat-row').forEach(r => {
-      r.classList.toggle('selected', r.dataset.category === category);
-    });
-  }
-
-  function toggleCategoryDetail(category) {
-    if (state.expandedCategory === category) {
-      state.expandedCategory = null;
+    const cardBody = btn.closest('.data-card')?.querySelector('.data-card-body');
+    let hint = cardBody?.querySelector('.compare-hint');
+    if (state.compareMode) {
+      if (!hint && cardBody) {
+        hint = document.createElement('div');
+        hint.className = 'compare-hint';
+        hint.textContent = 'Select a category to compare sites across periods.';
+        const tableView = cardBody.querySelector('.category-table-view');
+        if (tableView) cardBody.insertBefore(hint, tableView);
+        else cardBody.prepend(hint);
+      }
     } else {
-      state.expandedCategory = category;
-      selectCategory(category);
+      hint?.remove();
     }
     refreshCategoryTable();
   }
 
-  function openComparePanel(category) {
-    let panel = document.getElementById('compare-panel');
-    if (!panel) {
-      panel = document.createElement('div');
-      panel.id = 'compare-panel';
-      panel.className = 'compare-panel hidden';
-      document.body.appendChild(panel);
-    }
+  function closeInlinePanel() {
+    state.compareCategory = null;
+    state.detailCategory = null;
+    document.querySelectorAll('#inline-panel').forEach(p => p.remove());
+    destroyChart('compare-chart');
+    destroyChart('detail-chart');
+    document.querySelectorAll('.cat-row').forEach(r => {
+      r.classList.remove('compare-active', 'detail-active');
+    });
+  }
+
+  function openComparePanel(category, anchorEl, cardBody) {
+    closeInlinePanel();
+    state.compareCategory = category;
 
     const site = activeSite();
     const rows = SITES.map(s => {
@@ -266,45 +275,52 @@
       const total = avgOf(vals);
       return { site: s, vals, total, isCurrent: s === site };
     });
-    const best = rows.reduce((a, b) => a.total < b.total ? a : b);
-    const worst = rows.reduce((a, b) => a.total > b.total ? a : b);
+    const best = rows.reduce((a, b) => (a.total < b.total ? a : b));
+    const worst = rows.reduce((a, b) => (a.total > b.total ? a : b));
 
+    const panel = document.createElement('div');
+    panel.id = 'inline-panel';
+    panel.className = 'inline-panel';
     panel.innerHTML = `
-      <div class="compare-dialog" role="dialog" aria-label="Site comparison">
-        <div class="compare-dialog-header">
-          <div>
-            <div class="compare-dialog-title">${category} — Site Comparison</div>
-            <div class="compare-dialog-sub">Unplanned DT % by period · current site: ${site}</div>
-          </div>
-          <button type="button" class="category-detail-close" id="compare-close" aria-label="Close">×</button>
+      <div class="inline-panel-header">
+        <div>
+          <div class="inline-panel-title">${category} — Site Comparison</div>
+          <div class="inline-panel-sub">Unplanned DT % by period · current site: ${site}</div>
         </div>
-        <div class="compare-dialog-body">
-          <div class="compare-chart-wrap"><canvas id="compare-chart"></canvas></div>
-          <div class="table-scroll">
-            <table class="data-table compare-table">
-              <thead><tr>
-                <th>Site</th>
-                ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
-                <th>Avg</th>
-              </tr></thead>
-              <tbody>
-                ${rows.map(r => {
-                  const cls = r.site === best.site ? 'site-best' : r.site === worst.site ? 'site-worst' : '';
-                  return `<tr class="${cls}${r.isCurrent ? ' selected' : ''}">
-                    <td>${r.site}${r.isCurrent ? ' ★' : ''}</td>
-                    ${r.vals.map(v => `<td class="${valClass(v)}">${fmtPct(v)}</td>`).join('')}
-                    <td class="${valClass(r.total)}">${fmtPct(r.total)}</td>
-                  </tr>`;
-                }).join('')}
-              </tbody>
-            </table>
-          </div>
+        <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="inline-panel-body">
+        <div class="compare-chart-wrap"><canvas id="compare-chart"></canvas></div>
+        <div class="table-scroll">
+          <table class="data-table compare-table">
+            <thead><tr>
+              <th>Site</th>
+              ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
+              <th>Avg</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map(r => {
+                const cls = r.site === best.site ? 'site-best' : r.site === worst.site ? 'site-worst' : '';
+                return `<tr class="${cls}${r.isCurrent ? ' selected' : ''}">
+                  <td>${r.site}${r.isCurrent ? ' ★' : ''}</td>
+                  ${r.vals.map(v => `<td class="${valClass(v)}">${fmtPct(v)}</td>`).join('')}
+                  <td class="${valClass(r.total)}">${fmtPct(r.total)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
         </div>
       </div>`;
 
-    panel.classList.remove('hidden');
-    panel.addEventListener('click', e => { if (e.target === panel) closeComparePanel(); });
-    document.getElementById('compare-close')?.addEventListener('click', closeComparePanel);
+    cardBody.appendChild(panel);
+    anchorEl?.classList.add('compare-active');
+
+    panel.querySelector('.inline-panel-close').addEventListener('click', () => {
+      closeInlinePanel();
+      state.compareMode = false;
+      document.querySelectorAll('.compare-btn-card.active').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.compare-hint').forEach(h => h.remove());
+    });
 
     requestAnimationFrame(() => {
       destroyChart('compare-chart');
@@ -314,11 +330,88 @@
         type: 'bar',
         data: {
           labels: SITES,
+          datasets: PERIODS.map((p, i) => ({
+            label: p,
+            data: rows.map(r => r.vals[i]),
+            backgroundColor: PERIOD_COLORS[i],
+            borderRadius: { topLeft: 3, topRight: 3 },
+            borderSkipped: false,
+          })),
+        },
+        options: {
+          ...CHART_DEFAULTS,
+          plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
+            x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
+          },
+        },
+      });
+    });
+  }
+
+  function openCategoryDetailPanel(category, cardBody) {
+    closeInlinePanel();
+    state.detailCategory = category;
+
+    const site = activeSite();
+    const vals = categoryValuesForSite(site, category);
+    const avg = avgOf(vals);
+    const peak = Math.max(...vals);
+    const peakIdx = vals.indexOf(peak);
+
+    const panel = document.createElement('div');
+    panel.id = 'inline-panel';
+    panel.className = 'inline-panel';
+    panel.innerHTML = `
+      <div class="inline-panel-header">
+        <div>
+          <div class="inline-panel-title">${category} — Period Detail</div>
+          <div class="inline-panel-sub">${site} · click × to close</div>
+        </div>
+        <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="inline-panel-body">
+        <div class="inline-detail-grid">
+          <div class="compare-chart-wrap"><canvas id="detail-chart"></canvas></div>
+          <div class="category-detail-stats">
+            <div class="detail-stat"><div class="detail-stat-label">Average DT %</div><div class="detail-stat-value">${fmtPct(avg)}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${PERIODS[peakIdx]} · ${fmtPct(peak)}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">vs 5% Target</div><div class="detail-stat-value ${avg >= 5 ? 'val-high' : 'val-low'}">${avg >= 5 ? 'Above target' : 'Below target'}</div></div>
+          </div>
+        </div>
+        <div class="table-scroll" style="margin-top:16px">
+          <table class="data-table compare-table">
+            <thead><tr><th>Metric</th>${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}<th>Avg</th></tr></thead>
+            <tbody><tr>
+              <td>Unplanned DT %</td>
+              ${vals.map(v => `<td class="${valClass(v)}">${fmtPct(v)}</td>`).join('')}
+              <td class="${valClass(avg)}">${fmtPct(avg)}</td>
+            </tr></tbody>
+          </table>
+        </div>
+      </div>`;
+
+    cardBody.appendChild(panel);
+    panel.querySelector('.inline-panel-close').addEventListener('click', closeInlinePanel);
+
+    const row = cardBody.querySelector(`.cat-row[data-category="${CSS.escape(category)}"]`);
+    if (row) row.classList.add('detail-active');
+
+    requestAnimationFrame(() => {
+      destroyChart('detail-chart');
+      const canvas = document.getElementById('detail-chart');
+      if (!canvas || typeof Chart === 'undefined') return;
+      state.charts['detail-chart'] = new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels: PERIODS,
           datasets: [{
-            label: `${category} Avg DT %`,
-            data: rows.map(r => +r.total.toFixed(2)),
-            backgroundColor: rows.map(r => r.site === best.site ? '#00a896' : r.site === worst.site ? '#e53935' : '#0066cc'),
-            borderRadius: 6,
+            label: `${category} DT %`,
+            data: vals,
+            backgroundColor: PERIOD_COLORS,
+            borderRadius: { topLeft: 4, topRight: 4 },
+            borderSkipped: false,
           }],
         },
         options: {
@@ -331,11 +424,6 @@
         },
       });
     });
-  }
-
-  function closeComparePanel() {
-    document.getElementById('compare-panel')?.classList.add('hidden');
-    destroyChart('compare-chart');
   }
 
   /* ── Filters ── */
@@ -422,6 +510,10 @@
         } else {
           state.filters[cfg.id] = opt;
           closeAllSlicers();
+          closeInlinePanel();
+          state.compareMode = false;
+          document.querySelectorAll('.compare-btn-card.active').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.compare-hint').forEach(h => h.remove());
           refreshCategoryTable();
         }
         refreshSlicer(wrap, cfg);
@@ -499,39 +591,22 @@
     </div></div>`;
   }
 
-  function categoryDetailHTML(category) {
-    const site = activeSite();
-    const vals = categoryValuesForSite(site, category);
-    const avg = avgOf(vals);
-    const peak = Math.max(...vals);
-    const peakIdx = vals.indexOf(peak);
-    return `<div class="category-detail-panel" id="cat-detail-panel">
-      <div class="category-detail-header">
-        <span class="category-detail-title">${category} — ${site} Performance Detail</span>
-        <button type="button" class="category-detail-close" id="cat-detail-close" aria-label="Close">×</button>
-      </div>
-      <div class="category-detail-body">
-        <div class="category-detail-chart"><canvas id="cat-detail-chart"></canvas></div>
-        <div class="category-detail-stats">
-          <div class="detail-stat"><div class="detail-stat-label">Average DT %</div><div class="detail-stat-value">${fmtPct(avg)}</div></div>
-          <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${PERIODS[peakIdx]} · ${fmtPct(peak)}</div></div>
-          <div class="detail-stat"><div class="detail-stat-label">vs 5% Target</div><div class="detail-stat-value ${avg >= 5 ? 'val-high' : 'val-low'}">${avg >= 5 ? 'Above target' : 'Below target'}</div></div>
-        </div>
-      </div>
-    </div>`;
-  }
-
   function buildCategoryTable() {
     const site = activeSite();
-    let rows = CATEGORIES.map(cat => {
+    const compareReady = state.compareMode ? ' compare-ready' : '';
+
+    let rows = CATEGORIES.map((cat, idx) => {
       const vals = categoryValuesForSite(site, cat);
       const cells = vals.map(v => `<td class="${valClass(v)}">${fmtPct(v)}</td>`).join('');
       const total = avgOf(vals);
-      const sel = state.selectedCategory === cat ? ' selected' : '';
-      const exp = state.expandedCategory === cat ? ' expanded-detail-open' : '';
-      return `<tr class="cat-row${sel}${exp}" data-category="${cat}">
-        <td>${site}</td>
-        <td><span class="expand-btn" data-expand="${cat}" title="Expand detail">${state.expandedCategory === cat ? '−' : '+'}</span>${cat}</td>
+      const activeCompare = state.compareCategory === cat ? ' compare-active' : '';
+      const activeDetail = state.detailCategory === cat ? ' detail-active' : '';
+      const siteCell = idx === 0
+        ? `<td class="site-group-cell" rowspan="${CATEGORIES.length}">${site}</td>`
+        : '';
+      return `<tr class="cat-row${compareReady}${activeCompare}${activeDetail}" data-category="${cat}">
+        ${siteCell}
+        <td>${cat}</td>
         ${cells}
         <td class="${valClass(total)}">${fmtPct(total)}</td>
         <td class="${valClass(total * 1.08)}">${fmtPct(total * 1.08)}</td>
@@ -543,74 +618,31 @@
       return `<td class="${valClass(s)}">${fmtPct(s)}</td>`;
     }).join('');
 
-    rows += `<tr class="row-total"><td>${site}</td><td>Total</td>${totals}<td>${fmtPct(6.29)}</td><td>${fmtPct(7.12)}</td></tr>`;
-
-    const detail = state.expandedCategory ? categoryDetailHTML(state.expandedCategory) : '';
+    rows += `<tr class="row-total"><td class="site-group-cell">${site}</td><td>Total</td>${totals}<td>${fmtPct(6.29)}</td><td>${fmtPct(7.12)}</td></tr>`;
 
     return `<div class="table-scroll"><table class="data-table"><thead><tr>
       <th>Site</th><th>Year / Category</th>
       ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
-      <th>2026 Total</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>${detail}`;
+      <th>2026 Total</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   function bindCategoryTableEvents() {
     document.querySelectorAll('.cat-row').forEach(row => {
-      row.addEventListener('click', e => {
-        if (e.target.closest('.expand-btn')) return;
-        selectCategory(row.dataset.category);
+      row.addEventListener('click', () => {
+        if (!state.compareMode) return;
+        const category = row.dataset.category;
+        const cardBody = row.closest('.data-card-body');
+        if (cardBody) openComparePanel(category, row, cardBody);
       });
     });
-    document.querySelectorAll('.expand-btn[data-expand]').forEach(btn => {
-      btn.addEventListener('click', e => {
-        e.stopPropagation();
-        toggleCategoryDetail(btn.dataset.expand);
-      });
-    });
-    document.getElementById('cat-detail-close')?.addEventListener('click', () => {
-      state.expandedCategory = null;
-      refreshCategoryTable();
-    });
-    if (state.expandedCategory) {
-      requestAnimationFrame(() => renderCategoryDetailChart(state.expandedCategory));
-    }
   }
 
   function refreshCategoryTable() {
-    const el = document.getElementById('view-category-table');
-    if (!el) return;
-    el.innerHTML = buildCategoryTable();
-    bindCategoryTableEvents();
-  }
-
-  function renderCategoryDetailChart(category) {
-    destroyChart('cat-detail-chart');
-    const canvas = document.getElementById('cat-detail-chart');
-    if (!canvas || typeof Chart === 'undefined') return;
-    const vals = categoryValuesForSite(activeSite(), category);
-    state.charts['cat-detail-chart'] = new Chart(canvas, {
-      type: 'line',
-      data: {
-        labels: PERIODS,
-        datasets: [{
-          label: `${category} DT %`,
-          data: vals,
-          borderColor: '#0066cc',
-          backgroundColor: 'rgba(0,102,204,0.12)',
-          fill: true,
-          tension: 0.35,
-          pointRadius: 5,
-          pointBackgroundColor: '#0066cc',
-        }],
-      },
-      options: {
-        ...CHART_DEFAULTS,
-        plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
-        scales: {
-          y: { beginAtZero: true, ticks: { callback: v => v + '%' }, grid: { color: 'rgba(0,40,85,0.06)' } },
-          x: { grid: { display: false } },
-        },
-      },
+    ['view-category-table', 'view-category-tab-table'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = buildCategoryTable();
     });
+    bindCategoryTableEvents();
   }
 
   function buildLineTable() {
@@ -633,12 +665,26 @@
       <th>2026 Total</th><th>Total</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
-  function dataCard(title, body, toggleId) {
-    const toggle = toggleId ? `<div class="view-toggle">
-      <button type="button" class="view-toggle-btn active" data-view="table" data-card="${toggleId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
-      <button type="button" class="view-toggle-btn" data-view="chart" data-card="${toggleId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>
-    </div>` : '';
-    return `<div class="data-card"><div class="data-card-header"><span class="data-card-title">${title}</span>${toggle}</div><div class="data-card-body">${body}</div></div>`;
+  function categoryCardActions(cardId, includeToggle) {
+    const compareBtn = `<button type="button" class="compare-btn-card"${cardId ? ` data-compare-card="${cardId}"` : ''} title="Compare sites by category">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+        Compare Sites
+      </button>`;
+    const toggle = includeToggle ? `<div class="view-toggle">
+        <button type="button" class="view-toggle-btn active" data-view="table" data-card="${cardId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+        <button type="button" class="view-toggle-btn" data-view="chart" data-card="${cardId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>
+      </div>` : '';
+    return `<div class="card-header-actions">${compareBtn}${toggle}</div>`;
+  }
+
+  function dataCard(title, body, toggleId, compareCard = false) {
+    const actions = (compareCard || toggleId)
+      ? (compareCard ? categoryCardActions(toggleId, !!toggleId) : `<div class="view-toggle">
+          <button type="button" class="view-toggle-btn active" data-view="table" data-card="${toggleId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+          <button type="button" class="view-toggle-btn" data-view="chart" data-card="${toggleId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>
+        </div>`)
+      : '';
+    return `<div class="data-card"><div class="data-card-header"><span class="data-card-title">${title}</span>${actions}</div><div class="data-card-body">${body}</div></div>`;
   }
 
   function renderKpiContent() {
@@ -648,8 +694,8 @@
     overview.innerHTML = `
       ${metricStripHTML()}${aiSummaryHTML()}
       ${dataCard('Unplanned DT % by Category',
-        `<div id="view-category-table">${buildCategoryTable()}</div>
-         <div id="view-category-chart" class="hidden-view"><div class="chart-wrap"><canvas id="chart-category"></canvas></div></div>`, 'category')}
+        `<div id="view-category-table" class="category-table-view">${buildCategoryTable()}</div>
+         <div id="view-category-chart" class="hidden-view"><div class="chart-wrap"><canvas id="chart-category"></canvas></div></div>`, 'category', true)}
       ${dataCard('Unplanned DT % by Line/Category',
         `<div id="view-line-table">${buildLineTable()}</div>
          <div id="view-line-chart" class="hidden-view"><div class="chart-wrap tall"><canvas id="chart-line"></canvas></div></div>`, 'line')}
@@ -660,6 +706,7 @@
       </div>`;
 
     bindCategoryTableEvents();
+    bindCompareButtons();
     ['category','line'].forEach(id => {
       document.querySelectorAll(`.view-toggle-btn[data-card="${id}"]`).forEach(btn => {
         btn.addEventListener('click', () => toggleCardView(id, btn.dataset.view));
@@ -667,8 +714,12 @@
     });
 
     document.getElementById('kpi-tab-by-category').innerHTML = metricStripHTML() + aiSummaryHTML() +
-      dataCard('Unplanned DT % by Category', `<div id="view-category-tab-table">${buildCategoryTable()}</div><div class="chart-wrap tall" style="margin-top:16px"><canvas id="chart-tab-category"></canvas></div>`);
+      dataCard('Unplanned DT % by Category',
+        `<div id="view-category-tab-table" class="category-table-view">${buildCategoryTable()}</div>
+         <div class="chart-wrap tall" style="margin-top:16px"><canvas id="chart-tab-category"></canvas></div>`,
+        null, true);
     bindCategoryTableEvents();
+    bindCompareButtons();
 
     document.getElementById('kpi-tab-by-line').innerHTML = metricStripHTML() + aiSummaryHTML() +
       dataCard('Unplanned DT % by Line/Category', '<div class="chart-wrap tall"><canvas id="chart-tab-line"></canvas></div>');
@@ -693,7 +744,12 @@
     } else {
       tableEl?.classList.add('hidden-view');
       chartEl?.classList.remove('hidden-view');
-      if (cardId === 'category') makeGroupedBarChart('chart-category', CATEGORIES, CATEGORY_BASE, 8);
+      if (cardId === 'category') {
+        makeGroupedBarChart('chart-category', CATEGORIES, CATEGORY_BASE, 8, (cat, canvas) => {
+          const cardBody = canvas.closest('.data-card-body');
+          if (cardBody) openCategoryDetailPanel(cat, cardBody);
+        });
+      }
       if (cardId === 'line') makeGroupedBarChart('chart-line', LINES, LINE_BASE, 14);
     }
   }
@@ -714,7 +770,7 @@
     if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; }
   }
 
-  function makeGroupedBarChart(canvasId, labels, matrix, yMax) {
+  function makeGroupedBarChart(canvasId, labels, matrix, yMax, onCategoryClick) {
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
@@ -730,6 +786,19 @@
       data: { labels, datasets },
       options: {
         ...CHART_DEFAULTS,
+        onClick: (evt, elements, chart) => {
+          if (!onCategoryClick) return;
+          if (elements.length) {
+            onCategoryClick(labels[elements[0].index], chart.canvas);
+            return;
+          }
+          const pos = typeof Chart !== 'undefined' && Chart.helpers?.getRelativePosition
+            ? Chart.helpers.getRelativePosition(evt, chart)
+            : null;
+          if (!pos || !chart.scales?.x) return;
+          const index = Math.round(chart.scales.x.getValueForPixel(pos.x));
+          if (index >= 0 && index < labels.length) onCategoryClick(labels[index], chart.canvas);
+        },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         scales: {
           y: { beginAtZero: true, max: yMax, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
@@ -823,7 +892,10 @@
 
   function initTabCharts(tabId) {
     const map = {
-      'by-category': () => makeGroupedBarChart('chart-tab-category', CATEGORIES, CATEGORY_BASE, 8),
+      'by-category': () => makeGroupedBarChart('chart-tab-category', CATEGORIES, CATEGORY_BASE, 8, (cat, canvas) => {
+        const cardBody = canvas.closest('.data-card-body');
+        if (cardBody) openCategoryDetailPanel(cat, cardBody);
+      }),
       'by-line': () => makeGroupedBarChart('chart-tab-line', LINES, LINE_BASE, 14),
       'by-dow': () => makeDowChart('chart-tab-dow'),
       'by-reason': () => { makeReasonChart('chart-tab-reason'); makeTrendChart('chart-tab-trend'); },

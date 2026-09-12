@@ -101,8 +101,10 @@ body {
 
 .header-title .word-console {
   font-weight: 400;
-  color: #9ec5e8;
+  color: #a8d4f0;
   animation-delay: 0.12s;
+  text-shadow: 0 0 24px rgba(168, 212, 240, 0.45);
+  letter-spacing: 0.3px;
 }
 
 @keyframes wordSlide {
@@ -127,34 +129,47 @@ body {
   transition: opacity 0.3s;
 }
 
-.compare-btn {
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.compare-btn-card {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 9px 16px;
-  border: 1px solid rgba(255,255,255,0.25);
-  border-radius: 10px;
-  background: rgba(255,255,255,0.1);
-  color: rgba(255,255,255,0.45);
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--text-muted);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  cursor: not-allowed;
-  transition: all 0.25s;
-  flex-shrink: 0;
-}
-
-.compare-btn:not(:disabled) {
-  background: rgba(0, 102, 204, 0.35);
-  border-color: rgba(126, 200, 255, 0.5);
-  color: #fff;
   cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
 }
 
-.compare-btn:not(:disabled):hover {
-  background: rgba(0, 102, 204, 0.55);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(0, 102, 204, 0.35);
+.compare-btn-card:hover {
+  border-color: var(--blue-accent);
+  color: var(--blue-accent);
+}
+
+.compare-btn-card.active {
+  background: var(--blue-soft);
+  border-color: var(--blue-accent);
+  color: var(--blue-accent);
+  box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+}
+
+.compare-hint {
+  font-size: 12px;
+  color: var(--blue-accent);
+  margin-bottom: 12px;
+  font-weight: 500;
+  animation: contentEnter 0.3s ease;
 }
 
 .header-actions {
@@ -811,26 +826,21 @@ body {
   color: var(--navy);
 }
 
-.data-table .expand-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 13px;
-  cursor: pointer;
-  margin-right: 8px;
-  background: var(--white);
+.data-table .site-group-cell {
   vertical-align: middle;
-  transition: background 0.15s;
+  text-align: center !important;
+  font-weight: 700;
+  color: var(--navy);
+  background: #f4f8fc !important;
+  border-right: 2px solid #c5d9ea;
+  letter-spacing: 0.3px;
 }
 
-.data-table .expand-btn:hover { background: var(--blue-soft); }
-.data-table tbody tr.cat-row { cursor: pointer; }
+.data-table tbody tr.cat-row { cursor: default; }
+.data-table tbody tr.cat-row.compare-ready { cursor: pointer; }
+.data-table tbody tr.cat-row.compare-ready:hover td { background: var(--blue-soft) !important; }
 .data-table tbody tr.cat-row.selected td { background: #dceaf8 !important; }
-.data-table tbody tr.cat-row.expanded-detail-open td:first-child { border-left: 3px solid var(--blue-accent); }
+.data-table tbody tr.cat-row.selected td.site-group-cell { background: #c8dff0 !important; }
 
 .data-table .val-high { color: #e53935; font-weight: 600; }
 .data-table .val-mid { color: #ff9800; }
@@ -918,69 +928,79 @@ body {
   color: var(--navy);
 }
 
-/* ── COMPARE PANEL ── */
-.compare-panel {
-  position: fixed;
-  inset: 0;
-  z-index: 500;
-  background: rgba(0, 26, 56, 0.45);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  animation: fadeIn 0.25s ease;
-}
-
-.compare-panel.hidden { display: none; }
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.compare-dialog {
-  width: min(960px, 100%);
-  max-height: 85vh;
-  background: white;
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
+/* ── INLINE PANELS (compare + chart detail) ── */
+.inline-panel {
+  margin-top: 16px;
+  border: 1px solid rgba(0, 102, 204, 0.2);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, #f8fbfe 0%, #eef6fc 100%);
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  animation: contentEnter 0.35s ease;
+  animation: panelSlide 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
-.compare-dialog-header {
+.inline-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px;
-  border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #fafbfd, #fff);
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(0, 102, 204, 0.12);
+  background: rgba(255,255,255,0.7);
 }
 
-.compare-dialog-title {
-  font-size: 17px;
+.inline-panel-title {
+  font-size: 14px;
   font-weight: 700;
   color: var(--navy);
 }
 
-.compare-dialog-sub {
-  font-size: 12px;
+.inline-panel-sub {
+  font-size: 11px;
   color: var(--text-muted);
-  margin-top: 4px;
+  margin-top: 3px;
+  font-weight: 500;
 }
 
-.compare-dialog-body {
-  padding: 20px 24px 24px;
-  overflow-y: auto;
+.inline-panel-close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-muted);
+  transition: all 0.15s;
 }
 
-.compare-chart-wrap { height: 280px; margin-bottom: 20px; }
+.inline-panel-close:hover {
+  background: #fee;
+  border-color: #fcc;
+  color: #c00;
+}
 
-.compare-table .site-best { background: #e8f8f4 !important; font-weight: 700; }
-.compare-table .site-worst { background: #fef2f2 !important; }
+.inline-panel-body { padding: 18px; }
+
+.data-table tbody tr.cat-row.compare-active td,
+.data-table tbody tr.cat-row.detail-active td {
+  background: #dceaf8 !important;
+}
+
+.data-table tbody tr.cat-row.compare-active td.site-group-cell,
+.data-table tbody tr.cat-row.detail-active td.site-group-cell {
+  background: #c8dff0 !important;
+}
+
+.inline-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 20px;
+}
+
+.compare-chart-wrap { height: 260px; margin-bottom: 16px; position: relative; }
+
+.compare-table .site-best td { background: #e8f8f4 !important; font-weight: 700; }
+.compare-table .site-worst td { background: #fef2f2 !important; }
 
 /* ── RESPONSIVE ── */
 @media (max-width: 1280px) {
