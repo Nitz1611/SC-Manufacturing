@@ -13,10 +13,11 @@
   --border: #e2e8f0;
   --bg: #eef2f7;
   --white: #ffffff;
-  --header-h: 64px;
+  --header-brand-h: 64px;
   --top-nav-primary-h: 52px;
   --top-nav-secondary-h: 44px;
-  --top-chrome-h: var(--top-nav-primary-h);
+  --header-h: calc(var(--header-brand-h) + var(--top-nav-primary-h));
+  --banner-nav-bg: #f5f7fa;
   --radius: 14px;
   --radius-sm: 10px;
   --shadow: 0 4px 24px rgba(0, 40, 85, 0.08);
@@ -48,18 +49,25 @@ body {
     radial-gradient(ellipse 40% 30% at 50% 100%, rgba(0, 40, 85, 0.04), transparent 50%);
 }
 
-/* ── HEADER ── */
-.app-header {
+/* ── HEADER & TOP BANNER ── */
+.app-banner {
   position: sticky;
   top: 0;
   z-index: 300;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+}
+
+.app-banner.has-subnav {
+  --header-h: calc(var(--header-brand-h) + var(--top-nav-primary-h) + var(--top-nav-secondary-h));
+}
+
+.app-header {
   background: linear-gradient(135deg, var(--navy-dark) 0%, var(--navy) 50%, var(--navy-light) 100%);
-  height: var(--header-h);
+  height: var(--header-brand-h);
   display: flex;
   align-items: center;
   padding: 0 24px;
   gap: 24px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.28);
 }
 
 .header-brand {
@@ -211,19 +219,10 @@ body {
   z-index: 1;
 }
 
-/* ── TOP NAVIGATION ── */
-.top-chrome {
-  position: sticky;
-  top: var(--header-h);
-  z-index: 110;
-  background: rgba(255, 255, 255, 0.96);
-  backdrop-filter: blur(12px);
+/* ── TOP NAVIGATION (inside banner) ── */
+.banner-nav {
+  background: var(--banner-nav-bg);
   border-bottom: 1px solid var(--border);
-  box-shadow: 0 4px 18px rgba(0, 40, 85, 0.04);
-}
-
-.top-chrome.has-subnav {
-  --top-chrome-h: calc(var(--top-nav-primary-h) + var(--top-nav-secondary-h));
 }
 
 .top-nav-primary,
@@ -248,8 +247,7 @@ body {
   display: none;
   min-height: var(--top-nav-secondary-h);
   align-items: center;
-  border-top: 1px solid var(--border);
-  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border-top: 1px solid rgba(0, 40, 85, 0.06);
   padding-bottom: 2px;
 }
 
@@ -371,7 +369,7 @@ body {
   gap: 14px 20px;
   align-items: flex-end;
   position: sticky;
-  top: calc(var(--header-h) + var(--top-chrome-h));
+  top: var(--header-h);
   z-index: 100;
 }
 

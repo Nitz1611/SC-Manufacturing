@@ -373,10 +373,10 @@
       btn.setAttribute('aria-selected', btn.dataset.page === state.page ? 'true' : 'false');
     });
 
-    const chrome = document.getElementById('top-chrome');
+    const banner = document.getElementById('app-banner');
     const secondary = document.getElementById('top-nav-secondary');
     const showSubnav = state.page === 'kpi-overview';
-    chrome?.classList.toggle('has-subnav', showSubnav);
+    banner?.classList.toggle('has-subnav', showSubnav);
     secondary?.classList.toggle('visible', showSubnav);
 
     document.querySelectorAll('.top-nav-subitem').forEach(btn => {
@@ -435,8 +435,8 @@
     const hint = document.createElement('div');
     hint.className = 'compare-hint';
     hint.textContent = cardId === 'line'
-      ? 'Select a line to compare sites across periods.'
-      : 'Select a category to compare sites across periods.';
+      ? 'Select a line to open the detailed view across sites.'
+      : 'Select a category to compare across sites.';
     const tableView = cardBody.querySelector('.category-table-view, .panel-overlay-host');
     if (tableView) cardBody.insertBefore(hint, tableView);
     else cardBody.prepend(hint);
@@ -1052,10 +1052,7 @@
           </div>
           <div class="card-header-actions">
             ${exportBtnHTML('line-export-btn')}
-            <button type="button" class="compare-btn-card" data-compare-card="line" title="Compare sites by line">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
-              Compare Sites
-            </button>
+            ${compareButtonHTML('line', 'line')}
           </div>
         </div>
       </div>
@@ -1200,12 +1197,21 @@
     refreshAllTables();
   }
 
+  function compareButtonHTML(cardId, compareType = 'category') {
+    const label = compareType === 'line' ? 'Detailed view' : 'Compare Category';
+    const title = compareType === 'line'
+      ? 'Open detailed line view across sites'
+      : 'Compare category across sites';
+    const cardAttr = compareType === 'line' ? 'line' : cardId === 'heatmap' ? 'heatmap' : 'category';
+    return `<button type="button" class="compare-btn-card" data-compare-card="${cardAttr}" title="${title}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+        ${label}
+      </button>`;
+  }
+
   function categoryCardActions(cardId, includeToggle, exportId = null, compareType = 'category') {
     const exportBtn = exportId ? exportBtnHTML(exportId) : '';
-    const compareBtn = `<button type="button" class="compare-btn-card"${cardId ? ` data-compare-card="${compareType === 'line' ? 'line' : cardId === 'heatmap' ? 'heatmap' : 'category'}"` : ''} title="${compareType === 'line' ? 'Compare sites by line' : 'Compare sites by category'}">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
-        Compare Sites
-      </button>`;
+    const compareBtn = compareButtonHTML(cardId, compareType);
     const toggle = includeToggle ? `<div class="view-toggle">
         <button type="button" class="view-toggle-btn active" data-view="table" data-card="${cardId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
         <button type="button" class="view-toggle-btn" data-view="chart" data-card="${cardId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>

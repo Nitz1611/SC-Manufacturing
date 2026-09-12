@@ -14,35 +14,38 @@
 
   <div class="app-bg-glow" aria-hidden="true"></div>
 
-  <!-- ── HEADER ── -->
-  <header class="app-header">
-    <div class="header-brand">
-      <img
-        src="{{ url_for('static', filename='img/pepsico-logo.gif') }}"
-        alt="PepsiCo"
-        class="header-logo"
-      />
-      <h1 class="header-title">
-        <span class="word word-manufacturing">Manufacturing</span>
-        <span class="word word-console">Console</span>
-      </h1>
-    </div>
+  <!-- ── TOP BANNER ── -->
+  <div class="app-banner" id="app-banner">
+    <header class="app-header">
+      <div class="header-brand">
+        <img
+          src="{{ url_for('static', filename='img/pepsico-logo.gif') }}"
+          alt="PepsiCo"
+          class="header-logo"
+        />
+        <h1 class="header-title">
+          <span class="word word-manufacturing">Manufacturing</span>
+          <span class="word word-console">Console</span>
+        </h1>
+      </div>
 
-    <div class="header-context" id="header-context">
-      <span class="context-value" id="context-breadcrumb">KPI Overview · Overview</span>
-    </div>
+      <div class="header-context" id="header-context">
+        <span class="context-value" id="context-breadcrumb">KPI Overview · Overview</span>
+      </div>
 
-    <div class="header-actions">
-      <div class="profile-avatar" title="Plant Manager">PM</div>
+      <div class="header-actions">
+        <div class="profile-avatar" title="Plant Manager">PM</div>
+      </div>
+    </header>
+
+    <div class="banner-nav" aria-label="Application navigation">
+      <nav class="top-nav-primary" id="top-nav-primary" role="tablist" aria-label="Main sections"></nav>
+      <nav class="top-nav-secondary" id="top-nav-secondary" role="tablist" aria-label="KPI views"></nav>
     </div>
-  </header>
+  </div>
 
   <div class="app-shell">
     <div class="workspace">
-      <div class="top-chrome" id="top-chrome" aria-label="Application navigation">
-        <nav class="top-nav-primary" id="top-nav-primary" role="tablist" aria-label="Main sections"></nav>
-        <nav class="top-nav-secondary" id="top-nav-secondary" role="tablist" aria-label="KPI views"></nav>
-      </div>
       <div class="filter-bar" id="filter-bar" role="toolbar" aria-label="Filters"></div>
 
       <main class="main-content">
