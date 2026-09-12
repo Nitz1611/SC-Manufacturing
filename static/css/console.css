@@ -964,6 +964,10 @@ body {
 .heatmap-table .line-detail-row.compare-ready:hover td { outline: 1px solid rgba(0, 102, 204, 0.25); }
 .heatmap-table .line-detail-row.compare-active td { background: #dceaf8 !important; }
 
+.heatmap-table .dow-day-row.compare-ready { cursor: pointer; }
+.heatmap-table .dow-day-row.compare-ready:hover td { outline: 1px solid rgba(0, 102, 204, 0.25); }
+.heatmap-table .dow-day-row.compare-active td { background: #dceaf8 !important; }
+
 .heatmap-table .heat-site-total td,
 .heatmap-table .row-total td {
   background: linear-gradient(180deg, var(--blue-tab) 0%, #c8dff0 100%) !important;

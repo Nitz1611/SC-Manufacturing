@@ -124,6 +124,33 @@
     '2026P09W03': [8.5, 9.8, 11.2, 10.5, 12.0, 9.5, 8.0],
   };
 
+  const DOW_WEEKS = [
+    '2026P01W01', '2026P01W02', '2026P01W03', '2026P01W04',
+    '2026P02W01', '2026P02W02', '2026P02W03', '2026P02W04',
+    '2026P03W01', '2026P03W02', '2026P03W03',
+  ];
+  const DOW_SHIFTS = [1, 2, 3];
+  const DOW_DAY_COLORS = ['#002855', '#0066cc', '#0ea5e9', '#14b8a6', '#f59e0b', '#8b5cf6', '#ef4444'];
+  const DOW_SHIFT_COLORS = ['#2563eb', '#10b981', '#f59e0b'];
+  const DOW_DAY_TRENDS = {
+    Sunday:    [11.2, 10.8, 12.1, 11.5, 10.2, 11.8, 12.5, 11.0, 10.5, 11.3, 10.9],
+    Monday:    [13.5, 12.8, 14.2, 13.1, 12.5, 13.8, 14.5, 13.2, 12.9, 13.6, 13.0],
+    Tuesday:   [15.2, 14.6, 16.1, 15.0, 14.2, 15.5, 16.2, 14.8, 14.5, 15.3, 14.7],
+    Wednesday: [14.0, 13.4, 14.8, 13.9, 13.1, 14.2, 15.0, 13.6, 13.3, 14.1, 13.5],
+    Thursday:  [16.0, 15.2, 16.8, 15.6, 14.8, 16.2, 17.0, 15.4, 15.0, 16.1, 15.3],
+    Friday:    [13.8, 13.0, 14.5, 13.6, 12.8, 14.0, 14.8, 13.4, 13.1, 13.9, 13.2],
+    Saturday:  [11.0, 10.4, 11.8, 10.9, 10.0, 11.2, 12.0, 10.6, 10.2, 11.0, 10.5],
+  };
+  const DOW_SHIFT_BASE = {
+    Sunday:    { 1: [12.92, 11.80, 13.10, 12.40, 10.85, 12.10, 13.36, 11.50, 10.95, 11.80, 11.20], 2: [10.80, 10.20, 11.50, 10.90, 9.80, 11.20, 11.90, 10.60, 10.10, 10.90, 10.40], 3: [9.88, 9.40, 10.80, 10.20, 9.10, 10.10, 11.04, 9.90, 9.45, 10.20, 9.80] },
+    Monday:    { 1: [14.20, 13.50, 15.10, 14.00, 13.20, 14.50, 15.20, 13.80, 13.50, 14.20, 13.60], 2: [13.40, 12.70, 14.00, 13.10, 12.40, 13.60, 14.30, 12.90, 12.60, 13.30, 12.80], 3: [12.90, 12.20, 13.50, 12.60, 11.90, 13.10, 13.80, 12.50, 12.20, 12.90, 12.30] },
+    Tuesday:   { 1: [16.10, 15.40, 16.80, 15.80, 14.90, 16.20, 17.00, 15.50, 15.20, 16.00, 15.30], 2: [15.20, 14.50, 15.90, 14.80, 14.00, 15.30, 16.00, 14.60, 14.30, 15.10, 14.40], 3: [14.30, 13.60, 15.00, 14.00, 13.20, 14.50, 15.20, 13.80, 13.50, 14.20, 13.60] },
+    Wednesday: { 1: [14.80, 14.00, 15.40, 14.30, 13.50, 14.80, 15.50, 14.10, 13.80, 14.50, 13.90], 2: [13.90, 13.20, 14.50, 13.60, 12.80, 14.00, 14.70, 13.30, 13.00, 13.70, 13.10], 3: [13.10, 12.40, 13.80, 12.90, 12.10, 13.30, 14.00, 12.60, 12.30, 13.00, 12.40] },
+    Thursday:  { 1: [16.80, 16.00, 17.50, 16.40, 15.50, 16.90, 17.80, 16.20, 15.90, 16.70, 16.00], 2: [15.90, 15.10, 16.60, 15.50, 14.70, 16.00, 16.80, 15.20, 14.90, 15.70, 15.00], 3: [15.10, 14.30, 15.80, 14.70, 13.90, 15.20, 16.00, 14.40, 14.10, 14.90, 14.20] },
+    Friday:    { 1: [14.50, 13.80, 15.20, 14.20, 13.40, 14.70, 15.40, 14.00, 13.70, 14.40, 13.80], 2: [13.70, 13.00, 14.40, 13.40, 12.60, 13.90, 14.60, 13.20, 12.90, 13.60, 13.00], 3: [12.90, 12.20, 13.60, 12.60, 11.80, 13.10, 13.80, 12.40, 12.10, 12.80, 12.20] },
+    Saturday:  { 1: [11.60, 10.90, 12.20, 11.30, 10.50, 11.80, 12.50, 11.10, 10.80, 11.50, 10.90], 2: [10.80, 10.10, 11.40, 10.50, 9.80, 11.00, 11.70, 10.30, 10.00, 10.70, 10.10], 3: [10.00, 9.40, 10.60, 9.80, 9.10, 10.20, 10.90, 9.60, 9.30, 10.00, 9.50] },
+  };
+
   const ICONS = {
     brief: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>',
     kpi: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>',
@@ -145,9 +172,11 @@
     detailCategory: null,
     expandedHeatmapSites: { ABERDEEN: true },
     expandedLineSites: { ABERDEEN: true },
+    expandedDowDays: { Sunday: true },
     topSitesCount: 5,
     lineTrendFilter: 'all',
     cardViews: { category: 'table', line: 'table' },
+    compareDay: null,
   };
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -260,12 +289,42 @@
     downloadCSV(filename, rows);
   }
 
+  function shiftValuesForDay(day, shift) {
+    const base = DOW_SHIFT_BASE[day]?.[shift];
+    if (base) return base.map(v => +v.toFixed(2));
+    const dayTrend = DOW_DAY_TRENDS[day] || DOW_WEEKS.map(() => 0);
+    const mult = shift === 1 ? 1.05 : shift === 2 ? 0.95 : 0.88;
+    return dayTrend.map(v => +(v * mult).toFixed(2));
+  }
+
+  function dayWeekTotals(day) {
+    return (DOW_DAY_TRENDS[day] || DOW_WEEKS.map(() => 0)).map(v => +v.toFixed(2));
+  }
+
+  function exportDowHeatmapCSV(filename = 'unplanned-dt-by-day-of-week.csv') {
+    const headers = ['Day of Week', 'Shift', ...DOW_WEEKS, 'Total', 'Total'];
+    const rows = [headers];
+    DAY_LABELS.forEach(day => {
+      const dayPeriods = dayWeekTotals(day);
+      const dayTotal = +avgOf(dayPeriods).toFixed(2);
+      rows.push([day, '', ...dayPeriods, dayTotal, +(dayTotal * 1.05).toFixed(2)]);
+      DOW_SHIFTS.forEach(shift => {
+        const vals = shiftValuesForDay(day, shift);
+        const total = +avgOf(vals).toFixed(2);
+        rows.push([day, shift, ...vals, total, +(total * 1.05).toFixed(2)]);
+      });
+      rows.push([day, 'Total', ...dayPeriods, dayTotal, +(dayTotal * 1.05).toFixed(2)]);
+    });
+    downloadCSV(filename, rows);
+  }
+
   function bindExportButtons() {
     const exports = {
       'export-overview-category': () => exportHeatmapCategoryCSV('overview-unplanned-dt-by-category.csv'),
       'export-heatmap-category': () => exportHeatmapCategoryCSV('unplanned-dt-by-category.csv'),
       'export-overview-line': () => exportLineHeatmapCSV('overview-unplanned-dt-by-line.csv'),
       'line-export-btn': () => exportLineHeatmapCSV('unplanned-dt-by-line.csv'),
+      'dow-export-btn': () => exportDowHeatmapCSV('unplanned-dt-by-day-of-week.csv'),
     };
     Object.entries(exports).forEach(([id, fn]) => {
       const btn = document.getElementById(id);
@@ -477,7 +536,9 @@
     if (!cardBody) return;
     const hint = document.createElement('div');
     hint.className = 'compare-hint';
-    hint.textContent = cardId === 'line' || cardId === 'line-tab'
+    hint.textContent = cardId === 'dow'
+      ? 'Select a day to compare shifts across periods.'
+      : cardId === 'line' || cardId === 'line-tab'
       ? 'Select a line to compare across sites.'
       : 'Select a category to compare across sites.';
     const tableView = cardBody.querySelector('.category-table-view, .panel-overlay-host');
@@ -494,8 +555,11 @@
     if (lineEl) lineEl.innerHTML = buildLineHeatmapTable(true);
     const lineTabEl = document.getElementById('view-line-tab-table');
     if (lineTabEl) lineTabEl.innerHTML = buildLineHeatmapTable(false);
+    const dowEl = document.getElementById('view-dow-table');
+    if (dowEl) dowEl.innerHTML = buildDowHeatmapTable(false);
     bindHeatmapTableEvents();
     bindLineHeatmapEvents();
+    bindDowHeatmapEvents();
   }
 
   function getOverlayHost(fromEl, cardBody) {
@@ -510,11 +574,12 @@
   function closeInlinePanel() {
     state.compareCategory = null;
     state.compareLine = null;
+    state.compareDay = null;
     state.detailCategory = null;
     document.querySelectorAll('#inline-panel').forEach(p => p.remove());
     destroyChart('compare-chart');
     destroyChart('detail-chart');
-    document.querySelectorAll('.cat-row, .heat-cat-row, .line-detail-row').forEach(r => {
+    document.querySelectorAll('.cat-row, .heat-cat-row, .line-detail-row, .dow-day-row').forEach(r => {
       r.classList.remove('compare-active', 'detail-active');
     });
   }
@@ -678,6 +743,87 @@
           scales: {
             y: { beginAtZero: true, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
             x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
+          },
+        },
+      });
+    });
+  }
+
+  function openShiftComparePanel(day, anchorEl, cardBody) {
+    closeInlinePanel();
+    state.compareDay = day;
+
+    const rows = DOW_SHIFTS.map(shift => {
+      const vals = shiftValuesForDay(day, shift);
+      const total = avgOf(vals);
+      return { shift, vals, total };
+    });
+    const best = rows.reduce((a, b) => (a.total < b.total ? a : b));
+    const worst = rows.reduce((a, b) => (a.total > b.total ? a : b));
+
+    const panel = document.createElement('div');
+    panel.id = 'inline-panel';
+    panel.className = 'inline-panel';
+    panel.innerHTML = `
+      <div class="inline-panel-header">
+        <div>
+          <div class="inline-panel-title">${day} — Shift Comparison</div>
+          <div class="inline-panel-sub">Unplanned DT % by week · ${activeSite()}</div>
+        </div>
+        <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="inline-panel-body overlay-panel-body">
+        <div class="compare-chart-wrap"><canvas id="compare-chart"></canvas></div>
+        <div class="table-scroll">
+          <table class="data-table compare-table">
+            <thead><tr>
+              <th>Shift</th>
+              ${DOW_WEEKS.map(w => `<th>${w}</th>`).join('')}
+              <th>Avg</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map(r => {
+                const cls = r.shift === best.shift ? 'site-best' : r.shift === worst.shift ? 'site-worst' : '';
+                return `<tr class="${cls}">
+                  <td>Shift ${r.shift}</td>
+                  ${r.vals.map(v => heatTd(v, 16).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
+                  ${heatTd(r.total, 16, 'col-total compare-cell')}
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    mountOverlayPanel(getOverlayHost(anchorEl, cardBody), panel);
+    anchorEl?.classList.add('compare-active');
+
+    panel.querySelector('.inline-panel-close').addEventListener('click', () => {
+      closeInlinePanel();
+    });
+
+    requestAnimationFrame(() => {
+      destroyChart('compare-chart');
+      const canvas = document.getElementById('compare-chart');
+      if (!canvas || typeof Chart === 'undefined') return;
+      state.charts['compare-chart'] = new Chart(canvas, {
+        type: 'bar',
+        data: {
+          labels: DOW_WEEKS,
+          datasets: rows.map((r, i) => ({
+            label: `Shift ${r.shift}`,
+            data: r.vals,
+            backgroundColor: DOW_SHIFT_COLORS[i],
+            borderRadius: { topLeft: 3, topRight: 3 },
+            borderSkipped: false,
+          })),
+        },
+        options: {
+          ...CHART_DEFAULTS,
+          plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
+          scales: {
+            y: { beginAtZero: true, max: 20, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
+            x: { grid: { display: false }, ticks: { ...HORIZONTAL_X_TICKS, maxRotation: 45, minRotation: 45, font: { size: 9 } } },
           },
         },
       });
@@ -1125,8 +1271,118 @@
     });
   }
 
+  function dowTabSummaryHTML() {
+    return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
+      <div class="ai-summary-label">AI Summary</div>
+      <p class="ai-summary-text">Unplanned downtime varies meaningfully by day of week and shift. Thursday and Tuesday show the highest DT % across recent weeks, while Saturday remains the lowest. Shift 1 consistently drives elevated downtime on Sundays and Thursdays — prioritize handover gaps and mechanical failures on those combinations for targeted improvement.</p>
+    </div></div>`;
+  }
+
+  function buildDowHeatmapTable(showLegend = true) {
+    const compareReady = state.compareMode && state.compareContext === 'dow' ? ' compare-ready' : '';
+    let rows = '';
+
+    DAY_LABELS.forEach(day => {
+      const expanded = !!state.expandedDowDays[day];
+      const dayPeriods = dayWeekTotals(day);
+      const dayTotal = +avgOf(dayPeriods).toFixed(2);
+      const dayPrevTotal = +(dayTotal * 1.05).toFixed(2);
+      const chevron = expanded ? '▼' : '▶';
+      const activeCompare = state.compareDay === day ? ' compare-active' : '';
+
+      rows += `<tr class="site-row dow-day-row${compareReady}${activeCompare}" data-day="${day}">
+        <td class="site-name-cell">
+          <button type="button" class="dow-day-toggle" data-day="${day}" aria-label="Toggle ${day}">${chevron}</button>
+          <span>${day}</span>
+        </td>
+        <td class="cat-label-cell"></td>
+        ${dayPeriods.map(v => heatTd(v, 16)).join('')}
+        ${heatTd(dayTotal, 16, 'col-total')}
+        ${heatTd(dayPrevTotal, 16, 'col-total')}
+      </tr>`;
+
+      if (expanded) {
+        DOW_SHIFTS.forEach(shift => {
+          const vals = shiftValuesForDay(day, shift);
+          const total = +avgOf(vals).toFixed(2);
+          rows += `<tr class="line-detail-row dow-shift-row">
+            <td class="site-name-cell indent"></td>
+            <td class="cat-label-cell">${shift}</td>
+            ${vals.map(v => heatTd(v, 16)).join('')}
+            ${heatTd(total, 16, 'col-total')}
+            ${heatTd(total * 1.05, 16, 'col-total')}
+          </tr>`;
+        });
+
+        rows += `<tr class="row-total heat-site-total">
+          <td class="site-name-cell indent"></td>
+          <td class="cat-label-cell">Total</td>
+          ${dayPeriods.map(v => heatTd(v, 16)).join('')}
+          ${heatTd(dayTotal, 16, 'col-total')}
+          ${heatTd(dayPrevTotal, 16, 'col-total')}
+        </tr>`;
+      }
+    });
+
+    return `<div class="table-scroll heatmap-scroll">${showLegend ? heatmapLegendHTML(true) : ''}<table class="data-table heatmap-table"><thead>
+      <tr class="header-group"><th rowspan="2">Day of Week</th><th rowspan="2">Shift</th>
+        <th colspan="${DOW_WEEKS.length}">2026</th><th colspan="2">Total</th></tr>
+      <tr>${DOW_WEEKS.map(w => `<th>${w.replace('2026', '')}</th>`).join('')}<th>Total</th><th>Total</th></tr>
+      </thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  function dowHeatmapCardHTML() {
+    return `<div class="data-card heatmap-card">
+      <div class="data-card-header heatmap-header">
+        <div class="heatmap-header-left">
+          <span class="data-card-title">Unplanned DT % by Day of Week</span>
+          <span class="chart-card-sub">Percentage of unplanned downtime by shift across weeks (YTD)</span>
+        </div>
+        <div class="heatmap-header-right">
+          <select class="chart-select" id="dow-view-select" aria-label="View mode">
+            <option value="percentage">Percentage</option>
+            <option value="hours">Hours</option>
+          </select>
+          <div class="heatmap-legend">
+            <span class="legend-label">Lower DT %</span>
+            <div class="legend-bar"></div>
+            <span class="legend-label">Higher DT %</span>
+          </div>
+          <div class="card-header-actions">
+            ${exportBtnHTML('dow-export-btn')}
+            ${compareButtonHTML('dow', 'shift', 'table')}
+          </div>
+        </div>
+      </div>
+      <div class="data-card-body">
+        <div id="view-dow-table" class="panel-overlay-host">${buildDowHeatmapTable(false)}</div>
+      </div>
+    </div>`;
+  }
+
+  function bindDowHeatmapEvents() {
+    document.querySelectorAll('.dow-day-toggle').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const day = btn.dataset.day;
+        state.expandedDowDays[day] = !state.expandedDowDays[day];
+        refreshAllTables();
+      });
+    });
+    document.querySelectorAll('.dow-day-row').forEach(row => {
+      row.addEventListener('click', e => {
+        if (e.target.closest('.dow-day-toggle')) return;
+        if (!state.compareMode || state.compareContext !== 'dow') return;
+        const day = row.dataset.day;
+        if (!day) return;
+        const cardBody = row.closest('.data-card-body');
+        if (cardBody) openShiftComparePanel(day, row, cardBody);
+      });
+    });
+  }
+
   function buildHeatmapTable(showLegend = true) {
-    const compareReady = state.compareMode && state.compareContext !== 'line' ? ' compare-ready' : '';
+    const compareReady = state.compareMode && (state.compareContext === 'category' || state.compareContext === 'heatmap') ? ' compare-ready' : '';
     let rows = '';
 
     HEATMAP_SITES.forEach(site => {
@@ -1192,7 +1448,7 @@
     });
     document.querySelectorAll('.heat-cat-row').forEach(row => {
       row.addEventListener('click', () => {
-        if (!state.compareMode || state.compareContext === 'line') return;
+        if (!state.compareMode || state.compareContext === 'line' || state.compareContext === 'dow') return;
         const category = row.dataset.category;
         const cardBody = row.closest('.data-card-body');
         if (cardBody) openComparePanel(category, row, cardBody);
@@ -1228,7 +1484,7 @@
   function bindCategoryTableEvents() {
     document.querySelectorAll('.cat-row:not(.heat-cat-row)').forEach(row => {
       row.addEventListener('click', () => {
-        if (!state.compareMode || state.compareContext === 'line') return;
+        if (!state.compareMode || state.compareContext === 'line' || state.compareContext === 'dow') return;
         const category = row.dataset.category;
         const cardBody = row.closest('.data-card-body');
         if (cardBody) openComparePanel(category, row, cardBody);
@@ -1242,24 +1498,29 @@
 
   function getCompareLabel(compareType, view = 'table') {
     if (view === 'chart') return 'Detailed view';
-    return compareType === 'line' ? 'Compare Line' : 'Compare Category';
+    if (compareType === 'line') return 'Compare Line';
+    if (compareType === 'shift') return 'Compare Shift';
+    return 'Compare Category';
   }
 
   function compareButtonId(cardId) {
     if (cardId === 'heatmap') return 'compare-btn-heatmap';
     if (cardId === 'line-tab') return 'compare-btn-line-tab';
+    if (cardId === 'dow') return 'compare-btn-dow';
     return `compare-btn-${cardId}`;
   }
 
   function compareButtonHTML(cardId, compareType = 'category', view = 'table') {
     const label = getCompareLabel(compareType, view);
     const btnId = compareButtonId(cardId);
-    const cardAttr = compareType === 'line' ? 'line' : cardId === 'heatmap' ? 'heatmap' : 'category';
+    const cardAttr = compareType === 'line' ? 'line' : compareType === 'shift' ? 'dow' : cardId === 'heatmap' ? 'heatmap' : 'category';
     const title = view === 'chart'
       ? 'Click chart bars for a detailed view'
       : compareType === 'line'
         ? 'Compare line across sites'
-        : 'Compare category across sites';
+        : compareType === 'shift'
+          ? 'Compare shifts for a selected day'
+          : 'Compare category across sites';
     return `<button type="button" class="compare-btn-card" id="${btnId}" data-compare-card="${cardAttr}" data-compare-type="${compareType}" data-card-id="${cardId}" title="${title}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
         <span class="compare-btn-label">${label}</span>
@@ -1278,7 +1539,9 @@
       ? 'Click chart bars for a detailed view'
       : compareType === 'line'
         ? 'Compare line across sites'
-        : 'Compare category across sites';
+        : compareType === 'shift'
+          ? 'Compare shifts for a selected day'
+          : 'Compare category across sites';
   }
 
   function categoryCardActions(cardId, includeToggle, exportId = null, compareType = 'category') {
@@ -1376,8 +1639,18 @@
     bindExportButtons();
     bindLineHeatmapEvents();
     bindByLineControls();
-    document.getElementById('kpi-tab-by-dow').innerHTML = metricStripHTML() + aiSummaryHTML() +
-      dataCard('Unplanned DT % by Day of Week', '<div class="chart-wrap tall"><canvas id="chart-tab-dow"></canvas></div>');
+    document.getElementById('kpi-tab-by-dow').innerHTML = `
+      ${metricStripHTML()}
+      ${dowTabSummaryHTML()}
+      ${chartCardWithSelect('Unplanned DT % Trend by Day of Week (YTD)', 'Trend of unplanned downtime percentage by day across recent weeks.', 'chart-tab-dow', 'dow-chart-select', [
+        { value: 'all', label: 'All Days' },
+        ...DAY_LABELS.map(d => ({ value: d, label: d })),
+      ])}
+      ${dowHeatmapCardHTML()}`;
+    bindCompareButtons();
+    bindExportButtons();
+    bindDowHeatmapEvents();
+    bindByDowControls();
     document.getElementById('kpi-tab-by-reason').innerHTML = metricStripHTML() + aiSummaryHTML() +
       `<div class="overview-grid-3">
         ${dataCard('Unplanned DT Hours by Reason', '<div class="chart-wrap"><canvas id="chart-tab-reason"></canvas></div>')}
@@ -1536,27 +1809,61 @@
     });
   }
 
-  function makeDowChart(canvasId) {
+  function makeDowTrendLineChart(canvasId, filter = 'all') {
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-    const weeks = Object.keys(DOW_DATA);
-    const colors = ['#002855', '#0066cc', '#ff9800'];
+    const ctx = canvas.getContext('2d');
+    const days = filter === 'all' ? DAY_LABELS : [filter];
     state.charts[canvasId] = new Chart(canvas, {
-      type: 'bar',
+      type: 'line',
       data: {
-        labels: DAYS,
-        datasets: weeks.map((w, i) => ({ label: w, data: DOW_DATA[w], backgroundColor: colors[i], borderRadius: 4 })),
+        labels: DOW_WEEKS,
+        datasets: days.map((day, i) => {
+          const color = DOW_DAY_COLORS[DAY_LABELS.indexOf(day)] || DOW_DAY_COLORS[i];
+          const grad = ctx.createLinearGradient(0, 0, 0, 320);
+          grad.addColorStop(0, color + '35');
+          grad.addColorStop(1, color + '00');
+          return {
+            label: day,
+            data: DOW_DAY_TRENDS[day] || DOW_WEEKS.map(() => 0),
+            borderColor: color,
+            backgroundColor: grad,
+            fill: true,
+            tension: 0.42,
+            pointRadius: 5,
+            pointHoverRadius: 8,
+            pointBackgroundColor: '#ffffff',
+            pointBorderColor: color,
+            pointBorderWidth: 2.5,
+            borderWidth: 2.5,
+          };
+        }),
       },
       options: {
         ...CHART_DEFAULTS,
-        plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
+        plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'right' } },
+        interaction: { intersect: false, mode: 'index' },
         scales: {
-          y: { beginAtZero: true, max: 20, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
-          x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
+          y: {
+            beginAtZero: true,
+            max: 20,
+            ...PRO_AXIS,
+            title: proAxisTitle('Unplanned DT %'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
+          },
+          x: {
+            ...PRO_AXIS,
+            title: proAxisTitle('Week'),
+            ticks: { ...HORIZONTAL_X_TICKS, maxRotation: 45, minRotation: 45, font: { size: 9 } },
+          },
         },
       },
     });
+  }
+
+  function makeDowChart(canvasId) {
+    makeDowTrendLineChart(canvasId, 'all');
   }
 
   function makeReasonChart(canvasId) {
@@ -1782,6 +2089,16 @@
     });
   }
 
+  function bindByDowControls() {
+    document.getElementById('dow-chart-select')?.addEventListener('change', e => {
+      makeDowTrendLineChart('chart-tab-dow', e.target.value);
+    });
+  }
+
+  function initByDowCharts() {
+    makeDowTrendLineChart('chart-tab-dow', 'all');
+  }
+
   function initByLineCharts() {
     makeLineTrendChart('chart-line-trend', state.lineTrendFilter);
     makeTopLinesBarChart('chart-top-lines', 10);
@@ -1989,7 +2306,7 @@
     const map = {
       'by-category': () => initByCategoryCharts(),
       'by-line': () => initByLineCharts(),
-      'by-dow': () => makeDowChart('chart-tab-dow'),
+      'by-dow': () => initByDowCharts(),
       'by-reason': () => { makeReasonChart('chart-tab-reason'); makeTrendChart('chart-tab-trend'); },
     };
     map[tabId]?.();
