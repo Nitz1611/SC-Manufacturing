@@ -89,9 +89,29 @@
   const LINES = ['BCP1','FCP1','PTZ3','SUN1','TCS1','DIP1','FUN1','FCC1','PC1','PC2'];
   const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const DAY_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const REASONS = ['No Event','Unplanned Sanitation','Insufficient Qualified St','Equipment Failure','Material Shortage','Changeover Delay','Operator Error','Utility Outage'];
-  const REASON_HOURS = [6241.25, 3107.66, 2890, 2100, 1850, 1200, 980, 650];
-  const TREND_DATA = [9.2, 8.8, 9.5, 10.1, 9.8, 10.4, 10.8, 10.2, 10.6];
+  const REASONS_DATA = [
+    { reason: 'No Event', hours: 6255.30, pct: 0.48 },
+    { reason: 'Unplanned Sanitation', hours: 5850.12, pct: 0.45 },
+    { reason: 'Insufficient Qualified St', hours: 5420.88, pct: 0.42 },
+    { reason: 'Equipment Failure', hours: 4890.50, pct: 0.38 },
+    { reason: 'Infeed System', hours: 4320.75, pct: 0.33 },
+    { reason: 'Material Shortage', hours: 3980.20, pct: 0.31 },
+    { reason: 'Changeover Delay', hours: 3650.40, pct: 0.28 },
+    { reason: 'Operator Error', hours: 3210.15, pct: 0.25 },
+    { reason: 'Utility Outage', hours: 2890.60, pct: 0.22 },
+    { reason: 'Mechanical Jam', hours: 2540.30, pct: 0.20 },
+    { reason: 'Packaging Failure', hours: 2180.45, pct: 0.17 },
+    { reason: 'Labeling Issue', hours: 1920.80, pct: 0.15 },
+    { reason: 'Quality Hold', hours: 1650.25, pct: 0.13 },
+    { reason: 'Sensor Fault', hours: 1420.90, pct: 0.11 },
+    { reason: 'Conveyor Stop', hours: 1180.55, pct: 0.09 },
+    { reason: 'Scheduled Maint Overrun', hours: 980.40, pct: 0.08 },
+    { reason: 'Forklift Delay', hours: 820.15, pct: 0.06 },
+    { reason: 'Training Gap', hours: 650.70, pct: 0.05 },
+    { reason: 'Power Fluctuation', hours: 480.30, pct: 0.04 },
+    { reason: 'Other', hours: 320.10, pct: 0.02 },
+  ];
+  const TREND_DATA = [8.63, 8.15, 7.49, 8.85, 8.20, 7.95, 8.40, 7.80, 8.10, 7.65];
 
   const CATEGORY_BASE = {
     Changeover: [0.3, 0.5, 0.4, 0.6, 0.8, 0.7, 0.5, 0.9, 0.6, 0.4],
@@ -175,6 +195,8 @@
     expandedDowDays: { Sunday: true },
     topSitesCount: 5,
     lineTrendFilter: 'all',
+    reasonCount: 20,
+    reasonTrendFilter: 'all',
     cardViews: { category: 'table', line: 'table' },
     compareDay: null,
     compareShift: null,
@@ -1280,6 +1302,56 @@
     </div></div>`;
   }
 
+  function reasonTabSummaryHTML() {
+    return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
+      <div class="ai-summary-label">AI Summary</div>
+      <p class="ai-summary-text">Unplanned DT % fluctuates across periods with a recent peak in P4 (8.85%) and a low in P3 (7.49%). "No Event" remains the top contributor at 6,255 hours (0.48%), followed by Unplanned Sanitation and Insufficient Qualified Staff. Focus root-cause reduction on the top three reasons to drive the largest period-over-period improvement.</p>
+    </div></div>`;
+  }
+
+  function buildReasonTable(count = 20) {
+    const rows = REASONS_DATA.slice(0, count);
+    const maxHours = rows[0]?.hours || 1;
+    return `<div class="table-scroll reason-table-scroll">
+      <table class="data-table reason-table">
+        <thead><tr>
+          <th class="reason-rank-col">#</th>
+          <th class="reason-name-col">Reason</th>
+          <th class="reason-bar-col">Unplanned DT Hours</th>
+          <th class="reason-pct-col">Unplanned DT %</th>
+        </tr></thead>
+        <tbody>${rows.map((r, i) => {
+          const barWidth = (r.hours / maxHours) * 100;
+          const color = PERIOD_COLORS[i % PERIOD_COLORS.length];
+          const hoursStr = r.hours.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          return `<tr>
+            <td class="reason-rank-col">${i + 1}</td>
+            <td class="reason-name-col">${r.reason}</td>
+            <td class="reason-bar-cell">
+              <div class="reason-bar-track"><div class="reason-bar" style="width:${barWidth}%;background-color:${color}"></div></div>
+              <span class="reason-hours-val">${hoursStr}</span>
+            </td>
+            <td class="reason-pct-col">${r.pct.toFixed(2)} %</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>`;
+  }
+
+  function reasonTableCardHTML() {
+    return `<div class="data-card chart-card-pro reason-table-card">
+      <div class="data-card-header chart-card-header-pro">
+        <span class="data-card-title">Unplanned DT Hours by Reason</span>
+        <select class="chart-select" id="reason-count-select" aria-label="Top reasons count">
+          <option value="20"${state.reasonCount === 20 ? ' selected' : ''}>Top 20</option>
+          <option value="10"${state.reasonCount === 10 ? ' selected' : ''}>Top 10</option>
+          <option value="5"${state.reasonCount === 5 ? ' selected' : ''}>Top 5</option>
+        </select>
+      </div>
+      <div class="data-card-body reason-table-body">${buildReasonTable(state.reasonCount)}</div>
+    </div>`;
+  }
+
   function buildDowHeatmapTable(showLegend = true) {
     const compareReady = state.compareMode && state.compareContext === 'dow' ? ' compare-ready' : '';
     let rows = '';
@@ -1652,11 +1724,18 @@
     bindExportButtons();
     bindDowHeatmapEvents();
     bindByDowControls();
-    document.getElementById('kpi-tab-by-reason').innerHTML = metricStripHTML() + aiSummaryHTML() +
-      `<div class="overview-grid-3">
-        ${dataCard('Unplanned DT Hours by Reason', '<div class="chart-wrap"><canvas id="chart-tab-reason"></canvas></div>')}
-        ${dataCard('Unplanned DT % by Period Trend', '<div class="chart-wrap"><canvas id="chart-tab-trend"></canvas></div>')}
+    document.getElementById('kpi-tab-by-reason').innerHTML = `
+      ${metricStripHTML()}
+      ${reasonTabSummaryHTML()}
+      <div class="overview-grid-2">
+        ${reasonTableCardHTML()}
+        ${chartCardWithSelect('Unplanned DT % by Period Trend', '', 'chart-tab-reason-trend', 'reason-trend-select', [
+          { value: 'all', label: 'All Periods' },
+          { value: '5', label: 'Last 5 Periods' },
+          { value: '3', label: 'Last 3 Periods' },
+        ])}
       </div>`;
+    bindByReasonControls();
   }
 
   function toggleCardView(cardId, view) {
@@ -1735,6 +1814,28 @@
 
   function proAxisTitle(text) {
     return { display: true, text, color: '#64748b', font: { family: 'Inter', weight: '600', size: 11 } };
+  }
+
+  function linePointLabelPlugin(formatFn) {
+    return {
+      id: 'linePointLabels',
+      afterDatasetsDraw(chart) {
+        const { ctx } = chart;
+        chart.data.datasets.forEach((dataset, i) => {
+          chart.getDatasetMeta(i).data.forEach((point, idx) => {
+            const val = dataset.data[idx];
+            if (val == null) return;
+            ctx.save();
+            ctx.fillStyle = '#1e293b';
+            ctx.font = '600 10px Inter, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(formatFn(val), point.x, point.y - 10);
+            ctx.restore();
+          });
+        });
+      },
+    };
   }
 
   function barValueLabelPlugin(decimals = 1) {
@@ -1871,41 +1972,78 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
-    grad.addColorStop(0, '#002855');
-    grad.addColorStop(1, '#0066cc');
+    const items = REASONS_DATA.slice(0, 8);
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
-      data: { labels: REASONS, datasets: [{ label: 'Hours', data: REASON_HOURS, backgroundColor: grad, borderRadius: 4 }] },
+      data: {
+        labels: items.map(r => r.reason),
+        datasets: [{
+          label: 'Hours',
+          data: items.map(r => r.hours),
+          backgroundColor: items.map((_, i) => PERIOD_COLORS[i % PERIOD_COLORS.length]),
+          hoverBackgroundColor: items.map((_, i) => PERIOD_COLORS[i % PERIOD_COLORS.length]),
+          borderRadius: 6,
+          barThickness: 16,
+        }],
+      },
       options: {
         ...CHART_DEFAULTS,
         indexAxis: 'y',
         plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
         scales: {
-          x: { beginAtZero: true, grid: { color: 'rgba(0,40,85,0.06)' } },
-          y: { grid: { display: false }, ticks: { font: { size: 10 } } },
+          x: {
+            beginAtZero: true,
+            ...PRO_AXIS,
+            title: proAxisTitle('Hours'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => (v / 1000).toFixed(1) + 'k' },
+          },
+          y: {
+            ...PRO_AXIS,
+            ticks: { font: { size: 10, weight: '600' }, color: '#1a2b4a' },
+          },
         },
       },
     });
   }
 
-  function makeTrendChart(canvasId) {
+  function reasonTrendSlice(filter = 'all') {
+    if (filter === 'all') return { labels: PERIODS, data: TREND_DATA };
+    const n = parseInt(filter, 10);
+    if (!Number.isNaN(n) && n > 0 && n < TREND_DATA.length) {
+      return { labels: PERIODS.slice(-n), data: TREND_DATA.slice(-n) };
+    }
+    return { labels: PERIODS, data: TREND_DATA };
+  }
+
+  function makeReasonTrendLineChart(canvasId, filter = 'all') {
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
     const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    grad.addColorStop(0, 'rgba(0,102,204,0.25)');
-    grad.addColorStop(1, 'rgba(0,102,204,0)');
+    const { labels, data } = reasonTrendSlice(filter);
+    const lineColor = PERIOD_COLORS[2];
+    const grad = ctx.createLinearGradient(0, 0, 0, 320);
+    grad.addColorStop(0, lineColor + '35');
+    grad.addColorStop(1, lineColor + '00');
+    const minY = Math.floor(Math.min(...data) * 10) / 10 - 0.5;
+    const maxY = Math.ceil(Math.max(...data) * 10) / 10 + 0.5;
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
-        labels: ['1','2','3','4','5','6','7','8','9'],
+        labels,
         datasets: [{
-          label: 'Unplanned DT %', data: TREND_DATA,
-          borderColor: '#0066cc', backgroundColor: grad, fill: true,
-          tension: 0.42, pointRadius: 5, pointBackgroundColor: '#fff', pointBorderColor: '#0066cc', pointBorderWidth: 2,
+          label: 'Unplanned DT %',
+          data,
+          borderColor: lineColor,
+          backgroundColor: grad,
+          fill: true,
+          tension: 0.42,
+          pointRadius: 5,
+          pointHoverRadius: 8,
+          pointBackgroundColor: '#ffffff',
+          pointBorderColor: lineColor,
+          pointBorderWidth: 2.5,
+          borderWidth: 2.5,
         }],
       },
       options: {
@@ -1913,11 +2051,26 @@
         plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
         interaction: { intersect: false, mode: 'index' },
         scales: {
-          y: { min: 7, max: 11.5, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v.toFixed(1) + '%' } },
-          x: { title: { display: true, text: 'Period' }, grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
+          y: {
+            min: minY,
+            max: maxY,
+            ...PRO_AXIS,
+            title: proAxisTitle('Unplanned DT %'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => v.toFixed(1) + '%' },
+          },
+          x: {
+            ...PRO_AXIS,
+            title: proAxisTitle('Period'),
+            ticks: { ...HORIZONTAL_X_TICKS, autoSkip: false, maxTicksLimit: 12, font: { size: 11, weight: '500' } },
+          },
         },
       },
+      plugins: [linePointLabelPlugin(v => Number(v).toFixed(2) + '%')],
     });
+  }
+
+  function makeTrendChart(canvasId) {
+    makeReasonTrendLineChart(canvasId, 'all');
   }
 
   function chartCardWithSelect(title, subtitle, canvasId, selectId, options, wrapClass = '') {
@@ -2094,6 +2247,22 @@
     document.getElementById('dow-chart-select')?.addEventListener('change', e => {
       makeDowTrendLineChart('chart-tab-dow', e.target.value);
     });
+  }
+
+  function bindByReasonControls() {
+    document.getElementById('reason-count-select')?.addEventListener('change', e => {
+      state.reasonCount = parseInt(e.target.value, 10);
+      const body = document.querySelector('.reason-table-body');
+      if (body) body.innerHTML = buildReasonTable(state.reasonCount);
+    });
+    document.getElementById('reason-trend-select')?.addEventListener('change', e => {
+      state.reasonTrendFilter = e.target.value;
+      makeReasonTrendLineChart('chart-tab-reason-trend', state.reasonTrendFilter);
+    });
+  }
+
+  function initByReasonCharts() {
+    makeReasonTrendLineChart('chart-tab-reason-trend', state.reasonTrendFilter);
   }
 
   function initByDowCharts() {
@@ -2308,7 +2477,7 @@
       'by-category': () => initByCategoryCharts(),
       'by-line': () => initByLineCharts(),
       'by-dow': () => initByDowCharts(),
-      'by-reason': () => { makeReasonChart('chart-tab-reason'); makeTrendChart('chart-tab-trend'); },
+      'by-reason': () => initByReasonCharts(),
     };
     map[tabId]?.();
   }
