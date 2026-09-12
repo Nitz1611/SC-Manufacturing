@@ -177,6 +177,7 @@
     lineTrendFilter: 'all',
     cardViews: { category: 'table', line: 'table' },
     compareDay: null,
+    compareShift: null,
   };
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -537,7 +538,7 @@
     const hint = document.createElement('div');
     hint.className = 'compare-hint';
     hint.textContent = cardId === 'dow'
-      ? 'Select a day to compare shifts across periods.'
+      ? 'Select a shift to compare across days of the week.'
       : cardId === 'line' || cardId === 'line-tab'
       ? 'Select a line to compare across sites.'
       : 'Select a category to compare across sites.';
@@ -575,11 +576,12 @@
     state.compareCategory = null;
     state.compareLine = null;
     state.compareDay = null;
+    state.compareShift = null;
     state.detailCategory = null;
     document.querySelectorAll('#inline-panel').forEach(p => p.remove());
     destroyChart('compare-chart');
     destroyChart('detail-chart');
-    document.querySelectorAll('.cat-row, .heat-cat-row, .line-detail-row, .dow-day-row').forEach(r => {
+    document.querySelectorAll('.cat-row, .heat-cat-row, .line-detail-row, .dow-shift-row').forEach(r => {
       r.classList.remove('compare-active', 'detail-active');
     });
   }
@@ -749,14 +751,14 @@
     });
   }
 
-  function openShiftComparePanel(day, anchorEl, cardBody) {
+  function openShiftComparePanel(shift, anchorEl, cardBody) {
     closeInlinePanel();
-    state.compareDay = day;
+    state.compareShift = shift;
 
-    const rows = DOW_SHIFTS.map(shift => {
+    const rows = DAY_LABELS.map(day => {
       const vals = shiftValuesForDay(day, shift);
       const total = avgOf(vals);
-      return { shift, vals, total };
+      return { day, vals, total };
     });
     const best = rows.reduce((a, b) => (a.total < b.total ? a : b));
     const worst = rows.reduce((a, b) => (a.total > b.total ? a : b));
@@ -767,7 +769,7 @@
     panel.innerHTML = `
       <div class="inline-panel-header">
         <div>
-          <div class="inline-panel-title">${day} — Shift Comparison</div>
+          <div class="inline-panel-title">Shift ${shift} — Day of Week Comparison</div>
           <div class="inline-panel-sub">Unplanned DT % by week · ${activeSite()}</div>
         </div>
         <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
@@ -777,15 +779,15 @@
         <div class="table-scroll">
           <table class="data-table compare-table">
             <thead><tr>
-              <th>Shift</th>
+              <th>Day of Week</th>
               ${DOW_WEEKS.map(w => `<th>${w}</th>`).join('')}
               <th>Avg</th>
             </tr></thead>
             <tbody>
               ${rows.map(r => {
-                const cls = r.shift === best.shift ? 'site-best' : r.shift === worst.shift ? 'site-worst' : '';
+                const cls = r.day === best.day ? 'site-best' : r.day === worst.day ? 'site-worst' : '';
                 return `<tr class="${cls}">
-                  <td>Shift ${r.shift}</td>
+                  <td>${r.day}</td>
                   ${r.vals.map(v => heatTd(v, 16).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
                   ${heatTd(r.total, 16, 'col-total compare-cell')}
                 </tr>`;
@@ -811,9 +813,9 @@
         data: {
           labels: DOW_WEEKS,
           datasets: rows.map((r, i) => ({
-            label: `Shift ${r.shift}`,
+            label: r.day,
             data: r.vals,
-            backgroundColor: DOW_SHIFT_COLORS[i],
+            backgroundColor: DOW_DAY_COLORS[i] || DOW_SHIFT_COLORS[i % DOW_SHIFT_COLORS.length],
             borderRadius: { topLeft: 3, topRight: 3 },
             borderSkipped: false,
           })),
@@ -823,7 +825,7 @@
           plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
           scales: {
             y: { beginAtZero: true, max: 20, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
-            x: { grid: { display: false }, ticks: { ...HORIZONTAL_X_TICKS, maxRotation: 45, minRotation: 45, font: { size: 9 } } },
+            x: { grid: { display: false }, ticks: { ...HORIZONTAL_X_TICKS, autoSkip: true, maxTicksLimit: 11, font: { size: 9 } } },
           },
         },
       });
@@ -1288,9 +1290,8 @@
       const dayTotal = +avgOf(dayPeriods).toFixed(2);
       const dayPrevTotal = +(dayTotal * 1.05).toFixed(2);
       const chevron = expanded ? '▼' : '▶';
-      const activeCompare = state.compareDay === day ? ' compare-active' : '';
 
-      rows += `<tr class="site-row dow-day-row${compareReady}${activeCompare}" data-day="${day}">
+      rows += `<tr class="site-row dow-day-row${expanded ? ' expanded' : ''}" data-day="${day}">
         <td class="site-name-cell">
           <button type="button" class="dow-day-toggle" data-day="${day}" aria-label="Toggle ${day}">${chevron}</button>
           <span>${day}</span>
@@ -1305,7 +1306,8 @@
         DOW_SHIFTS.forEach(shift => {
           const vals = shiftValuesForDay(day, shift);
           const total = +avgOf(vals).toFixed(2);
-          rows += `<tr class="line-detail-row dow-shift-row">
+          const activeCompare = state.compareShift === shift ? ' compare-active' : '';
+          rows += `<tr class="line-detail-row dow-shift-row${compareReady}${activeCompare}" data-shift="${shift}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${shift}</td>
             ${vals.map(v => heatTd(v, 16)).join('')}
@@ -1369,14 +1371,13 @@
         refreshAllTables();
       });
     });
-    document.querySelectorAll('.dow-day-row').forEach(row => {
-      row.addEventListener('click', e => {
-        if (e.target.closest('.dow-day-toggle')) return;
+    document.querySelectorAll('.dow-shift-row').forEach(row => {
+      row.addEventListener('click', () => {
         if (!state.compareMode || state.compareContext !== 'dow') return;
-        const day = row.dataset.day;
-        if (!day) return;
+        const shift = parseInt(row.dataset.shift, 10);
+        if (!shift) return;
         const cardBody = row.closest('.data-card-body');
-        if (cardBody) openShiftComparePanel(day, row, cardBody);
+        if (cardBody) openShiftComparePanel(shift, row, cardBody);
       });
     });
   }
@@ -1842,7 +1843,7 @@
       },
       options: {
         ...CHART_DEFAULTS,
-        plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'right' } },
+        plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         interaction: { intersect: false, mode: 'index' },
         scales: {
           y: {
@@ -1855,7 +1856,7 @@
           x: {
             ...PRO_AXIS,
             title: proAxisTitle('Week'),
-            ticks: { ...HORIZONTAL_X_TICKS, maxRotation: 45, minRotation: 45, font: { size: 9 } },
+            ticks: { ...HORIZONTAL_X_TICKS, autoSkip: true, maxTicksLimit: 11, font: { size: 9 } },
           },
         },
       },
