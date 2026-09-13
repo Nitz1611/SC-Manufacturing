@@ -7,3 +7,4 @@ FROM {{catalog}}.pgt_plnt_prodtn_metric_view
 WHERE {{dt_type_filter}}
   AND {{year_filter}}
   AND (:site IS NULL OR UPPER(Site) = UPPER(:site))
+  AND {{region_filter}}

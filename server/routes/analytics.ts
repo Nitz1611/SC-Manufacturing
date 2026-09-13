@@ -17,6 +17,7 @@ const VALID_KEYS: QueryKey[] = [
   'dashboard_dt_dow',
   'dashboard_dt_top_lines',
   'dashboard_dt_shift_comparison',
+  'dashboard_dt_dow_by_shift',
   'dashboard_filter_options',
 ];
 

@@ -19,6 +19,8 @@ const GOLD_NAMES = {
   dtHours: 'Unplanned Downtime Hours',
   dtType: 'Downtime Type',
   stops: 'STOPS',
+  site: 'Site',
+  region: 'Region',
 };
 
 /** Backtick-quote identifiers with spaces or special characters (Databricks SQL). */
@@ -91,6 +93,28 @@ export function reasonColumn(): string {
   return resolveColumn('DATABRICKS_REASON_COLUMN', GOLD_NAMES.reason);
 }
 
+export function siteColumn(): string {
+  return resolveColumn('DATABRICKS_SITE_COLUMN', GOLD_NAMES.site);
+}
+
+export function regionColumn(): string {
+  return resolveColumn('DATABRICKS_REGION_COLUMN', GOLD_NAMES.region);
+}
+
+/** Runtime region filter — replaced in bindSqlParams via {{region_filter}} */
+export function buildRegionFilterSql(regionsCsv: string | null): string {
+  if (!regionsCsv) return '1=1';
+  const col = regionColumn();
+  const list = regionsCsv
+    .split(',')
+    .map(r => r.trim())
+    .filter(Boolean)
+    .map(r => `'${r.replace(/'/g, "''")}'`)
+    .join(', ');
+  if (!list) return '1=1';
+  return `TRIM(${col}) IN (${list})`;
+}
+
 export function dtPctColumn(): string {
   return resolveColumn('DATABRICKS_DT_PCT_COLUMN', GOLD_NAMES.dtPct);
 }
@@ -143,6 +167,8 @@ function applySqlFragments(sql: string): string {
     .replace(/\{\{line_col\}\}/g, lineColumn())
     .replace(/\{\{category_col\}\}/g, categoryColumn())
     .replace(/\{\{reason_col\}\}/g, reasonColumn())
+    .replace(/\{\{site_col\}\}/g, siteColumn())
+    .replace(/\{\{region_col\}\}/g, regionColumn())
     .replace(/\{\{dt_pct\}\}/g, dtPctColumn())
     .replace(/\{\{dt_hours\}\}/g, dtHoursColumn())
     .replace(/\{\{stops_col\}\}/g, stopsColumn())
@@ -165,13 +191,17 @@ export function loadQuerySql(queryKey: string): string {
   return sql.replace(/^--[^\n]*\n/gm, '').trim();
 }
 
-/** Bind :year and :site placeholders for local/dev SQL execution */
+/** Bind :year, :site, and {{region_filter}} for SQL execution */
 export function bindSqlParams(sql: string, params: Record<string, string | null>): string {
   const yearLit = params.year ? String(params.year) : 'NULL';
   const siteLit = params.site
     ? `'${params.site.replace(/'/g, "''").toUpperCase()}'`
     : 'NULL';
-  return sql.replace(/:year\b/g, yearLit).replace(/:site\b/g, siteLit);
+  const regionFilter = buildRegionFilterSql(params.regions ?? null);
+  return sql
+    .replace(/:year\b/g, yearLit)
+    .replace(/:site\b/g, siteLit)
+    .replace(/\{\{region_filter\}\}/g, regionFilter);
 }
 
 export function normalizeParams(raw: Record<string, unknown> = {}): Record<string, string | null> {
@@ -186,7 +216,13 @@ export function normalizeParams(raw: Record<string, unknown> = {}): Record<strin
   const period = tfMap[timeframe.toLowerCase()] || timeframe.toLowerCase();
   const year = raw.year && String(raw.year).toLowerCase() !== 'all' ? String(raw.year) : null;
   const site = raw.site && String(raw.site).toLowerCase() !== 'all' ? String(raw.site) : null;
-  return { period, year, site, timeframe };
+  let regions: string | null = null;
+  if (Array.isArray(raw.region) && raw.region.length) {
+    regions = raw.region.map(String).join(',');
+  } else if (typeof raw.region === 'string' && raw.region.trim()) {
+    regions = raw.region.trim();
+  }
+  return { period, year, site, timeframe, regions };
 }
 
 export function coarseCacheKey(params: Record<string, string | null>): string {
@@ -194,6 +230,7 @@ export function coarseCacheKey(params: Record<string, string | null>): string {
     period: params.period || 'week',
     year: params.year || '2026',
     site: params.site || null,
+    regions: params.regions || null,
   })}`;
 }
 
@@ -207,5 +244,7 @@ export function sqlColumnSummary() {
     line: lineColumn(),
     category: categoryColumn(),
     reason: reasonColumn(),
+    site: siteColumn(),
+    region: regionColumn(),
   };
 }

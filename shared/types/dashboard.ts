@@ -15,6 +15,7 @@ export interface MetricsPayload {
     source: 'live' | 'cache' | 'demo' | 'sql';
     filters: Record<string, string>;
     filtered_site?: string;
+    filtered_regions?: string;
   };
   periods: string[];
   weeks: string[];
@@ -25,12 +26,21 @@ export interface MetricsPayload {
     oee: KpiValue;
   };
   tab_insights: Record<string, string>;
+  filter_options?: {
+    sites: string[];
+    regions: string[];
+    years: number[];
+    site_regions: Record<string, string>;
+  };
   site_by_period: Record<string, number[]>;
   category_by_period: Record<string, number[]>;
   line_by_period: Record<string, number[]>;
+  site_category_by_period?: Record<string, Record<string, number[]>>;
+  site_line_by_period?: Record<string, Record<string, number[]>>;
   period_trend: number[];
   reasons: Array<{ reason: string; hours: number; pct: number }>;
   dow_by_day_week: Record<string, Record<string, number>>;
+  dow_by_shift?: Record<string, Record<string, Record<string, number>>>;
   top_lines: Record<string, number>;
   top_sites_trend: Record<string, number[]>;
   shift_comparison: Array<{ shift: string; hours: number; color?: string }>;
@@ -57,6 +67,7 @@ export type QueryKey =
   | 'dashboard_dt_dow'
   | 'dashboard_dt_top_lines'
   | 'dashboard_dt_shift_comparison'
+  | 'dashboard_dt_dow_by_shift'
   | 'dashboard_filter_options';
 
 export interface SummaryRequest {

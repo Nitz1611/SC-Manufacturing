@@ -60,8 +60,10 @@ async function loadMetricsFromSql(norm: Record<string, string | null>): Promise<
     lineByPeriod,
     reasons,
     dow,
+    dowByShift,
     topLines,
     shiftComparison,
+    filterOptions,
   ] = await Promise.all([
     executeQuery('dashboard_dt_kpis', norm),
     executeQuery('dashboard_dt_period_trend', norm),
@@ -70,8 +72,10 @@ async function loadMetricsFromSql(norm: Record<string, string | null>): Promise<
     executeQuery('dashboard_dt_line_by_period', norm),
     executeQuery('dashboard_dt_reasons', norm),
     executeQuery('dashboard_dt_dow', norm),
+    executeQuery('dashboard_dt_dow_by_shift', norm),
     executeQuery('dashboard_dt_top_lines', norm),
     executeQuery('dashboard_dt_shift_comparison', norm),
+    executeQuery('dashboard_filter_options', norm),
   ]);
 
   const results: SqlQueryResults = {
@@ -82,8 +86,10 @@ async function loadMetricsFromSql(norm: Record<string, string | null>): Promise<
     lineByPeriod,
     reasons,
     dow,
+    dowByShift,
     topLines,
     shiftComparison,
+    filterOptions,
   };
 
   const metrics = buildMetricsFromSql(results, norm);

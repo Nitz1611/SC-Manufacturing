@@ -260,11 +260,33 @@ function periodValuesWithSignal(arr: (number | null | undefined)[] | undefined):
 
 function deriveKpisFromSitePeriods(metrics: MetricsPayload, siteKey: string): MetricsPayload['kpis'] {
   const base = metrics.kpis;
+  const isSql = metrics.meta?.source === 'sql';
   const rawPct = parseFloat(String(base.downtime_pct?.value || '').replace('%', '').trim());
   let dtPct = Number.isFinite(rawPct) ? rawPct : 0;
   let dtHrs = parseHours(base.downtime_hrs?.value);
   let stops = parseInt(String(base.stops?.value || '0').replace(/,/g, ''), 10);
   if (Number.isNaN(stops)) stops = 0;
+
+  if (isSql) {
+    if (dtPct === 0) {
+      const periodVals = periodValuesWithSignal(metrics.site_by_period[siteKey])
+        .concat(periodValuesWithSignal(metrics.period_trend));
+      if (periodVals.length) {
+        dtPct = periodVals.reduce((a, b) => a + b, 0) / periodVals.length;
+      }
+    }
+    if (dtPct === 0 && dtHrs === 0 && stops === 0) return base;
+    return {
+      downtime_pct: {
+        value: `${dtPct.toFixed(2)}%`,
+        delta: base.downtime_pct?.delta || 'vs prior period',
+        direction: base.downtime_pct?.direction || 'neutral',
+      },
+      downtime_hrs: base.downtime_hrs,
+      stops: base.stops,
+      oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
+    };
+  }
 
   let periodVals = periodValuesWithSignal(metrics.site_by_period[siteKey]);
   if (!periodVals.length) periodVals = periodValuesWithSignal(metrics.period_trend);
@@ -319,7 +341,7 @@ export function applySiteFilter(metrics: MetricsPayload, site: string | null): M
   if (out.top_sites_trend[siteKey]) out.top_sites_trend = { [siteKey]: out.top_sites_trend[siteKey] };
   const siteKeys = Object.keys(out.site_by_period || {});
   const alreadySiteScoped = out.meta?.source === 'sql' || (siteKeys.length === 1 && siteKeys[0] === siteKey);
-  if (!alreadySiteScoped) {
+  if (!alreadySiteScoped && out.meta?.source !== 'sql') {
     const mult = SITE_WEIGHTS[siteKey] || 1;
     out.period_trend = out.period_trend.map(v => +(v * mult * 0.95).toFixed(2));
   } else if (out.site_by_period[siteKey]?.length) {
@@ -357,7 +379,19 @@ export function queryResultForKey(queryKey: string, metrics: MetricsPayload): un
     case 'dashboard_dt_shift_comparison':
       return { rows: metrics.shift_comparison };
     case 'dashboard_filter_options':
-      return { rows: Object.keys(metrics.site_by_period).map(site => ({ site })) };
+      return {
+        rows: (metrics.filter_options?.sites || Object.keys(metrics.site_by_period)).map(site => ({
+          site,
+          region: metrics.filter_options?.site_regions?.[site] || null,
+        })),
+      };
+    case 'dashboard_dt_dow_by_shift':
+      return {
+        rows: Object.entries(metrics.dow_by_shift || {}).flatMap(([day_name, shifts]) =>
+          Object.entries(shifts).flatMap(([shift_label, weeks]) =>
+            Object.entries(weeks).map(([week_label, dt_pct]) => ({ day_name, shift_label, week_label, dt_pct })),
+          )),
+      };
     default:
       return { rows: [] };
   }
@@ -389,6 +423,67 @@ function pivotMetricRows(
   return out;
 }
 
+function pivotSiteEntityRows(
+  rows: Record<string, unknown>[],
+  entityKey: string,
+  periods: string[],
+): Record<string, Record<string, number[]>> {
+  const out: Record<string, Record<string, number[]>> = {};
+  for (const row of rows) {
+    const site = String(row.site || '').toUpperCase();
+    const entity = String(row[entityKey] || '');
+    const period = String(row.period_label || '');
+    const val = Number(row.dt_pct ?? 0);
+    if (!site || !entity || !period) continue;
+    if (!out[site]) out[site] = {};
+    if (!out[site][entity]) out[site][entity] = periods.map(() => 0);
+    const idx = periods.indexOf(period);
+    if (idx >= 0) out[site][entity][idx] = +val.toFixed(2);
+  }
+  return out;
+}
+
+function buildFilterOptions(rows: Record<string, unknown>[]) {
+  const site_regions: Record<string, string> = {};
+  const sites: string[] = [];
+  const regions = new Set<string>();
+  const years = new Set<number>();
+  for (const row of rows) {
+    const site = String(row.site || '').toUpperCase();
+    const region = String(row.region || '').trim();
+    const year = Number(row.year);
+    if (!site) continue;
+    if (!sites.includes(site)) sites.push(site);
+    if (region) {
+      site_regions[site] = region;
+      regions.add(region);
+    }
+    if (Number.isFinite(year)) years.add(year);
+  }
+  sites.sort();
+  return {
+    sites,
+    regions: [...regions].sort(),
+    years: [...years].sort((a, b) => b - a),
+    site_regions,
+  };
+}
+
+function buildDowByShift(rows: Record<string, unknown>[]) {
+  const out: Record<string, Record<string, Record<string, number>>> = {};
+  for (const row of rows) {
+    const day = String(row.day_name || '');
+    const week = String(row.week_label || '');
+    const shift = String(row.shift_label || '').trim();
+    const val = Number(row.dt_pct ?? 0);
+    if (!day || !week || !shift) continue;
+    if (!out[day]) out[day] = {};
+    if (!out[day][shift]) out[day][shift] = {};
+    out[day][shift][week] = +val.toFixed(2);
+  }
+  return out;
+}
+
 export interface SqlQueryResults {
   kpis: Record<string, unknown>[];
   periodTrend: Record<string, unknown>[];
@@ -397,8 +492,10 @@ export interface SqlQueryResults {
   lineByPeriod: Record<string, unknown>[];
   reasons: Record<string, unknown>[];
   dow: Record<string, unknown>[];
+  dowByShift: Record<string, unknown>[];
   topLines: Record<string, unknown>[];
   shiftComparison: Record<string, unknown>[];
+  filterOptions: Record<string, unknown>[];
 }
 
 export function buildMetricsFromSql(
@@ -439,31 +536,48 @@ export function buildMetricsFromSql(
   };
 
   const site_by_period = pivotMetricRows(results.siteByPeriod, 'site', periods);
-  const category_by_period = pivotMetricRows(
-    results.categoryByPeriod.map(r => ({ ...r, site: r.category })),
-    'site',
-    periods,
-  );
-  // Fix category keys - pivot used 'site' as entityKey hack, redo properly
+  const site_category_by_period = pivotSiteEntityRows(results.categoryByPeriod, 'category', periods);
+  const site_line_by_period = pivotSiteEntityRows(results.lineByPeriod, 'line', periods);
+
   const category_by_period_fixed: Record<string, number[]> = {};
+  const categoryAgg: Record<string, Record<number, { sum: number; count: number }>> = {};
   for (const row of results.categoryByPeriod) {
     const cat = String(row.category || 'Unknown');
     const period = String(row.period_label || '');
     const val = Number(row.dt_pct ?? 0);
-    if (!category_by_period_fixed[cat]) category_by_period_fixed[cat] = periods.map(() => 0);
     const idx = periods.indexOf(period);
-    if (idx >= 0) category_by_period_fixed[cat][idx] = +val.toFixed(2);
+    if (idx < 0) continue;
+    if (!categoryAgg[cat]) categoryAgg[cat] = {};
+    if (!categoryAgg[cat][idx]) categoryAgg[cat][idx] = { sum: 0, count: 0 };
+    categoryAgg[cat][idx].sum += val;
+    categoryAgg[cat][idx].count += 1;
+  }
+  for (const [cat, byIdx] of Object.entries(categoryAgg)) {
+    category_by_period_fixed[cat] = periods.map((_, idx) => {
+      const cell = byIdx[idx];
+      return cell ? +(cell.sum / cell.count).toFixed(2) : 0;
+    });
   }
 
   const line_by_period: Record<string, number[]> = {};
+  const lineAgg: Record<string, Record<number, { sum: number; count: number }>> = {};
   for (const row of results.lineByPeriod) {
     const line = String(row.line || '').toUpperCase();
     const period = String(row.period_label || '');
     const val = Number(row.dt_pct ?? 0);
     if (!line) continue;
-    if (!line_by_period[line]) line_by_period[line] = periods.map(() => 0);
     const idx = periods.indexOf(period);
-    if (idx >= 0) line_by_period[line][idx] = +val.toFixed(2);
+    if (idx < 0) continue;
+    if (!lineAgg[line]) lineAgg[line] = {};
+    if (!lineAgg[line][idx]) lineAgg[line][idx] = { sum: 0, count: 0 };
+    lineAgg[line][idx].sum += val;
+    lineAgg[line][idx].count += 1;
+  }
+  for (const [line, byIdx] of Object.entries(lineAgg)) {
+    line_by_period[line] = periods.map((_, idx) => {
+      const cell = byIdx[idx];
+      return cell ? +(cell.sum / cell.count).toFixed(2) : 0;
+    });
   }
 
   const top_lines: Record<string, number> = {};
@@ -507,7 +621,19 @@ export function buildMetricsFromSql(
     top_sites_trend[site] = site_by_period[site];
   }
 
-  const yearNum = filters.year ? parseInt(filters.year, 10) : 2026;
+  const dow_by_shift = buildDowByShift(results.dowByShift);
+  const filter_options = buildFilterOptions(results.filterOptions);
+  if (!filter_options.sites.length) {
+    filter_options.sites = Object.keys(site_by_period).sort();
+    for (const site of filter_options.sites) {
+      if (!filter_options.site_regions[site]) filter_options.site_regions[site] = 'Unknown';
+    }
+  }
+  if (!filter_options.years.length && filters.year) {
+    filter_options.years = [parseInt(filters.year, 10)];
+  }
+
+  const yearNum = filters.year ? parseInt(filters.year, 10) : (filter_options.years[0] || 2026);
   const m: MetricsPayload = {
     meta: {
       year: yearNum,
@@ -522,14 +648,16 @@ export function buildMetricsFromSql(
     weeks: dowWeeks,
     kpis,
     tab_insights: {},
+    filter_options,
     site_by_period,
-    category_by_period: Object.keys(category_by_period_fixed).length
-      ? category_by_period_fixed
-      : category_by_period,
+    category_by_period: category_by_period_fixed,
     line_by_period,
+    site_category_by_period,
+    site_line_by_period,
     period_trend,
     reasons,
     dow_by_day_week,
+    dow_by_shift,
     top_lines,
     top_sites_trend,
     shift_comparison,
