@@ -74,42 +74,21 @@ def _run_dashboard_job(jid: str, filters: dict, cache_key: str):
 
 def _run_metrics_job(jid: str, filters: dict, cache_key: str):
     try:
-        print(f"[job {jid[:8]}] Starting metrics query…")
+        print(f"[job {jid[:8]}] Refreshing metrics cache…")
+        norm = metrics_store.normalize_filters(filters)
         data = metrics_store.get_metrics(filters)
+        data = metrics_store.enrich_metrics_for_console(data, norm)
         cache_store.set(cache_key, data)
-        _finish_job(jid, data)
-        print(f"[job {jid[:8]}] Metrics done — periods={len(data.get('periods', []))}")
+        _finish_job(jid, {"metrics": data})
+        print(f"[job {jid[:8]}] Metrics cache refreshed")
     except Exception as e:
         _fail_job(jid, str(e))
-        print(f"[job {jid[:8]}] Metrics failed: {e}")
+        print(f"[job {jid[:8]}] Metrics refresh failed: {e}")
 
 
-def _run_console_data_job(jid: str, filters: dict, dash_key: str, metrics_key: str):
-    """Load dashboard insights + structured metrics for the console in one job."""
-    try:
-        print(f"[job {jid[:8]}] Loading console data…")
-        dashboard = None
-        try:
-            dashboard = get_dashboard(filters)
-            cache_store.set(dash_key, dashboard)
-        except Exception as e:
-            print(f"[job {jid[:8]}] Dashboard failed, using cache: {e}")
-            dashboard = cache_store.get(dash_key) or metrics_store._read_cache_any(dash_key)
-
-        metrics = metrics_store.get_metrics(filters)
-        if dashboard:
-            merged = metrics_store.merge_metrics(metrics, dashboard)
-            metrics = metrics_store.sanitize_metrics(
-                merged,
-                metrics_store.normalize_filters(filters),
-                source=metrics.get("meta", {}).get("source", "live"),
-            )
-        cache_store.set(metrics_key, metrics)
-        _finish_job(jid, {"dashboard": dashboard or {}, "metrics": metrics})
-        print(f"[job {jid[:8]}] Console data ready")
-    except Exception as e:
-        _fail_job(jid, str(e))
-        print(f"[job {jid[:8]}] Console data failed: {e}")
+def _run_console_data_job(jid: str, filters: dict, cache_key: str):
+    """Background refresh only — UI already has instant cache payload."""
+    _run_metrics_job(jid, filters, cache_key)
 
 
 # ── GET /api/status ───────────────────────────────────────────────
@@ -175,12 +154,13 @@ def api_metrics():
     filters = body.get("filters", {})
     force   = body.get("force", False)
     norm    = metrics_store.normalize_filters(filters)
-    key     = "metrics_" + json.dumps(norm, sort_keys=True)
+    key     = metrics_store.coarse_cache_key(norm)
 
     if not force:
         cached = cache_store.get(key)
         if cached:
-            return jsonify({**cached, "_cached": True, "_job_id": None})
+            metrics = metrics_store.enrich_metrics_for_console(cached, norm)
+            return jsonify({**metrics, "_cached": True, "_job_id": None})
 
     _cleanup_old_jobs()
     jid = _new_job()
@@ -192,34 +172,35 @@ def api_metrics():
 # ── POST /api/console-data ────────────────────────────────────────
 @app.route("/api/console-data", methods=["POST"])
 def console_data():
-    """Combined dashboard + metrics payload for KPI Overview."""
+    """Instant metrics from cache; background refresh when stale."""
     body    = request.get_json(silent=True) or {}
     filters = body.get("filters", {})
     force   = body.get("force", False)
     norm    = metrics_store.normalize_filters(filters)
-    dash_key    = json.dumps({"period": norm.get("period", "week")}, sort_keys=True)
-    metrics_key = "metrics_" + json.dumps(norm, sort_keys=True)
+    cache_key = metrics_store.coarse_cache_key(norm)
 
-    if not force:
-        cached_metrics = cache_store.get(metrics_key)
-        cached_dash    = cache_store.get(dash_key)
-        if cached_metrics:
-            return jsonify({
-                "dashboard": cached_dash or {},
-                "metrics": cached_metrics,
-                "_cached": True,
-                "_job_id": None,
-            })
+    cached = None if force else cache_store.get(cache_key)
+    if cached:
+        metrics = metrics_store.enrich_metrics_for_console(cached, norm)
+    else:
+        metrics = metrics_store.metrics_from_cache(filters)
 
-    _cleanup_old_jobs()
-    jid = _new_job()
-    t   = threading.Thread(
-        target=_run_console_data_job,
-        args=(jid, filters, dash_key, metrics_key),
-        daemon=True,
-    )
-    t.start()
-    return jsonify({"_job_id": jid, "_cached": False, "status": "running"})
+    needs_refresh = force or (cached is None and metrics_store._supervisor_configured())
+
+    jid = None
+    if needs_refresh:
+        _cleanup_old_jobs()
+        jid = _new_job()
+        t = threading.Thread(target=_run_console_data_job, args=(jid, filters, cache_key), daemon=True)
+        t.start()
+
+    return jsonify({
+        "metrics": metrics,
+        "dashboard": {},
+        "_cached": cached is not None,
+        "_refreshing": bool(jid),
+        "_job_id": jid,
+    })
 
 
 # ── GET /api/job/<jid> — browser polls this ───────────────────────

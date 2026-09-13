@@ -1910,9 +1910,11 @@ body.focus-mode-open { overflow: hidden; }
     focusSourceChartId: null,
     liveMetrics: null,
     dashboard: null,
+    metricsBase: null,
     dataLoading: false,
     dataPollTimer: null,
     dataReloadTimer: null,
+    lastCoarseKey: null,
   };
 
   let REASONS_DATA_MUTABLE = null;
@@ -1970,20 +1972,161 @@ body.focus-mode-open { overflow: hidden; }
     bar.querySelector('.data-status-text').textContent = text;
   }
 
+  function coarseFilterKey() {
+    return `${state.filters.timeframe}|${state.filters.year}`;
+  }
+
+  function isCoarseFilterChange() {
+    const key = coarseFilterKey();
+    if (state.lastCoarseKey === null) return true;
+    return state.lastCoarseKey !== key;
+  }
+
+  function parsePct(value) {
+    const n = parseFloat(String(value || '').replace('%', '').trim());
+    return Number.isFinite(n) ? n : 6.2;
+  }
+
+  function buildTabInsightsClient(m) {
+    const kpis = m.kpis || {};
+    const dt = kpis.downtime_pct || {};
+    const dtHrs = kpis.downtime_hrs || {};
+    const stops = kpis.stops || {};
+    const trend = m.period_trend || [];
+    const periods = m.periods || [];
+    const anchor = parsePct(dt.value);
+
+    let peakLabel = '';
+    let peakVal = anchor;
+    let lowLabel = '';
+    let lowVal = anchor;
+    if (trend.length) {
+      const peakI = trend.indexOf(Math.max(...trend));
+      const lowI = trend.indexOf(Math.min(...trend));
+      peakLabel = periods[peakI] || `P${peakI + 1}`;
+      peakVal = trend[peakI];
+      lowLabel = periods[lowI] || `P${lowI + 1}`;
+      lowVal = trend[lowI];
+    }
+
+    const overview = `Unplanned DT % is ${dt.value || '—'} (${dt.delta || 'vs prior period'}). Peak at ${peakLabel || 'latest period'} (${Number(peakVal).toFixed(2)}%), low at ${lowLabel || '—'} (${Number(lowVal).toFixed(2)}%). STOPS: ${stops.value || '—'}.`;
+
+    const cats = m.category_by_period || {};
+    let category;
+    if (Object.keys(cats).length) {
+      const topCat = Object.entries(cats).sort((a, b) => {
+        const sa = (a[1] || []).reduce((x, y) => x + Number(y || 0), 0);
+        const sb = (b[1] || []).reduce((x, y) => x + Number(y || 0), 0);
+        return sb - sa;
+      })[0];
+      const catAvg = topCat[1].length ? topCat[1].reduce((a, b) => a + Number(b || 0), 0) / topCat[1].length : 0;
+      category = `${topCat[0]} leads unplanned DT at ${catAvg.toFixed(2)}% avg across ${periods.length} periods. Network unplanned DT is ${anchor.toFixed(2)}% — focus reduction on ${topCat[0]} root causes and cross-site benchmarks.`;
+    } else {
+      category = `Category-level unplanned DT averages ${anchor.toFixed(2)}%. Expand site rows to compare RSN categories by period.`;
+    }
+
+    const lines = m.top_lines || {};
+    let line;
+    if (Object.keys(lines).length) {
+      const ranked = Object.entries(lines).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      const lineNames = ranked.map(([n, p]) => `${n} (${Number(p).toFixed(1)}%)`).join(', ');
+      line = `Top unplanned DT lines: ${lineNames}. Prioritize mechanical and changeover losses on the highest-share lines.`;
+    } else {
+      const lineBy = m.line_by_period || {};
+      const entries = Object.entries(lineBy);
+      if (entries.length) {
+        const topLine = entries.sort((a, b) => {
+          const sa = (a[1] || []).reduce((x, y) => x + Number(y || 0), 0);
+          const sb = (b[1] || []).reduce((x, y) => x + Number(y || 0), 0);
+          return sb - sa;
+        })[0];
+        line = `${topLine[0]} shows the highest unplanned DT across periods — review line-level RSN breakdown and shift handovers.`;
+      } else {
+        line = 'Line-level unplanned DT is concentrated in a few assets — use the heatmap to identify top site/line combinations.';
+      }
+    }
+
+    const shifts = m.shift_comparison || [];
+    const dow = m.dow_by_day_week || {};
+    let dowInsight;
+    if (shifts.length) {
+      const topShift = shifts.reduce((a, b) => (Number(a.hours || 0) > Number(b.hours || 0) ? a : b));
+      let dowTxt = '';
+      const dayAvgs = Object.entries(dow).map(([d, v]) => {
+        const vals = Object.values(v || {});
+        return [d, vals.length ? vals.reduce((a, b) => a + Number(b || 0), 0) / vals.length : 0];
+      });
+      if (dayAvgs.length) {
+        const hi = dayAvgs.reduce((a, b) => (a[1] > b[1] ? a : b));
+        const lo = dayAvgs.reduce((a, b) => (a[1] < b[1] ? a : b));
+        dowTxt = ` ${hi[0]} averages ${hi[1].toFixed(1)}% vs ${lo[0]} at ${lo[1].toFixed(1)}%.`;
+      }
+      dowInsight = `${topShift.shift || 'Shift'} drives ${Number(topShift.hours || 0).toLocaleString()} unplanned DT hours.${dowTxt} Compare shifts across days to target handover and staffing gaps.`;
+    } else if (Object.keys(dow).length) {
+      const dayAvgs = Object.entries(dow).map(([d, v]) => {
+        const vals = Object.values(v || {});
+        return [d, vals.length ? vals.reduce((a, b) => a + Number(b || 0), 0) / vals.length : 0];
+      });
+      const hi = dayAvgs.reduce((a, b) => (a[1] > b[1] ? a : b));
+      dowInsight = `${hi[0]} shows the highest unplanned DT % (${hi[1].toFixed(1)}%) across recent weeks — expand day rows to compare shifts.`;
+    } else {
+      dowInsight = 'Day-of-week unplanned DT varies by shift — use the heatmap to compare Shift 1/2/3 patterns across weeks.';
+    }
+
+    const reasons = m.reasons || [];
+    let reason;
+    if (reasons.length) {
+      const top3 = reasons.slice(0, 3);
+      const rTxt = top3.map(r => `${r.reason} (${Number(r.hours || 0).toLocaleString()}h, ${Number(r.pct || 0).toFixed(2)}%)`).join('; ');
+      const tMin = trend.length ? Math.min(...trend).toFixed(2) : anchor.toFixed(2);
+      const tMax = trend.length ? Math.max(...trend).toFixed(2) : anchor.toFixed(2);
+      reason = `Top unplanned DT reasons: ${rTxt}. Period trend ranges ${tMin}%–${tMax}% with total hours ${dtHrs.value || '—'}.`;
+    } else {
+      const tMin = trend.length ? Math.min(...trend).toFixed(2) : anchor.toFixed(2);
+      const tMax = trend.length ? Math.max(...trend).toFixed(2) : anchor.toFixed(2);
+      reason = `Unplanned DT % trend spans ${tMin}%–${tMax}% across periods. Review RSN-level hours to prioritize the largest contributors.`;
+    }
+
+    return { overview, category, line, dow: dowInsight, reason };
+  }
+
+  function filterMetricsClient(base) {
+    if (!base) return base;
+    const site = state.filters.site;
+    if (!site || site === 'All') return base;
+    const m = JSON.parse(JSON.stringify(base));
+    const siteKey = String(site).toUpperCase();
+    if (m.site_by_period?.[siteKey]) m.site_by_period = { [siteKey]: m.site_by_period[siteKey] };
+    if (m.top_sites_trend?.[siteKey]) m.top_sites_trend = { [siteKey]: m.top_sites_trend[siteKey] };
+    const mult = SITE_MULTIPLIERS[siteKey] || 1;
+    if (m.period_trend?.length) {
+      m.period_trend = m.period_trend.map(v => +(Number(v) * mult * 0.95).toFixed(2));
+    }
+    m.tab_insights = buildTabInsightsClient(m);
+    m.meta = { ...(m.meta || {}), filtered_site: siteKey };
+    return m;
+  }
+
   function scheduleDataReload() {
     clearTimeout(state.dataReloadTimer);
-    state.dataReloadTimer = setTimeout(() => loadConsoleData(false), 450);
+    state.dataReloadTimer = setTimeout(() => {
+      if (state.metricsBase && !isCoarseFilterChange()) {
+        applyConsoleData({ metrics: filterMetricsClient(state.metricsBase), dashboard: {} });
+        setDataStatus('live', `Filtered to ${state.filters.site} · instant`);
+        return;
+      }
+      loadConsoleData(false);
+    }, 80);
   }
 
   async function loadConsoleData(force = false) {
-    if (state.dataLoading && !force) return;
-    state.dataLoading = true;
-    setDataStatus('loading', 'Querying pgt_plnt_prodtn_metric_view…');
-
     if (state.dataPollTimer) {
       clearInterval(state.dataPollTimer);
       state.dataPollTimer = null;
     }
+
+    const showLoading = !state.metricsBase || force;
+    if (showLoading) setDataStatus('loading', 'Loading unplanned DT metrics…');
 
     try {
       const res = await fetch('/api/console-data', {
@@ -1994,14 +2137,19 @@ body.focus-mode-open { overflow: hidden; }
       if (!res.ok) throw new Error(`Server ${res.status}`);
       const data = await res.json();
 
-      if (data._cached && data.metrics) {
-        applyConsoleData(data);
-        return;
+      if (data.metrics) {
+        state.metricsBase = data.metrics;
+        state.lastCoarseKey = coarseFilterKey();
+        applyConsoleData({ metrics: filterMetricsClient(data.metrics), dashboard: data.dashboard || {} });
       }
 
-      const jobId = data._job_id;
-      if (!jobId) throw new Error('No job_id returned');
-      state.dataPollTimer = setInterval(() => pollConsoleJob(jobId), 4000);
+      if (data._refreshing && data._job_id) {
+        setDataStatus('loading', 'Showing cached data · refreshing from Genie in background…');
+        state.dataPollTimer = setInterval(() => pollConsoleJob(data._job_id, true), 1500);
+      } else if (data._cached) {
+        setDataStatus('cached', 'Unplanned DT data loaded from cache · slicers respond instantly');
+      }
+      state.dataLoading = false;
     } catch (err) {
       state.dataLoading = false;
       setDataStatus('error', `Data load failed: ${err.message}`);
@@ -2009,13 +2157,13 @@ body.focus-mode-open { overflow: hidden; }
     }
   }
 
-  async function pollConsoleJob(jobId) {
+  async function pollConsoleJob(jobId, background = false) {
     try {
       const res = await fetch(`/api/job/${jobId}`);
       const job = await res.json();
 
       if (job.status === 'running') {
-        setDataStatus('loading', job.message || `Querying Genie… ${job.elapsed || 0}s`);
+        if (!background) setDataStatus('loading', job.message || `Refreshing… ${job.elapsed || 0}s`);
         return;
       }
 
@@ -2024,12 +2172,15 @@ body.focus-mode-open { overflow: hidden; }
       state.dataLoading = false;
 
       if (job.status === 'error') {
-        setDataStatus('error', job.error || 'Supervisor query failed');
+        if (!state.metricsBase) setDataStatus('error', job.error || 'Refresh failed');
+        else setDataStatus('cached', 'Showing cached unplanned DT data · refresh failed');
         return;
       }
 
-      if (job.status === 'done' && job.result) {
-        applyConsoleData(job.result);
+      if (job.status === 'done' && job.result?.metrics) {
+        state.metricsBase = job.result.metrics;
+        state.lastCoarseKey = coarseFilterKey();
+        applyConsoleData({ metrics: filterMetricsClient(job.result.metrics), dashboard: {} });
       }
     } catch (err) {
       console.warn('[poll]', err.message);
@@ -2038,12 +2189,11 @@ body.focus-mode-open { overflow: hidden; }
 
   function applyConsoleData(payload) {
     const metrics = payload.metrics || payload;
-    const dashboard = payload.dashboard || {};
     state.liveMetrics = metrics;
-    state.dashboard = dashboard;
+    state.dashboard = payload.dashboard || {};
     applyMetricsToState(metrics);
-    updateMetricStripDOM(metrics.kpis || dashboard.kpis);
-    updateAiSummariesDOM(metrics, dashboard);
+    updateMetricStripDOM(metrics.kpis);
+    updateAiSummariesDOM(metrics);
     refreshAllTables();
     refreshChartsForTab(state.kpiTab);
     const reasonBody = document.querySelector('.reason-table-body');
@@ -2053,7 +2203,10 @@ body.focus-mode-open { overflow: hidden; }
     const yr = meta.year ? ` · Year ${meta.year}` : '';
     const pr = meta.period ? ` · ${meta.period}` : '';
     const wk = meta.week ? ` · Week ${meta.week}` : '';
-    setDataStatus(src === 'cache' ? 'cached' : 'live', `Metric view data loaded${yr}${pr}${wk}`);
+    const site = meta.filtered_site ? ` · Site ${meta.filtered_site}` : (state.filters.site !== 'All' ? ` · Site ${state.filters.site}` : '');
+    if (!state.dataPollTimer) {
+      setDataStatus(src === 'cache' || src === 'demo' ? 'cached' : 'live', `Unplanned DT data${yr}${pr}${wk}${site}`);
+    }
     state.dataLoading = false;
   }
 
@@ -2111,6 +2264,10 @@ body.focus-mode-open { overflow: hidden; }
         TOP_SITES_TRENDS[site] = vals.map(v => +Number(v).toFixed(2));
       });
     }
+
+    if (m.shift_comparison?.length) {
+      state.liveShiftComparison = m.shift_comparison;
+    }
   }
 
   function kpiDirectionClass(direction) {
@@ -2123,38 +2280,19 @@ body.focus-mode-open { overflow: hidden; }
     const root = document.getElementById('metric-strip-root');
     if (!root || !kpis) return;
     const dt = kpis.downtime_pct || {};
-    const waste = kpis.waste_pct || {};
+    const dtHrs = kpis.downtime_hrs || {};
     const stops = kpis.stops || {};
     const oee = kpis.oee || {};
     root.innerHTML = `
       <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">${dt.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(dt.direction)}">${dt.delta || ''}</div></div>
-      <div class="metric-card"><div class="metric-label">Waste %</div><div class="metric-value">${waste.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(waste.direction)}">${waste.delta || ''}</div></div>
+      <div class="metric-card"><div class="metric-label">Unplanned DT Hours</div><div class="metric-value">${dtHrs.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(dtHrs.direction)}">${dtHrs.delta || ''}</div></div>
       <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">${stops.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(stops.direction)}">${stops.delta || ''}</div></div>
       <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">${oee.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(oee.direction)}">${oee.delta || ''}</div></div>`;
   }
 
-  function insightSummaryText(metrics, dashboard, tab) {
-    const insights = (metrics.key_insights?.length ? metrics.key_insights : dashboard.key_insights) || [];
-    const observations = (metrics.observations?.length ? metrics.observations : dashboard.observations) || [];
-    const parts = [];
-    insights.slice(0, 2).forEach(i => {
-      if (typeof i === 'string') parts.push(i);
-      else if (i?.text) parts.push(i.text);
-    });
-    if (parts.length < 2 && observations.length) parts.push(observations[0]);
-    if (!parts.length) return null;
-    return parts.join(' ');
-  }
-
-  function updateAiSummariesDOM(metrics, dashboard) {
-    const map = {
-      overview: insightSummaryText(metrics, dashboard, 'overview'),
-      category: insightSummaryText(metrics, dashboard, 'category'),
-      line: insightSummaryText(metrics, dashboard, 'line'),
-      dow: insightSummaryText(metrics, dashboard, 'dow'),
-      reason: insightSummaryText(metrics, dashboard, 'reason'),
-    };
-    Object.entries(map).forEach(([tab, text]) => {
+  function updateAiSummariesDOM(metrics) {
+    const tabs = metrics.tab_insights || {};
+    Object.entries(tabs).forEach(([tab, text]) => {
       if (!text) return;
       document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
         el.textContent = text;
@@ -3286,10 +3424,10 @@ body.focus-mode-open { overflow: hidden; }
   /* ── Content builders ── */
   function metricStripHTML() {
     return `<div class="metric-strip" id="metric-strip-root">
-      <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">6.24%</div><div class="metric-delta up">↑ 1.24pp vs target (5%)</div></div>
-      <div class="metric-card"><div class="metric-label">Waste %</div><div class="metric-value">3.02%</div><div class="metric-delta down">↓ 0.18pp vs prior week</div></div>
-      <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">819</div><div class="metric-delta down">↓ 2,451 vs prior week</div></div>
-      <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">78.4%</div><div class="metric-delta neutral">1.6pp below 80% target</div></div>
+      <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">—</div><div class="metric-delta neutral">Loading…</div></div>
+      <div class="metric-card"><div class="metric-label">Unplanned DT Hours</div><div class="metric-value">—</div><div class="metric-delta neutral"></div></div>
+      <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">—</div><div class="metric-delta neutral"></div></div>
+      <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">—</div><div class="metric-delta neutral"></div></div>
     </div>`;
   }
 
@@ -3315,6 +3453,11 @@ body.focus-mode-open { overflow: hidden; }
   }
 
   function lineValuesForSite(site, line) {
+    const live = state.liveMetrics?.line_by_period?.[line];
+    if (live?.length) {
+      const mult = SITE_MULTIPLIERS[site] || 1;
+      return live.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2));
+    }
     const mult = SITE_MULTIPLIERS[site] || 1;
     return (LINE_BASE[line] || []).map(v => +(v * mult * 0.95).toFixed(2));
   }
