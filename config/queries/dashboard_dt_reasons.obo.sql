@@ -1,12 +1,12 @@
 -- dashboard_dt_reasons.obo.sql
 SELECT
-  COALESCE(RSN, RSN3, 'Unknown') AS reason,
-  ROUND(SUM(Total_Unplanned_Downtime_Hours), 2) AS hours,
-  ROUND(AVG(Total_Unplanned_Downtime_Pct), 2) AS pct
+  COALESCE({{reason_col}}, 'Unknown') AS reason,
+  ROUND(SUM({{dt_hours}}), 2) AS hours,
+  ROUND(AVG({{dt_pct}}) * 100, 2) AS pct
 FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-WHERE 1 = 1
+WHERE {{dt_type_filter}}
   AND {{year_filter}}
   AND (:site IS NULL OR UPPER(Site) = UPPER(:site))
-GROUP BY COALESCE(RSN, RSN3, 'Unknown')
+GROUP BY {{reason_col}}
 ORDER BY hours DESC
 LIMIT 25

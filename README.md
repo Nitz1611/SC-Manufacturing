@@ -54,6 +54,12 @@ Check `/api/status` — `sql_ok` should be `true`, `mode` should be `live-sql-me
 
 If `mode` is `sql-error`, open `/api/status` and read `sql_test.error` — update `DATABRICKS_METRIC_VIEW` in `.env` with the exact catalog.schema.view from Databricks.
 
+The view has no `Year` column — year filtering uses `YEAR(STRT_DT)` by default. Override the date column if needed:
+
+```
+DATABRICKS_DATE_COLUMN=STRT_DT
+```
+
 ## API endpoints
 
 | Endpoint | Purpose |

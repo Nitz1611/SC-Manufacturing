@@ -6,6 +6,21 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const QUERIES_DIR = path.join(ROOT, 'config', 'queries');
 export const CACHE_FILE = path.join(ROOT, 'cache.json');
 
+/** Gold-table defaults for pgt_plnt_prodtn_metric_view (UC semantic layer column names). */
+const GOLD = {
+  date: '`Production Date`',
+  period: "CONCAT('P', CAST(`Production Period` AS STRING))",
+  week: "CONCAT(CAST(YEAR(`Production Date`) AS STRING), 'P', LPAD(CAST(`Production Period` AS STRING), 2, '0'), 'W', LPAD(CAST(`Production week` AS STRING), 2, '0'))",
+  shift: 'CAST(`Shift` AS STRING)',
+  line: '`Line Desc`',
+  category: '`Downtime Category`',
+  reason: '`Downtime Reason`',
+  dtPct: '`Unplanned Downtime %`',
+  dtHours: '`Unplanned Downtime Hours`',
+  stops: 'STOPS',
+  dtTypeFilter: "TRIM(`Downtime Type`) IN ('Unplanned', 'Unspecified')",
+};
+
 export function resolveMetricView(): string {
   if (process.env.DATABRICKS_METRIC_VIEW?.trim()) {
     return process.env.DATABRICKS_METRIC_VIEW.trim();
@@ -18,22 +33,47 @@ export function resolveMetricView(): string {
 }
 
 export function dateColumn(): string {
-  return process.env.DATABRICKS_DATE_COLUMN?.trim() || 'STRT_DT';
+  return process.env.DATABRICKS_DATE_COLUMN?.trim() || GOLD.date;
 }
 
-/** SQL expression for fiscal/network period label (P1…P10). Override if view has no Period column. */
 export function periodExpression(): string {
-  return process.env.DATABRICKS_PERIOD_EXPR?.trim() || 'Period';
+  return process.env.DATABRICKS_PERIOD_EXPR?.trim() || GOLD.period;
 }
 
-/** SQL expression for fiscal week label. Override if view has no Week column. */
 export function weekExpression(): string {
-  return process.env.DATABRICKS_WEEK_EXPR?.trim() || 'Week';
+  return process.env.DATABRICKS_WEEK_EXPR?.trim() || GOLD.week;
 }
 
-/** SQL expression for shift grouping. */
 export function shiftExpression(): string {
-  return process.env.DATABRICKS_SHIFT_EXPR?.trim() || 'COALESCE(CAST(Shift AS STRING), CAST(SHIFT_KEY AS STRING))';
+  return process.env.DATABRICKS_SHIFT_EXPR?.trim() || GOLD.shift;
+}
+
+export function lineColumn(): string {
+  return process.env.DATABRICKS_LINE_COLUMN?.trim() || GOLD.line;
+}
+
+export function categoryColumn(): string {
+  return process.env.DATABRICKS_CATEGORY_COLUMN?.trim() || GOLD.category;
+}
+
+export function reasonColumn(): string {
+  return process.env.DATABRICKS_REASON_COLUMN?.trim() || GOLD.reason;
+}
+
+export function dtPctColumn(): string {
+  return process.env.DATABRICKS_DT_PCT_COLUMN?.trim() || GOLD.dtPct;
+}
+
+export function dtHoursColumn(): string {
+  return process.env.DATABRICKS_DT_HOURS_COLUMN?.trim() || GOLD.dtHours;
+}
+
+export function stopsColumn(): string {
+  return process.env.DATABRICKS_STOPS_COLUMN?.trim() || GOLD.stops;
+}
+
+export function dtTypeFilter(): string {
+  return process.env.DATABRICKS_DT_TYPE_FILTER?.trim() || GOLD.dtTypeFilter;
 }
 
 export function yearFilterExpression(): string {
@@ -47,7 +87,14 @@ function applySqlFragments(sql: string): string {
     .replace(/\{\{period_expr\}\}/g, periodExpression())
     .replace(/\{\{week_expr\}\}/g, weekExpression())
     .replace(/\{\{shift_expr\}\}/g, shiftExpression())
-    .replace(/\{\{date_col\}\}/g, dateColumn());
+    .replace(/\{\{date_col\}\}/g, dateColumn())
+    .replace(/\{\{line_col\}\}/g, lineColumn())
+    .replace(/\{\{category_col\}\}/g, categoryColumn())
+    .replace(/\{\{reason_col\}\}/g, reasonColumn())
+    .replace(/\{\{dt_pct\}\}/g, dtPctColumn())
+    .replace(/\{\{dt_hours\}\}/g, dtHoursColumn())
+    .replace(/\{\{stops_col\}\}/g, stopsColumn())
+    .replace(/\{\{dt_type_filter\}\}/g, dtTypeFilter());
 }
 
 export function loadQuerySql(queryKey: string): string {
@@ -89,4 +136,17 @@ export function normalizeParams(raw: Record<string, unknown> = {}): Record<strin
 
 export function coarseCacheKey(params: Record<string, string | null>): string {
   return `metrics_${JSON.stringify({ period: params.period || 'week', year: params.year || '2026' })}`;
+}
+
+export function sqlColumnSummary() {
+  return {
+    date_column: dateColumn(),
+    period_expr: periodExpression(),
+    week_expr: weekExpression(),
+    dt_pct: dtPctColumn(),
+    dt_hours: dtHoursColumn(),
+    line: lineColumn(),
+    category: categoryColumn(),
+    reason: reasonColumn(),
+  };
 }
