@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Manufacturing Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <div class="app-bg-glow" aria-hidden="true"></div>
+
+  <div class="app-banner" id="app-banner">
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="header-logo" aria-hidden="true" style="width:44px;height:44px;border-radius:50%;background:#004B93;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:11px;">PEP</div>
+        <h1 class="header-title">
+          <span class="word word-manufacturing">Manufacturing</span>
+          <span class="word word-console">Console</span>
+        </h1>
+      </div>
+      <nav class="top-nav-primary" id="top-nav-primary" role="tablist" aria-label="Main sections"></nav>
+      <div class="header-context" id="header-context">
+        <span class="context-value" id="context-breadcrumb">KPI Overview · Overview</span>
+      </div>
+      <div class="header-actions">
+        <div class="profile-avatar" title="Plant Manager">PM</div>
+      </div>
+    </header>
+    <div class="banner-nav" aria-label="KPI navigation">
+      <nav class="top-nav-secondary" id="top-nav-secondary" role="tablist" aria-label="KPI views"></nav>
+    </div>
+  </div>
+
+  <div class="app-shell">
+    <div class="workspace">
+      <div class="filter-bar" id="filter-bar" role="toolbar" aria-label="Filters"></div>
+      <main class="main-content">
+        <section id="page-intel-brief" class="page-panel" aria-label="Intel Brief">
+          <div class="page-hero">
+            <h2>Intel Brief</h2>
+            <p>Executive intelligence summary — content coming in a future requirement.</p>
+          </div>
+        </section>
+        <section id="page-kpi-overview" class="page-panel active" aria-label="KPI Overview">
+          <div id="kpi-tab-overview" class="kpi-tab-panel active" data-tab="overview" role="tabpanel"></div>
+          <div id="kpi-tab-by-category" class="kpi-tab-panel" data-tab="by-category" role="tabpanel"></div>
+          <div id="kpi-tab-by-line" class="kpi-tab-panel" data-tab="by-line" role="tabpanel"></div>
+          <div id="kpi-tab-by-dow" class="kpi-tab-panel" data-tab="by-dow" role="tabpanel"></div>
+          <div id="kpi-tab-by-reason" class="kpi-tab-panel" data-tab="by-reason" role="tabpanel"></div>
+        </section>
+        <section id="page-insights" class="page-panel" aria-label="Insights">
+          <div class="page-hero">
+            <h2>Insights</h2>
+            <p>AI-driven manufacturing insights — content coming in a future requirement.</p>
+          </div>
+        </section>
+        <section id="page-rca" class="page-panel" aria-label="Root Cause Analysis">
+          <div class="page-hero">
+            <h2>Root Cause Analysis</h2>
+            <p>Deep-dive RCA workspace — content coming in a future requirement.</p>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.tsx"></script>
+  <script src="/legacy/console.js"></script>
+</body>
+</html>
