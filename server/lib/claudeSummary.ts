@@ -1,6 +1,6 @@
 /**
- * VR-style AI summaries — Claude Opus via Databricks Model Serving.
- * Summarizes SQL metrics JSON directly (no Supervisor / Genie round-trip).
+ * VR-style AI summaries — DEPRECATED: SC Manufacturing uses Supervisor Agent → Genie.
+ * Kept for reference only; not wired into summary routes.
  */
 import type { MetricsPayload } from '../../shared/types/dashboard.js';
 import { buildFilterContext, type SummaryEntity } from './summaryPrompts.js';

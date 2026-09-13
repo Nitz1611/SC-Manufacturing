@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { analyticsRouter } from './routes/analytics.js';
+import { jobsRouter } from './routes/jobs.js';
 import { summariesRouter } from './routes/summaries.js';
 import { cacheInfo } from './lib/cache.js';
 import { loadEnv, repoRoot, sqlEnvStatus } from './lib/env.js';
@@ -19,6 +20,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use('/api', analyticsRouter);
+app.use('/api', jobsRouter);
 app.use('/api', summariesRouter);
 
 app.get('/api/cache/info', (_req, res) => {

@@ -416,6 +416,50 @@
     }, 80);
   }
 
+  function applySummaryTexts(summaries) {
+    Object.entries(summaries || {}).forEach(([tab, text]) => {
+      if (!text) return;
+      document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+        el.textContent = text;
+      });
+    });
+  }
+
+  async function pollSummaryJob(jobId, tabs) {
+    return new Promise((resolve, reject) => {
+      const timer = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/job/${jobId}`);
+          const job = await res.json();
+
+          if (job.status === 'running') {
+            tabs.forEach(tab => {
+              document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+                el.textContent = `✦ Supervisor querying Genie… ${job.elapsed || 0}s`;
+              });
+            });
+            return;
+          }
+
+          clearInterval(timer);
+
+          if (job.status === 'error') {
+            reject(new Error(job.error || 'Supervisor returned an error'));
+            return;
+          }
+
+          if (job.status === 'done') {
+            applySummaryTexts(job.result?.summaries || {});
+            resolve(job.result);
+          }
+        } catch (e) {
+          clearInterval(timer);
+          reject(e);
+        }
+      }, 3000);
+    });
+  }
+
   async function loadAiSummaries(force = false) {
     const filters = apiFiltersFromState();
     const key = JSON.stringify(filters);
@@ -430,7 +474,7 @@
           if (instant[tab]) {
             el.textContent = instant[tab];
           } else {
-            el.textContent = '✦ Generating AI summary…';
+            el.textContent = '✦ Generating AI summary from Supervisor…';
           }
         });
       });
@@ -446,21 +490,26 @@
           throw new Error(err.error || `Summaries ${res.status}`);
         }
         const data = await res.json();
-        const summaries = data.summaries || {};
-        Object.entries(summaries).forEach(([tab, text]) => {
-          if (!text) return;
-          document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-            el.textContent = text;
-          });
-        });
+
+        if (data.summaries && (data.cached || !data._job_id)) {
+          applySummaryTexts(data.summaries);
+          state.summaryFilterKey = key;
+          state.summariesLoaded = true;
+          return;
+        }
+
+        const jobId = data._job_id;
+        if (!jobId) throw new Error('No job_id from server');
+
+        await pollSummaryJob(jobId, tabs);
         state.summaryFilterKey = key;
         state.summariesLoaded = true;
       } catch (err) {
         console.warn('[summaries]', err.message);
         tabs.forEach(tab => {
           document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-            if (String(el.textContent).includes('Generating')) {
-              el.textContent = 'AI summary unavailable — check CLAUDE_SERVING_ENDPOINT in .env';
+            if (String(el.textContent).includes('Generating') || String(el.textContent).includes('Supervisor')) {
+              el.textContent = 'AI summary unavailable — check SUPERVISOR_ENDPOINT_NAME in .env';
             }
           });
         });

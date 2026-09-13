@@ -3,7 +3,7 @@ import type { QueryKey } from '../../shared/types/dashboard.js';
 import { databricksConfigured, getLastSqlError, getLastSqlSuccessAt, resolveMetricView, runAnalyticsQuery, verifyMetricViewAccess } from '../lib/analytics.js';
 import { sqlEnvStatus } from '../lib/env.js';
 import { sqlColumnSummary } from '../lib/config.js';
-import { claudeConfigured, claudeEndpoint } from '../lib/claudeSummary.js';
+import { runningJobCount } from '../lib/jobs.js';
 import { supervisorConfigured } from '../lib/supervisor.js';
 import { sqlConfigured, warmupWarehouse } from '../lib/databricksSql.js';
 
@@ -89,12 +89,8 @@ analyticsRouter.get('/status', async (_req, res) => {
     metric_view: metricView,
     sql_columns: sqlColumnSummary(),
     mode: sqlTest.ok ? 'live-sql-metric-view' : configured ? 'sql-error' : 'demo-fallback',
-    claude: claudeConfigured() ? claudeEndpoint() : 'not configured',
     supervisor: supervisorConfigured() ? process.env.SUPERVISOR_ENDPOINT_NAME : 'not configured',
-    summaries: claudeConfigured()
-      ? 'claude-opus'
-      : supervisorConfigured()
-        ? 'supervisor-agent'
-        : 'template-fallback',
+    summaries: supervisorConfigured() ? 'supervisor-agent' : 'template-fallback',
+    active_supervisor_jobs: runningJobCount(),
   });
 });

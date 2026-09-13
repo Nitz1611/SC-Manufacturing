@@ -1,10 +1,12 @@
 /**
- * Databricks Supervisor Agent — tab-specific AI summaries (VR architecture pattern).
- * Chart data comes from SQL; narratives come from Supervisor + Genie.
+ * Databricks Supervisor Agent — VR Dashboard pattern.
+ * Chart data from SQL; AI tab summaries via Supervisor → Genie (MAS endpoint).
  */
 import { buildSupervisorPrompt, type SummaryEntity } from './summaryPrompts.js';
 
 type Message = { role: string; content: string };
+
+const DEBUG = (process.env.SUPERVISOR_DEBUG || 'false').toLowerCase() === 'true';
 
 function host(): string {
   return (process.env.DATABRICKS_HOST || process.env.DATABRICKS_SERVER_HOSTNAME || '')
@@ -32,11 +34,11 @@ function isTimeoutResponse(text: string): boolean {
   );
 }
 
-function parseJson(raw: string): Record<string, unknown> {
+function parseJsonBlock(raw: string): Record<string, unknown> {
   const text = raw.trim();
   try {
     const d = JSON.parse(text) as unknown;
-    if (d && typeof d === 'object') return unwrap(d as Record<string, unknown>);
+    if (d && typeof d === 'object') return unwrapResponse(d as Record<string, unknown>);
   } catch {
     // continue
   }
@@ -71,13 +73,13 @@ function parseJson(raw: string): Record<string, unknown> {
     }
   }
 
-  if (best) return unwrap(best);
+  if (best) return unwrapResponse(best);
   return { narrative: cleaned.slice(0, 500) };
 }
 
-function unwrap(d: Record<string, unknown>): Record<string, unknown> {
+function unwrapResponse(d: Record<string, unknown>): Record<string, unknown> {
   if (Array.isArray(d.output)) {
-    const texts: string[] = [];
+    const allTexts: string[] = [];
     for (const block of d.output) {
       if (!block || typeof block !== 'object') continue;
       const b = block as Record<string, unknown>;
@@ -87,20 +89,36 @@ function unwrap(d: Record<string, unknown>): Record<string, unknown> {
             const c = cb as Record<string, unknown>;
             if (c.type === 'output_text' || c.type === 'text') {
               const t = String(c.text || '').trim();
-              if (t) texts.push(t);
+              if (t) allTexts.push(t);
             }
           }
         }
       } else if (b.type === 'output_text' || b.type === 'text') {
         const t = String(b.text || '').trim();
-        if (t) texts.push(t);
+        if (t) allTexts.push(t);
       }
     }
 
-    for (const text of [...texts].reverse()) {
-      if (text.includes('{') && text.includes('narrative')) return parseJson(text);
+    if (DEBUG) console.log(`[supervisor] found ${allTexts.length} text block(s) in output`);
+
+    if (allTexts.length) {
+      for (const text of [...allTexts].reverse()) {
+        if (text.includes('{') && (text.includes('narrative') || text.includes('key_insights') || text.includes('insight'))) {
+          return parseJsonBlock(text);
+        }
+      }
+
+      const combined = allTexts.join(' ');
+      if (combined.includes('{')) {
+        const result = parseJsonBlock(combined);
+        if (typeof result.narrative === 'string' || result.key_insights || result.insight) {
+          return result;
+        }
+      }
+
+      return parseJsonBlock(allTexts[allTexts.length - 1]);
     }
-    if (texts.length) return parseJson(texts[texts.length - 1]);
+
     return { narrative: 'Supervisor is still querying Genie — please retry in a moment.' };
   }
 
@@ -108,20 +126,40 @@ function unwrap(d: Record<string, unknown>): Record<string, unknown> {
     const c = d.choices[0] as Record<string, unknown>;
     const msg = (c?.message as Record<string, unknown>) || {};
     const content = msg.content;
-    if (typeof content === 'string') return parseJson(content);
+    if (typeof content === 'string') return parseJsonBlock(content);
     if (content && typeof content === 'object') return content as Record<string, unknown>;
   }
 
-  if (typeof d.output === 'string') return parseJson(d.output);
+  if (typeof d.output === 'string') return parseJsonBlock(d.output);
 
-  if ('narrative' in d || 'key_insights' in d || 'observations' in d) return d;
+  if ('narrative' in d || 'key_insights' in d || 'observations' in d || 'insight' in d) return d;
 
   return d;
+}
+
+async function readResponseBody(resp: Response): Promise<string> {
+  if (!resp.body) return resp.text();
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    chunks.push(chunk);
+    if (DEBUG) console.log(`[supervisor] chunk: ${chunk.slice(0, 150)}`);
+  }
+
+  return chunks.join('');
 }
 
 async function postOnce(messages: Message[]): Promise<string> {
   const h = host();
   const url = `https://${h}/serving-endpoints/${endpoint()}/invocations`;
+  console.log(`[supervisor] -> ${endpoint()} | stream=true`);
+
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
@@ -131,56 +169,83 @@ async function postOnce(messages: Message[]): Promise<string> {
     body: JSON.stringify({ input: messages }),
   });
 
+  console.log(`[supervisor] <- HTTP ${resp.status}`);
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`Supervisor HTTP ${resp.status}: ${text.slice(0, 400)}`);
   }
-  return resp.text();
+
+  return readResponseBody(resp);
 }
 
 async function callSupervisor(messages: Message[]): Promise<string> {
+  if (!supervisorConfigured()) {
+    throw new Error('Supervisor not configured — set SUPERVISOR_ENDPOINT_NAME in .env');
+  }
+
   const conversation = [...messages];
+
   for (let attempt = 0; attempt < 6; attempt++) {
     console.log(`[supervisor] attempt ${attempt + 1}…`);
     const raw = await postOnce(conversation);
-    const parsed = parseJson(raw);
+    if (DEBUG) console.log(`[supervisor] response ${raw.length} chars: ${raw.slice(0, 300)}`);
+
+    const parsed = parseJsonBlock(raw);
     const text = String(parsed.narrative || raw);
 
     if (isTimeoutResponse(text)) {
+      console.log('[supervisor] ⚠ internal time limit — sending Continue…');
       conversation.push({ role: 'assistant', content: text });
       conversation.push({ role: 'user', content: 'Continue' });
       continue;
     }
 
-    if (parsed.narrative && Object.keys(parsed).length === 1 && !text.includes('{')) {
-      if (attempt < 5 && text.length > 20) {
-        conversation.push({ role: 'assistant', content: text });
-        conversation.push({ role: 'user', content: 'Continue and return the JSON with a narrative field now.' });
-        continue;
-      }
+    if (
+      parsed.narrative &&
+      Object.keys(parsed).length === 1 &&
+      !text.includes('{') &&
+      attempt < 5 &&
+      text.length > 20
+    ) {
+      console.log('[supervisor] plain text — requesting JSON narrative…');
+      conversation.push({ role: 'assistant', content: text });
+      conversation.push({
+        role: 'user',
+        content: 'Continue and return the JSON with a narrative field now.',
+      });
+      continue;
     }
 
-    if (parsed.narrative || parsed.key_insights || parsed.observations) {
+    if (parsed.narrative || parsed.key_insights || parsed.observations || parsed.insight) {
       return raw;
     }
 
     return raw;
   }
+
   throw new Error('Supervisor max continuations reached');
 }
 
 function extractNarrative(raw: string): string {
-  const parsed = parseJson(raw);
+  const parsed = parseJsonBlock(raw);
+
   if (typeof parsed.narrative === 'string' && parsed.narrative.trim()) {
     return parsed.narrative.trim().slice(0, 600);
   }
+
+  if (typeof parsed.insight === 'string' && parsed.insight.trim()) {
+    return parsed.insight.trim().slice(0, 600);
+  }
+
   if (Array.isArray(parsed.observations) && parsed.observations.length) {
     return String(parsed.observations[0]).slice(0, 600);
   }
+
   if (Array.isArray(parsed.key_insights)) {
     const first = parsed.key_insights[0] as Record<string, unknown> | undefined;
     if (first?.text) return String(first.text).slice(0, 600);
   }
+
   const cleaned = raw.replace(/```json\s*|```\s*/g, '').trim();
   if (cleaned && !cleaned.startsWith('{')) return cleaned.slice(0, 600);
   return '';
@@ -189,11 +254,7 @@ function extractNarrative(raw: string): string {
 export async function getSupervisorSummary(
   entityType: SummaryEntity,
   filters: Record<string, unknown>,
-): Promise<{ narrative: string; source: 'supervisor' | 'fallback' }> {
-  if (!supervisorConfigured()) {
-    throw new Error('Supervisor not configured — set SUPERVISOR_ENDPOINT_NAME in .env');
-  }
-
+): Promise<{ narrative: string; source: 'supervisor' }> {
   const prompt = buildSupervisorPrompt(entityType, filters);
   console.log(`[supervisor] summary tab=${entityType} filters=${JSON.stringify(filters).slice(0, 120)}`);
   const raw = await callSupervisor([{ role: 'user', content: prompt }]);
@@ -206,11 +267,13 @@ export async function getSupervisorSummary(
   return { narrative, source: 'supervisor' };
 }
 
-/** Load all tab summaries in parallel (used by batch endpoint). */
+/** VR parallel mode — one Supervisor call per tab, all run simultaneously. */
 export async function getAllSupervisorSummaries(
   filters: Record<string, unknown>,
 ): Promise<Record<SummaryEntity, string>> {
   const tabs: SummaryEntity[] = ['overview', 'category', 'line', 'dow', 'reason'];
+  console.log(`[supervisor] PARALLEL mode — ${tabs.length} tab summaries`);
+
   const entries = await Promise.all(
     tabs.map(async tab => {
       try {
@@ -222,5 +285,6 @@ export async function getAllSupervisorSummaries(
       }
     }),
   );
+
   return Object.fromEntries(entries) as Record<SummaryEntity, string>;
 }

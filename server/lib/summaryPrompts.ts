@@ -10,10 +10,11 @@ const VIEW = 'uc_dev_cgf_mdip_01.scm_gold.pgt_plnt_prodtn_metric_view';
 const BASE_CONTEXT = `
 You are the SC Manufacturing analytics supervisor agent.
 Focus ONLY on UNPLANNED DOWNTIME (ignore waste metrics).
-Query the metric view: ${VIEW}
+Query Genie using the metric view: ${VIEW}
 Key dimensions: Site, Region, \`Line Desc\`, \`Downtime Category\`, \`Downtime Reason\`, \`Production Date\`, \`Production Period\`, \`Production week\`, Shift, \`Downtime Type\`
 Key measures (use MEASURE() in SQL): \`Unplanned Downtime %\`, \`Unplanned Downtime Hours\`, STOPS
 Filter unplanned rows: TRIM(\`Downtime Type\`) IN ('Unplanned', 'Unspecified')
+Answer from live Genie data for the applied filters — do not invent numbers.
 `.trim();
 
 export const TAB_QUESTIONS: Record<SummaryEntity, string> = {

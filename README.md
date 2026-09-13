@@ -49,17 +49,17 @@ DATABRICKS_SCHEMA=your_schema
 # DATABRICKS_METRIC_VIEW=uc_prod_cgf_mdip_01.your_schema.pgt_plnt_prodtn_metric_view
 ```
 
-When configured, the server queries **`pgt_plnt_prodtn_metric_view` directly** (no Supervisor).  
-AI tab summaries use **Claude Opus 4.6** via Databricks Model Serving (VR architecture):
+When configured, the server queries **`pgt_plnt_prodtn_metric_view` directly** for charts and KPIs.  
+AI tab summaries use the **Supervisor Agent** (VR architecture) — Supervisor orchestrates Genie to query the metric view live:
 
 ```
-CLAUDE_SERVING_ENDPOINT=databricks-claude-opus-4-6
+SUPERVISOR_ENDPOINT_NAME=your-supervisor-endpoint-name
 ```
 
-Claude reads the same SQL metrics JSON the charts use — one batch call for all five KPI tabs (~5–15s).  
-If Claude is not configured, summaries fall back to the Supervisor Agent (`SUPERVISOR_ENDPOINT_NAME`) or template text.
+Summaries run as **background jobs**; the UI polls `/api/job/{id}` while Supervisor queries Genie (same pattern as VR Dashboard).  
+If Supervisor is not configured, summaries fall back to template text from SQL metrics.
 
-Check `/api/status` — `sql_ok` should be `true`, `summaries` should be `claude-opus`.
+Check `/api/status` — `sql_ok` should be `true`, `summaries` should be `supervisor-agent`.
 
 If `mode` is `sql-error`, open `/api/status` and read `sql_test.error` — update `DATABRICKS_METRIC_VIEW` in `.env` with the exact catalog.schema.view from Databricks.
 
@@ -70,8 +70,9 @@ The view has no `Year` column — year filtering uses `YEAR(\`Production Date\`)
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /api/analytics/query/:queryKey` | Chart/KPI data (direct SQL) |
-| `POST /api/summaries` | Tab-specific AI narrative (Claude Opus → Supervisor → template) |
-| `POST /api/summaries/batch` | All KPI tab summaries for current filters |
+| `POST /api/summaries` | Tab-specific AI narrative (Supervisor Agent → Genie) |
+| `POST /api/summaries/batch` | All KPI tab summaries — returns `_job_id`, poll `/api/job/:id` |
+| `GET /api/job/:id` | Poll background Supervisor job (VR pattern) |
 | `POST /api/console-data` | Legacy UI data bundle |
 | `GET /api/warmup` | Warehouse pre-warm |
 

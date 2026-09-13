@@ -6,23 +6,18 @@ import {
   resolveMetricView,
   warmupWarehouse,
 } from '../lib/analytics.js';
-import {
-  claudeConfigured,
-  getClaudeBatchSummaries,
-  getClaudeTabSummary,
-} from '../lib/claudeSummary.js';
 import { buildTabInsights } from '../lib/metricsTransform.js';
 import { sqlConfigured } from '../lib/databricksSql.js';
+import {
+  createJob,
+  failJob,
+  finishJob,
+  newJobId,
+} from '../lib/jobs.js';
 import { getAllSupervisorSummaries, getSupervisorSummary, supervisorConfigured } from '../lib/supervisor.js';
 import type { SummaryEntity } from '../lib/summaryPrompts.js';
 
 const SUMMARY_TABS: SummaryEntity[] = ['overview', 'category', 'line', 'dow', 'reason'];
-
-function resolveSummaryBackend(): 'claude' | 'supervisor' | 'template' {
-  if (claudeConfigured()) return 'claude';
-  if (supervisorConfigured()) return 'supervisor';
-  return 'template';
-}
 
 const summarySchema = z.object({
   entityType: z.enum(['overview', 'category', 'line', 'dow', 'reason']),
@@ -63,8 +58,32 @@ async function fallbackNarrative(
   return insights;
 }
 
+function cachedBatchSummaries(params: Record<string, unknown>): Record<string, string> | null {
+  const summaries = Object.fromEntries(
+    SUMMARY_TABS.map(tab => {
+      const hit = summaryCache.get(summaryCacheKey(tab, params));
+      return [tab, hit?.narrative || ''];
+    }),
+  );
+  const allPresent = SUMMARY_TABS.every(tab => summaries[tab]);
+  return allPresent ? summaries : null;
+}
+
+function storeBatchSummaries(
+  params: Record<string, unknown>,
+  summaries: Record<string, string>,
+  source: string,
+): void {
+  for (const [tab, narrative] of Object.entries(summaries)) {
+    if (narrative) {
+      summaryCache.set(summaryCacheKey(tab, params), { narrative, source, ts: Date.now() });
+    }
+  }
+}
+
 export const summariesRouter = Router();
 
+/** VR pattern — Supervisor Agent → Genie for tab narrative. */
 summariesRouter.post('/summaries', async (req, res) => {
   const parsed = summarySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -86,17 +105,8 @@ summariesRouter.post('/summaries', async (req, res) => {
   }
 
   try {
-    const filters = filtersFromParams(params);
-    const backend = resolveSummaryBackend();
-
-    if (backend === 'claude') {
-      const metrics = await getMetricsBundle(params);
-      const { narrative, source } = await getClaudeTabSummary(entityType, filters, metrics);
-      summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
-      return res.json({ narrative, cached: false, entityType, source });
-    }
-
-    if (backend === 'supervisor') {
+    if (supervisorConfigured()) {
+      const filters = filtersFromParams(params);
       const { narrative, source } = await getSupervisorSummary(entityType, filters);
       summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
       return res.json({ narrative, cached: false, entityType, source });
@@ -121,7 +131,10 @@ summariesRouter.post('/summaries', async (req, res) => {
   }
 });
 
-/** Batch load all KPI tab summaries for current filters (parallel Supervisor calls). */
+/**
+ * VR Dashboard pattern — background Supervisor job + browser polling.
+ * Returns cached summaries immediately, or `_job_id` for async Genie queries.
+ */
 summariesRouter.post('/summaries/batch', async (req, res) => {
   const parsed = batchSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -131,50 +144,50 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
   const filters = filtersFromParams(params);
 
   if (!forceRefresh) {
-    const allCached = SUMMARY_TABS.every(tab => {
-      const hit = summaryCache.get(summaryCacheKey(tab, params));
-      return hit && Date.now() - hit.ts < SUMMARY_TTL_MS;
-    });
-    if (allCached) {
+    const cached = cachedBatchSummaries(params);
+    if (cached) {
       const firstHit = summaryCache.get(summaryCacheKey(SUMMARY_TABS[0], params))!;
-      const summaries = Object.fromEntries(
-        SUMMARY_TABS.map(tab => [tab, summaryCache.get(summaryCacheKey(tab, params))!.narrative]),
-      );
-      return res.json({ summaries, cached: true, source: firstHit.source });
+      return res.json({
+        summaries: cached,
+        cached: true,
+        source: firstHit.source,
+        _job_id: null,
+      });
     }
   }
 
-  try {
-    const backend = resolveSummaryBackend();
-    const metrics = await getMetricsBundle(params);
-    const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
-
-    if (backend === 'claude') {
-      const summaries = await getClaudeBatchSummaries(filters, metrics);
-      const source = 'claude';
-      for (const [tab, narrative] of Object.entries(summaries)) {
-        if (narrative) {
-          summaryCache.set(summaryCacheKey(tab, params), { narrative, source, ts: Date.now() });
-        }
-      }
-      return res.json({ summaries, cached: false, source });
+  if (!supervisorConfigured()) {
+    try {
+      const metrics = await getMetricsBundle(params);
+      const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
+      return res.json({ summaries: templateInsights, cached: false, source: 'template', _job_id: null });
+    } catch (e) {
+      return res.status(500).json({ error: (e as Error).message });
     }
+  }
 
-    if (backend === 'supervisor') {
+  const jobId = newJobId();
+  createJob(jobId);
+
+  void (async () => {
+    try {
+      console.log(`[job ${jobId.slice(0, 8)}] Starting Supervisor batch…`);
       const summaries = await getAllSupervisorSummaries(filters);
-      const source = 'supervisor';
-      for (const [tab, narrative] of Object.entries(summaries)) {
-        if (narrative) {
-          summaryCache.set(summaryCacheKey(tab, params), { narrative, source, ts: Date.now() });
-        }
-      }
-      return res.json({ summaries, cached: false, source });
+      storeBatchSummaries(params, summaries, 'supervisor');
+      finishJob(jobId, { summaries, source: 'supervisor' });
+      console.log(`[job ${jobId.slice(0, 8)}] Done — ${Object.values(summaries).filter(Boolean).length} tabs`);
+    } catch (e) {
+      failJob(jobId, (e as Error).message);
+      console.error(`[job ${jobId.slice(0, 8)}] Failed:`, (e as Error).message);
     }
+  })();
 
-    return res.json({ summaries: templateInsights, cached: false, source: 'template' });
-  } catch (e) {
-    return res.status(500).json({ error: (e as Error).message });
-  }
+  return res.json({
+    _job_id: jobId,
+    _cached: false,
+    status: 'running',
+    source: 'supervisor',
+  });
 });
 
 summariesRouter.get('/warmup', async (_req, res) => {
