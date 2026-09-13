@@ -200,6 +200,8 @@
     compareDay: null,
     compareShift: null,
     focusSourceChartId: null,
+    bootDismissed: false,
+    bootStartedAt: Date.now(),
     liveMetrics: null,
     dashboard: null,
     metricsBase: null,
@@ -616,6 +618,7 @@
     if (showLoading) {
       setDataStatus('loading', 'Loading unplanned DT metrics…');
       setAiSummaryLoading();
+      setBootStatus('Loading unplanned DT metrics');
     }
 
     try {
@@ -632,6 +635,8 @@
 
       if (data.error && !data.metrics) {
         setDataStatus('error', data.error.slice(0, 120));
+        setBootStatus('Unable to load metrics — showing cached layout');
+        dismissBootSplash();
         state.dataLoading = false;
         return;
       }
@@ -652,6 +657,8 @@
     } catch (err) {
       state.dataLoading = false;
       setDataStatus('error', `Data load failed: ${err.message}`);
+      setBootStatus('Connection issue — loading interface');
+      dismissBootSplash();
       console.warn('[console-data]', err);
     }
   }
@@ -686,6 +693,29 @@
     }
   }
 
+  function setBootStatus(text) {
+    const el = document.getElementById('boot-status-text');
+    if (!el) return;
+    el.innerHTML = `${text}<span class="boot-dots" aria-hidden="true"><span></span><span></span><span></span></span>`;
+  }
+
+  function dismissBootSplash() {
+    if (state.bootDismissed) return;
+    const elapsed = Date.now() - state.bootStartedAt;
+    const minMs = 900;
+    if (elapsed < minMs) {
+      setTimeout(dismissBootSplash, minMs - elapsed);
+      return;
+    }
+    state.bootDismissed = true;
+    document.body.classList.add('app-ready');
+    const splash = document.getElementById('boot-splash');
+    if (splash) {
+      splash.classList.add('boot-splash-out');
+      setTimeout(() => splash.remove(), 700);
+    }
+  }
+
   function applyConsoleData(payload) {
     const metrics = payload.metrics || payload;
     state.liveMetrics = metrics;
@@ -708,6 +738,7 @@
       setDataStatus(src === 'cache' || src === 'demo' ? 'cached' : 'live', `Unplanned DT data${yr}${pr}${wk}${site}`);
     }
     state.dataLoading = false;
+    dismissBootSplash();
   }
 
   function applyMetricsToState(m) {
@@ -803,6 +834,7 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    setBootStatus('Preparing Manufacturing Console');
     buildTopNav();
     initFilters();
     initCompare();
@@ -812,6 +844,7 @@
     switchPage('kpi-overview', true);
     switchKpiTab('overview', true);
     loadConsoleData(false);
+    setTimeout(dismissBootSplash, 4000);
     document.addEventListener('click', closeSlicersOnOutsideClick);
   });
 
