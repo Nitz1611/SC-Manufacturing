@@ -267,7 +267,75 @@
       const allowed = new Set(sitesForRegions(active));
       sites = sites.filter(s => allowed.has(s));
     }
-    return sites.length ? sites : [...HEATMAP_SITES];
+    return sites;
+  }
+
+  function isSiteFiltered() {
+    const site = state.filters.site;
+    return Boolean(site && site !== 'All');
+  }
+
+  function isRegionFiltered() {
+    return Boolean(regionsSelected());
+  }
+
+  function alignPeriodValues(vals) {
+    const n = activePeriods().length;
+    const src = vals || [];
+    return Array.from({ length: n }, (_, i) => {
+      if (i >= src.length || src[i] == null) return null;
+      const v = Number(src[i]);
+      return Number.isFinite(v) ? +v.toFixed(2) : null;
+    });
+  }
+
+  function filterContextParts() {
+    const parts = [];
+    const showIn = state.filters.showIn || 'Millions';
+    const timeframe = state.filters.timeframe || 'FY';
+    const year = state.filters.year || '2026';
+    parts.push(`Show: ${showIn}`);
+    parts.push(`${timeframe} ${year}`);
+    if (isSiteFiltered()) parts.push(`Site: ${state.filters.site}`);
+    if (isRegionFiltered()) {
+      const regions = state.filters.region;
+      parts.push(regions.length === 1 ? `Region: ${regions[0]}` : `Regions: ${regions.length} selected`);
+    }
+    return parts;
+  }
+
+  function updateFilterContext() {
+    const parts = filterContextParts();
+    const filterSummary = parts.join(' · ');
+    const page = PAGES.find(p => p.id === state.page);
+    const child = page?.children?.find(c => c.id === state.kpiTab);
+    const navCrumb = child ? `${page?.title || ''} · ${child.title}` : (page?.title || '');
+    const el = document.getElementById('context-breadcrumb');
+    if (el) {
+      el.textContent = navCrumb;
+      el.title = filterSummary;
+    }
+    let ctxBar = document.getElementById('filter-context-bar');
+    if (!ctxBar) {
+      ctxBar = document.createElement('div');
+      ctxBar.id = 'filter-context-bar';
+      ctxBar.className = 'filter-context-bar';
+      document.querySelector('.filter-bar')?.after(ctxBar);
+    }
+    ctxBar.innerHTML = `<span class="filter-context-label">Active filters</span><span class="filter-context-value">${filterSummary}</span>`;
+  }
+
+  function applySiteFilterUiState() {
+    const sites = activeHeatmapSites();
+    if (sites.length === 1) {
+      state.expandedHeatmapSites = { [sites[0]]: true };
+      state.expandedLineSites = { [sites[0]]: true };
+    }
+    updateFilterContext();
+    refreshAllTables();
+    refreshChartsForTab(state.kpiTab);
+    if (state.liveMetrics?.kpis) updateMetricStripDOM(state.liveMetrics.kpis);
+    refreshDtAvgBadges();
   }
 
   function syncSiteRegionFilters(changedId) {
@@ -312,6 +380,16 @@
 
   function networkWeekTrend() {
     const weeks = activeWeeks();
+    const site = state.filters.site;
+    if (site && site !== 'All') {
+      const siteKey = String(site).toUpperCase();
+      const periods = alignPeriodValues(state.liveMetrics?.site_by_period?.[siteKey]);
+      if (periods.some(v => v != null)) {
+        const slice = periods.slice(-weeks.length);
+        while (slice.length < weeks.length) slice.unshift(null);
+        return slice;
+      }
+    }
     const dow = state.liveMetrics?.dow_by_day_week;
     if (dow && Object.keys(dow).length) {
       return weeks.map(week => {
@@ -329,6 +407,36 @@
       const dayVals = DAY_LABELS.map(d => (DOW_DAY_TRENDS_MUTABLE || DOW_DAY_TRENDS)[d]?.[idx]).filter(v => v != null);
       return dayVals.length ? +(avgOf(dayVals).toFixed(2)) : null;
     });
+  }
+
+  function matrixForActiveSite(entityList, valueFn) {
+    const sites = activeHeatmapSites();
+    const matrix = {};
+    entityList.forEach(entity => {
+      matrix[entity] = alignPeriodValues(
+        activePeriods().map((_, i) => {
+          let sum = 0;
+          let count = 0;
+          sites.forEach(site => {
+            const vals = valueFn(site, entity);
+            if (vals[i] != null) {
+              sum += Number(vals[i]);
+              count += 1;
+            }
+          });
+          return count ? +(sum / count).toFixed(2) : null;
+        }),
+      );
+    });
+    return matrix;
+  }
+
+  function categoryMatrixFiltered() {
+    return matrixForActiveSite(CATEGORIES, categoryValuesForSiteHeatmap);
+  }
+
+  function lineMatrixFiltered() {
+    return matrixForActiveSite(LINES, lineValuesForSite);
   }
 
   function templateSummaries() {
@@ -636,8 +744,10 @@
         refreshChartsForTab(state.kpiTab);
         if (state.liveMetrics?.kpis) updateMetricStripDOM(state.liveMetrics.kpis);
         refreshDtAvgBadges();
+        updateFilterContext();
         return;
       }
+      applySiteFilterUiState();
       state.summariesLoaded = false;
       state.summaryFilterKey = null;
       setAiSummaryLoading();
@@ -869,6 +979,7 @@
     refreshDtAvgBadges();
     refreshAllTables();
     refreshChartsForTab(state.kpiTab);
+    updateFilterContext();
     const reasonBody = document.querySelector('.reason-table-body');
     if (reasonBody) reasonBody.innerHTML = buildReasonTable(state.reasonCount);
     const meta = metrics.meta || {};
@@ -980,6 +1091,7 @@
     setBootStatus('Preparing Manufacturing Console');
     buildTopNav();
     initFilters();
+    updateFilterContext();
     initCompare();
     initFocusMode();
     initDataStatusBar();
@@ -1009,19 +1121,19 @@
 
   function sitePeriodTotals(site) {
     const live = state.liveMetrics?.site_by_period?.[site];
-    if (live?.length) return live.map(v => v == null ? null : +Number(v).toFixed(2));
-    if (SITE_PERIOD_OVERRIDES[site]) return [...SITE_PERIOD_OVERRIDES[site]];
+    if (live?.length) return alignPeriodValues(live);
+    if (SITE_PERIOD_OVERRIDES[site]) return alignPeriodValues(SITE_PERIOD_OVERRIDES[site]);
     const total = SITE_DT_TOTALS[site] || 5;
     const weights = [1.08, 1.02, 0.98, 0.94, 1.05, 1.1, 1.12, 0.92, 0.96, 1.0];
     const wSum = weights.reduce((a, b) => a + b, 0);
-    return weights.map(w => +(total * w / wSum * 0.42).toFixed(2));
+    return alignPeriodValues(weights.map(w => +(total * w / wSum * 0.42).toFixed(2)));
   }
 
   function categoryValuesForSiteHeatmap(site, category) {
     const liveCat = state.liveMetrics?.category_by_period?.[category];
     if (liveCat?.length) {
       const mult = SITE_MULTIPLIERS[site] || 1;
-      return liveCat.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2));
+      return alignPeriodValues(liveCat.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2)));
     }
     const sitePeriods = sitePeriodTotals(site);
     const base = CATEGORY_BASE[category] || [];
@@ -1272,12 +1384,7 @@
 
     const page = PAGES.find(p => p.id === state.page);
     const child = page?.children?.find(c => c.id === state.kpiTab);
-    const crumb = child ? `${page.title} · ${child.title}` : (page?.title || '');
-    const el = document.getElementById('context-breadcrumb');
-    if (el) {
-      el.style.opacity = '0';
-      setTimeout(() => { el.textContent = crumb; el.style.opacity = '1'; }, 120);
-    }
+    updateFilterContext();
   }
 
   /* ── Compare & inline detail panels ── */
@@ -1673,7 +1780,7 @@
     state.compareLine = line;
 
     const site = activeSite();
-    const rows = HEATMAP_SITES.map(s => {
+    const rows = activeHeatmapSites().map(s => {
       const vals = lineValuesForSite(s, line);
       const total = avgOf(vals);
       return { site: s, vals, total, isCurrent: s === site };
@@ -2068,7 +2175,11 @@
           state.compareContext = null;
           document.querySelectorAll('.compare-btn-card.active').forEach(b => b.classList.remove('active'));
           document.querySelectorAll('.compare-hint').forEach(h => h.remove());
-          refreshAllTables();
+          if (cfg.id === 'site' || cfg.id === 'region' || cfg.id === 'timeframe' || cfg.id === 'year') {
+            applySiteFilterUiState();
+          } else {
+            refreshAllTables();
+          }
         }
         refreshSlicer(wrap, cfg);
         syncSiteRegionFilters(cfg.id);
@@ -2164,17 +2275,19 @@
     const live = state.liveMetrics?.line_by_period?.[line];
     if (live?.length) {
       const mult = SITE_MULTIPLIERS[site] || 1;
-      return live.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2));
+      return alignPeriodValues(live.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2)));
     }
     const mult = SITE_MULTIPLIERS[site] || 1;
-    return (LINE_BASE[line] || []).map(v => +(v * mult * 0.95).toFixed(2));
+    return alignPeriodValues((LINE_BASE[line] || []).map(v => +(v * mult * 0.95).toFixed(2)));
   }
 
   function linePeriodTotalsForSite(site) {
-    return PERIODS.map((_, i) => {
-      const sum = LINES.reduce((a, l) => a + lineValuesForSite(site, l)[i], 0);
-      return +sum.toFixed(2);
-    });
+    return alignPeriodValues(
+      activePeriods().map((_, i) => {
+        const sum = LINES.reduce((a, l) => a + (lineValuesForSite(site, l)[i] || 0), 0);
+        return +sum.toFixed(2);
+      }),
+    );
   }
 
   function buildLineHeatmapTable(showLegend = true) {
@@ -2514,7 +2627,7 @@
         <div class="heatmap-header-left">
           <span class="data-card-title">Unplanned Downtime Heatmap</span>
           <div class="status-badges">
-            <span class="status-badge">ACTIVE SITES <strong>${HEATMAP_SITES.length} Sites</strong></span>
+            <span class="status-badge">ACTIVE SITES <strong>${activeHeatmapSites().length} Sites</strong></span>
             <span class="status-badge accent">OVERALL DT AVG <strong>—</strong></span>
           </div>
         </div>
@@ -2746,14 +2859,14 @@
       tableEl?.classList.add('hidden-view');
       chartEl?.classList.remove('hidden-view');
       if (cardId === 'category') {
-        makeGroupedBarChart('chart-category', CATEGORIES, CATEGORY_BASE, 8, (cat, canvas) => {
+        makeGroupedBarChart('chart-category', CATEGORIES, categoryMatrixFiltered(), 8, (cat, canvas) => {
           if (!state.detailMode || state.detailContext !== 'category') return;
           const host = canvas.closest('.panel-overlay-host');
           if (host) openCategoryDetailPanel(cat, host);
         });
       }
       if (cardId === 'line') {
-        makeGroupedBarChart('chart-line', LINES, LINE_BASE, 14, (line, canvas) => {
+        makeGroupedBarChart('chart-line', LINES, lineMatrixFiltered(), 14, (line, canvas) => {
           if (!state.detailMode || state.detailContext !== 'line') return;
           const host = canvas.closest('.panel-overlay-host');
           if (host) openLineDetailPanel(line, host);
@@ -2965,7 +3078,7 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-    const items = REASONS_DATA.slice(0, 8);
+    const items = activeReasonsData().slice(0, 8);
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
       data: {
@@ -3165,20 +3278,24 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-    const sites = TOP_SITES.slice(0, count);
+    const allowed = activeHeatmapSites();
+    const sitePool = allowed.length ? allowed : TOP_SITES;
+    const sites = sitePool.slice(0, count);
     const ctx = canvas.getContext('2d');
+    const periods = activePeriods();
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
-        labels: PERIODS,
+        labels: periods,
         datasets: sites.map((site, i) => {
           const color = TOP_SITE_COLORS[i];
           const grad = ctx.createLinearGradient(0, 0, 0, 320);
           grad.addColorStop(0, color + '35');
           grad.addColorStop(1, color + '00');
+          const trend = alignPeriodValues(state.liveMetrics?.site_by_period?.[site] || TOP_SITES_TRENDS[site] || periods.map(() => 0));
           return {
             label: site,
-            data: TOP_SITES_TRENDS[site] || PERIODS.map(() => 0),
+            data: trend,
             borderColor: color,
             backgroundColor: grad,
             fill: true,
