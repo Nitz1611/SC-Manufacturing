@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { QueryKey } from '../../shared/types/dashboard.js';
-import { databricksConfigured, runAnalyticsQuery } from '../lib/analytics.js';
+import { databricksConfigured, getLastSqlError, getLastSqlSuccessAt, resolveMetricView, runAnalyticsQuery, verifyMetricViewAccess } from '../lib/analytics.js';
 import { sqlEnvStatus } from '../lib/env.js';
 import { sqlConfigured, warmupWarehouse } from '../lib/databricksSql.js';
 
@@ -55,13 +55,20 @@ analyticsRouter.get('/warmup', async (_req, res) => {
   }
 });
 
-analyticsRouter.get('/status', (_req, res) => {
+analyticsRouter.get('/status', async (_req, res) => {
   const configured = databricksConfigured();
   const env = sqlEnvStatus();
+  const metricView = resolveMetricView();
+  const sqlTest = configured ? await verifyMetricViewAccess() : { ok: false, error: 'SQL not configured' };
+
   res.json({
     ok: true,
     architecture: 'sc-manufacturing',
     sql_configured: configured,
+    sql_ok: sqlTest.ok,
+    sql_test: sqlTest,
+    last_sql_error: getLastSqlError(),
+    last_sql_success_at: getLastSqlSuccessAt(),
     repo_root: env.repo_root,
     cwd: env.cwd,
     env_file: env.env_file,
@@ -75,8 +82,9 @@ analyticsRouter.get('/status', (_req, res) => {
     warehouse: process.env.DATABRICKS_WAREHOUSE_ID || 'NOT SET',
     host: process.env.DATABRICKS_HOST || process.env.DATABRICKS_SERVER_HOSTNAME || 'NOT SET',
     catalog: process.env.DATABRICKS_CATALOG || 'main',
-    metric_view: process.env.DATABRICKS_METRIC_VIEW || '(catalog).pgt_plnt_prodtn_metric_view',
-    mode: configured ? 'live-sql-metric-view' : 'demo-fallback',
+    schema: process.env.DATABRICKS_SCHEMA || '(not set — two-part view name)',
+    metric_view: metricView,
+    mode: sqlTest.ok ? 'live-sql-metric-view' : configured ? 'sql-error' : 'demo-fallback',
     supervisor: 'not used for chart data',
   });
 });

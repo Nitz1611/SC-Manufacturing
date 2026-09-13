@@ -6,6 +6,7 @@ import { summariesRouter } from './routes/summaries.js';
 import { cacheInfo } from './lib/cache.js';
 import { loadEnv, repoRoot, sqlEnvStatus } from './lib/env.js';
 import { sqlConfigured } from './lib/databricksSql.js';
+import { verifyMetricViewAccess, warmupWarehouse } from './lib/analytics.js';
 
 loadEnv();
 const ROOT = repoRoot();
@@ -61,4 +62,20 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`║  Warmup     : GET  /api/warmup                         ║`);
   console.log('╚══════════════════════════════════════════════════════╝');
   console.log('');
+
+  if (sqlConfigured()) {
+    void (async () => {
+      try {
+        await warmupWarehouse();
+        const test = await verifyMetricViewAccess();
+        if (test.ok) {
+          console.log(`[startup] ✓ metric view OK (${test.row_count ?? 0} rows)`);
+        } else {
+          console.error(`[startup] ✗ metric view check failed: ${test.error}`);
+        }
+      } catch (e) {
+        console.error('[startup] warmup failed:', (e as Error).message);
+      }
+    })();
+  }
 });

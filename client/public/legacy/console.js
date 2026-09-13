@@ -427,8 +427,17 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filters: apiFiltersFromState(), force }),
       });
-      if (!res.ok) throw new Error(`Server ${res.status}`);
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `Server ${res.status}`);
+      }
       const data = await res.json();
+
+      if (data.error && !data.metrics) {
+        setDataStatus('error', data.error.slice(0, 120));
+        state.dataLoading = false;
+        return;
+      }
 
       if (data.metrics) {
         state.metricsBase = data.metrics;

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   getMetricsBundle,
   metricsBundleToConsolePayload,
+  resolveMetricView,
+  verifyMetricViewAccess,
   warmupWarehouse,
 } from '../lib/analytics.js';
 import { buildTabInsights } from '../lib/metricsTransform.js';
@@ -62,6 +64,13 @@ summariesRouter.post('/console-data', async (req, res) => {
     const metrics = await getMetricsBundle(filters);
     res.json(metricsBundleToConsolePayload(metrics));
   } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
+    const message = (e as Error).message;
+    res.status(503).json({
+      error: message,
+      metrics: null,
+      _source: 'error',
+      _cached: true,
+      metric_view: resolveMetricView(),
+    });
   }
 });

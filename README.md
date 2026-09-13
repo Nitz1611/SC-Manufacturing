@@ -45,12 +45,14 @@ DATABRICKS_HOST=your-workspace.cloud.databricks.com
 DATABRICKS_PAT_TOKEN=your-pat-token
 DATABRICKS_CATALOG=your_catalog
 DATABRICKS_SCHEMA=your_schema
-# Or set the full view name:
-# DATABRICKS_METRIC_VIEW=your_catalog.your_schema.pgt_plnt_prodtn_metric_view
+# If TABLE_OR_VIEW_NOT_FOUND, set the exact path from Databricks (overrides catalog + schema):
+# DATABRICKS_METRIC_VIEW=uc_prod_cgf_mdip_01.your_schema.pgt_plnt_prodtn_metric_view
 ```
 
 When configured, the server queries **`pgt_plnt_prodtn_metric_view` directly** (no Supervisor).  
-Check `/api/status` — `mode` should be `live-sql-metric-view` and UI status bar shows **"Live unplanned DT data from metric view"**.
+Check `/api/status` — `sql_ok` should be `true`, `mode` should be `live-sql-metric-view`, and the UI status bar shows **"Live unplanned DT data from metric view"**.
+
+If `mode` is `sql-error`, open `/api/status` and read `sql_test.error` — update `DATABRICKS_METRIC_VIEW` in `.env` with the exact catalog.schema.view from Databricks.
 
 ## API endpoints
 
