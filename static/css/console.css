@@ -1348,6 +1348,41 @@ body {
 .compare-table .site-best td { background: #e8f8f4 !important; font-weight: 700; }
 .compare-table .site-worst td { background: #fef2f2 !important; }
 
+.data-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+}
+
+.data-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+
+.data-status-bar.loading { color: #92400e; background: #fffbeb; }
+.data-status-bar.loading .data-status-dot { background: #f59e0b; animation: pulseDot 1.2s ease-in-out infinite; }
+
+.data-status-bar.live { color: #065f46; background: #ecfdf5; }
+.data-status-bar.live .data-status-dot { background: #10b981; }
+
+.data-status-bar.cached { color: #1e40af; background: #eff6ff; }
+.data-status-bar.cached .data-status-dot { background: #3b82f6; }
+
+.data-status-bar.error { color: #991b1b; background: #fef2f2; }
+.data-status-bar.error .data-status-dot { background: #ef4444; }
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /* ── REASON TABLE ── */
 .reason-table-card .reason-table-body {
   padding: 0;

@@ -201,20 +201,274 @@
     compareDay: null,
     compareShift: null,
     focusSourceChartId: null,
+    liveMetrics: null,
+    dashboard: null,
+    dataLoading: false,
+    dataPollTimer: null,
+    dataReloadTimer: null,
   };
 
-  const FOCUS_CANVAS_ID = 'focus-mode-canvas';
+  let REASONS_DATA_MUTABLE = null;
+  let TREND_DATA_MUTABLE = null;
+  let PERIODS_MUTABLE = null;
+  let DOW_WEEKS_MUTABLE = null;
+  let DOW_DAY_TRENDS_MUTABLE = null;
+
+  function activePeriods() {
+    return PERIODS_MUTABLE?.length ? PERIODS_MUTABLE : PERIODS;
+  }
+
+  function activeWeeks() {
+    return DOW_WEEKS_MUTABLE?.length ? DOW_WEEKS_MUTABLE : DOW_WEEKS;
+  }
+
+  function activeReasonsData() {
+    return REASONS_DATA_MUTABLE?.length ? REASONS_DATA_MUTABLE : REASONS_DATA;
+  }
+
+  function activeTrendData() {
+    return TREND_DATA_MUTABLE?.length ? TREND_DATA_MUTABLE : TREND_DATA;
+  }
+
+  function activeDayTrends() {
+    return DOW_DAY_TRENDS_MUTABLE || DOW_DAY_TRENDS;
+  }
+
+  /* ── Live data API ── */
+  function apiFiltersFromState() {
+    return {
+      showIn: state.filters.showIn,
+      timeframe: state.filters.timeframe,
+      year: state.filters.year,
+      site: state.filters.site,
+      region: state.filters.region,
+      market: state.filters.market,
+      period: (state.filters.timeframe || 'Week').toLowerCase() === 'week' ? 'week' : (state.filters.timeframe || 'Week').toLowerCase(),
+    };
+  }
+
+  function initDataStatusBar() {
+    if (document.getElementById('data-status-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'data-status-bar';
+    bar.className = 'data-status-bar loading';
+    bar.innerHTML = '<span class="data-status-dot"></span><span class="data-status-text">Loading metric view data…</span>';
+    document.querySelector('.filter-bar')?.after(bar);
+  }
+
+  function setDataStatus(mode, text) {
+    const bar = document.getElementById('data-status-bar');
+    if (!bar) return;
+    bar.className = `data-status-bar ${mode}`;
+    bar.querySelector('.data-status-text').textContent = text;
+  }
+
+  function scheduleDataReload() {
+    clearTimeout(state.dataReloadTimer);
+    state.dataReloadTimer = setTimeout(() => loadConsoleData(false), 450);
+  }
+
+  async function loadConsoleData(force = false) {
+    if (state.dataLoading && !force) return;
+    state.dataLoading = true;
+    setDataStatus('loading', 'Querying pgt_plnt_prodtn_metric_view…');
+
+    if (state.dataPollTimer) {
+      clearInterval(state.dataPollTimer);
+      state.dataPollTimer = null;
+    }
+
+    try {
+      const res = await fetch('/api/console-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filters: apiFiltersFromState(), force }),
+      });
+      if (!res.ok) throw new Error(`Server ${res.status}`);
+      const data = await res.json();
+
+      if (data._cached && data.metrics) {
+        applyConsoleData(data);
+        return;
+      }
+
+      const jobId = data._job_id;
+      if (!jobId) throw new Error('No job_id returned');
+      state.dataPollTimer = setInterval(() => pollConsoleJob(jobId), 4000);
+    } catch (err) {
+      state.dataLoading = false;
+      setDataStatus('error', `Data load failed: ${err.message}`);
+      console.warn('[console-data]', err);
+    }
+  }
+
+  async function pollConsoleJob(jobId) {
+    try {
+      const res = await fetch(`/api/job/${jobId}`);
+      const job = await res.json();
+
+      if (job.status === 'running') {
+        setDataStatus('loading', job.message || `Querying Genie… ${job.elapsed || 0}s`);
+        return;
+      }
+
+      clearInterval(state.dataPollTimer);
+      state.dataPollTimer = null;
+      state.dataLoading = false;
+
+      if (job.status === 'error') {
+        setDataStatus('error', job.error || 'Supervisor query failed');
+        return;
+      }
+
+      if (job.status === 'done' && job.result) {
+        applyConsoleData(job.result);
+      }
+    } catch (err) {
+      console.warn('[poll]', err.message);
+    }
+  }
+
+  function applyConsoleData(payload) {
+    const metrics = payload.metrics || payload;
+    const dashboard = payload.dashboard || {};
+    state.liveMetrics = metrics;
+    state.dashboard = dashboard;
+    applyMetricsToState(metrics);
+    updateMetricStripDOM(metrics.kpis || dashboard.kpis);
+    updateAiSummariesDOM(metrics, dashboard);
+    refreshAllTables();
+    refreshChartsForTab(state.kpiTab);
+    const reasonBody = document.querySelector('.reason-table-body');
+    if (reasonBody) reasonBody.innerHTML = buildReasonTable(state.reasonCount);
+    const meta = metrics.meta || {};
+    const src = meta.source || 'live';
+    const yr = meta.year ? ` · Year ${meta.year}` : '';
+    const pr = meta.period ? ` · ${meta.period}` : '';
+    const wk = meta.week ? ` · Week ${meta.week}` : '';
+    setDataStatus(src === 'cache' ? 'cached' : 'live', `Metric view data loaded${yr}${pr}${wk}`);
+    state.dataLoading = false;
+  }
+
+  function applyMetricsToState(m) {
+    if (m.periods?.length) PERIODS_MUTABLE = m.periods.map(String);
+    if (m.weeks?.length) DOW_WEEKS_MUTABLE = m.weeks.map(String);
+    if (m.period_trend?.length) TREND_DATA_MUTABLE = m.period_trend.map(v => +Number(v).toFixed(2));
+    if (m.reasons?.length) {
+      REASONS_DATA_MUTABLE = m.reasons.map(r => ({
+        reason: r.reason || r.RSN || 'Unknown',
+        hours: +Number(r.hours || 0).toFixed(2),
+        pct: +Number(r.pct || 0).toFixed(2),
+      }));
+    }
+
+    if (m.dow_by_day_week && Object.keys(m.dow_by_day_week).length) {
+      DOW_DAY_TRENDS_MUTABLE = {};
+      DAY_LABELS.forEach(day => {
+        const weekMap = m.dow_by_day_week[day] || {};
+        DOW_DAY_TRENDS_MUTABLE[day] = activeWeeks().map(w => +(weekMap[w] ?? 0).toFixed(2));
+      });
+    }
+
+    if (m.site_by_period && Object.keys(m.site_by_period).length) {
+      Object.entries(m.site_by_period).forEach(([site, vals]) => {
+        SITE_PERIOD_OVERRIDES[site] = vals.map(v => v == null ? null : +Number(v).toFixed(2));
+      });
+    }
+
+    if (m.category_by_period && Object.keys(m.category_by_period).length) {
+      Object.entries(m.category_by_period).forEach(([cat, vals]) => {
+        if (CATEGORIES.includes(cat)) {
+          CATEGORY_BASE[cat] = vals.map(v => +Number(v).toFixed(2));
+        }
+      });
+    }
+
+    if (m.line_by_period && Object.keys(m.line_by_period).length) {
+      Object.entries(m.line_by_period).forEach(([line, vals]) => {
+        if (LINE_BASE[line] !== undefined) {
+          LINE_BASE[line] = vals.map(v => +Number(v).toFixed(2));
+        }
+      });
+    }
+
+    if (m.top_lines && Object.keys(m.top_lines).length) {
+      Object.keys(TOP_LINE_DT).forEach(k => delete TOP_LINE_DT[k]);
+      Object.entries(m.top_lines).forEach(([line, pct]) => {
+        TOP_LINE_DT[line] = +Number(pct).toFixed(2);
+      });
+    }
+
+    if (m.top_sites_trend && Object.keys(m.top_sites_trend).length) {
+      Object.entries(m.top_sites_trend).forEach(([site, vals]) => {
+        TOP_SITES_TRENDS[site] = vals.map(v => +Number(v).toFixed(2));
+      });
+    }
+  }
+
+  function kpiDirectionClass(direction) {
+    if (direction === 'good') return 'down';
+    if (direction === 'bad') return 'up';
+    return 'neutral';
+  }
+
+  function updateMetricStripDOM(kpis) {
+    const root = document.getElementById('metric-strip-root');
+    if (!root || !kpis) return;
+    const dt = kpis.downtime_pct || {};
+    const waste = kpis.waste_pct || {};
+    const stops = kpis.stops || {};
+    const oee = kpis.oee || {};
+    root.innerHTML = `
+      <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">${dt.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(dt.direction)}">${dt.delta || ''}</div></div>
+      <div class="metric-card"><div class="metric-label">Waste %</div><div class="metric-value">${waste.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(waste.direction)}">${waste.delta || ''}</div></div>
+      <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">${stops.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(stops.direction)}">${stops.delta || ''}</div></div>
+      <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">${oee.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(oee.direction)}">${oee.delta || ''}</div></div>`;
+  }
+
+  function insightSummaryText(metrics, dashboard, tab) {
+    const insights = (metrics.key_insights?.length ? metrics.key_insights : dashboard.key_insights) || [];
+    const observations = (metrics.observations?.length ? metrics.observations : dashboard.observations) || [];
+    const parts = [];
+    insights.slice(0, 2).forEach(i => {
+      if (typeof i === 'string') parts.push(i);
+      else if (i?.text) parts.push(i.text);
+    });
+    if (parts.length < 2 && observations.length) parts.push(observations[0]);
+    if (!parts.length) return null;
+    return parts.join(' ');
+  }
+
+  function updateAiSummariesDOM(metrics, dashboard) {
+    const map = {
+      overview: insightSummaryText(metrics, dashboard, 'overview'),
+      category: insightSummaryText(metrics, dashboard, 'category'),
+      line: insightSummaryText(metrics, dashboard, 'line'),
+      dow: insightSummaryText(metrics, dashboard, 'dow'),
+      reason: insightSummaryText(metrics, dashboard, 'reason'),
+    };
+    Object.entries(map).forEach(([tab, text]) => {
+      if (!text) return;
+      document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+        el.textContent = text;
+      });
+    });
+  }
 
   document.addEventListener('DOMContentLoaded', () => {
     buildTopNav();
     initFilters();
     initCompare();
     initFocusMode();
+    initDataStatusBar();
     renderKpiContent();
     switchPage('kpi-overview', true);
     switchKpiTab('overview', true);
+    loadConsoleData(false);
     document.addEventListener('click', closeSlicersOnOutsideClick);
   });
+
+  const FOCUS_CANVAS_ID = 'focus-mode-canvas';
 
   /* ── Site/category data helpers ── */
   function activeSite() {
@@ -227,10 +481,12 @@
   }
 
   function periodBaseTotals() {
-    return PERIODS.map((_, i) => CATEGORIES.reduce((a, c) => a + (CATEGORY_BASE[c][i] || 0), 0));
+    return activePeriods().map((_, i) => CATEGORIES.reduce((a, c) => a + (CATEGORY_BASE[c][i] || 0), 0));
   }
 
   function sitePeriodTotals(site) {
+    const live = state.liveMetrics?.site_by_period?.[site];
+    if (live?.length) return live.map(v => v == null ? null : +Number(v).toFixed(2));
     if (SITE_PERIOD_OVERRIDES[site]) return [...SITE_PERIOD_OVERRIDES[site]];
     const total = SITE_DT_TOTALS[site] || 5;
     const weights = [1.08, 1.02, 0.98, 0.94, 1.05, 1.1, 1.12, 0.92, 0.96, 1.0];
@@ -239,10 +495,15 @@
   }
 
   function categoryValuesForSiteHeatmap(site, category) {
+    const liveCat = state.liveMetrics?.category_by_period?.[category];
+    if (liveCat?.length) {
+      const mult = SITE_MULTIPLIERS[site] || 1;
+      return liveCat.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2));
+    }
     const sitePeriods = sitePeriodTotals(site);
     const base = CATEGORY_BASE[category] || [];
     const baseSum = periodBaseTotals();
-    return PERIODS.map((_, i) => {
+    return activePeriods().map((_, i) => {
       if (sitePeriods[i] == null) return null;
       const ratio = (base[i] || 0) / (baseSum[i] || 1);
       return +(sitePeriods[i] * ratio).toFixed(2);
@@ -1260,6 +1521,7 @@
           refreshAllTables();
         }
         refreshSlicer(wrap, cfg);
+        scheduleDataReload();
       });
       optionsEl.appendChild(row);
     });
@@ -1316,7 +1578,7 @@
 
   /* ── Content builders ── */
   function metricStripHTML() {
-    return `<div class="metric-strip">
+    return `<div class="metric-strip" id="metric-strip-root">
       <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">6.24%</div><div class="metric-delta up">↑ 1.24pp vs target (5%)</div></div>
       <div class="metric-card"><div class="metric-label">Waste %</div><div class="metric-value">3.02%</div><div class="metric-delta down">↓ 0.18pp vs prior week</div></div>
       <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">819</div><div class="metric-delta down">↓ 2,451 vs prior week</div></div>
@@ -1327,21 +1589,21 @@
   function aiSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text">Overall unplanned downtime shows variation across sites, lines, categories, days, and periods. Equipment and Changeover categories drive the largest share at Aberdeen, with BCP1 and SUN1 lines contributing disproportionately. Latest periods (P8–P10) show an upward trend — prioritize Mechanical failure root causes and Shift B handover gaps.</p>
+      <p class="ai-summary-text" data-ai-summary="overview">Overall unplanned downtime shows variation across sites, lines, categories, days, and periods. Equipment and Changeover categories drive the largest share at Aberdeen, with BCP1 and SUN1 lines contributing disproportionately. Latest periods (P8–P10) show an upward trend — prioritize Mechanical failure root causes and Shift B handover gaps.</p>
     </div></div>`;
   }
 
   function categoryTabSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text">Unplanned downtime is primarily driven by a few key categories and sites. Equipment and Operation categories contribute the largest share across the network, while Bridgeview and Brookhollow lead site-level totals. Periods P8–P10 show elevated Equipment downtime — prioritize mechanical failure root causes and cross-site benchmarking for Changeover and Sanitation categories.</p>
+      <p class="ai-summary-text" data-ai-summary="category">Unplanned downtime is primarily driven by a few key categories and sites. Equipment and Operation categories contribute the largest share across the network, while Bridgeview and Brookhollow lead site-level totals. Periods P8–P10 show elevated Equipment downtime — prioritize mechanical failure root causes and cross-site benchmarking for Changeover and Sanitation categories.</p>
     </div></div>`;
   }
 
   function lineTabSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text">Line-level downtime is concentrated in a few high-impact line/category combinations. TCS1 and SUN1 at Aberdeen drive disproportionate share, while Bridgeview site totals remain elevated across periods. Prioritize mechanical failures on top lines and standardize changeover procedures across HP17T1 and FLK17T1 performers.</p>
+      <p class="ai-summary-text" data-ai-summary="line">Line-level downtime is concentrated in a few high-impact line/category combinations. TCS1 and SUN1 at Aberdeen drive disproportionate share, while Bridgeview site totals remain elevated across periods. Prioritize mechanical failures on top lines and standardize changeover procedures across HP17T1 and FLK17T1 performers.</p>
     </div></div>`;
   }
 
@@ -1466,19 +1728,19 @@
   function dowTabSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text">Unplanned downtime varies meaningfully by day of week and shift. Thursday and Tuesday show the highest DT % across recent weeks, while Saturday remains the lowest. Shift 1 consistently drives elevated downtime on Sundays and Thursdays — prioritize handover gaps and mechanical failures on those combinations for targeted improvement.</p>
+      <p class="ai-summary-text" data-ai-summary="dow">Unplanned downtime varies meaningfully by day of week and shift. Thursday and Tuesday show the highest DT % across recent weeks, while Saturday remains the lowest. Shift 1 consistently drives elevated downtime on Sundays and Thursdays — prioritize handover gaps and mechanical failures on those combinations for targeted improvement.</p>
     </div></div>`;
   }
 
   function reasonTabSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text">Unplanned DT % fluctuates across periods with a recent peak in P4 (8.85%) and a low in P3 (7.49%). "No Event" remains the top contributor at 6,255 hours (0.48%), followed by Unplanned Sanitation and Insufficient Qualified Staff. Focus root-cause reduction on the top three reasons to drive the largest period-over-period improvement.</p>
+      <p class="ai-summary-text" data-ai-summary="reason">Unplanned DT % fluctuates across periods with a recent peak in P4 (8.85%) and a low in P3 (7.49%). "No Event" remains the top contributor at 6,255 hours (0.48%), followed by Unplanned Sanitation and Insufficient Qualified Staff. Focus root-cause reduction on the top three reasons to drive the largest period-over-period improvement.</p>
     </div></div>`;
   }
 
   function buildReasonTable(count = 20) {
-    const rows = REASONS_DATA.slice(0, count);
+    const rows = activeReasonsData().slice(0, count);
     const maxHours = rows[0]?.hours || 1;
     return `<div class="table-scroll reason-table-scroll">
       <table class="data-table reason-table">
@@ -1568,8 +1830,8 @@
 
     return `<div class="table-scroll heatmap-scroll">${showLegend ? heatmapLegendHTML(true) : ''}<table class="data-table heatmap-table"><thead>
       <tr class="header-group"><th rowspan="2">Day of Week</th><th rowspan="2">Shift</th>
-        <th colspan="${DOW_WEEKS.length}">2026</th><th colspan="2">Total</th></tr>
-      <tr>${DOW_WEEKS.map(w => `<th>${w.replace('2026', '')}</th>`).join('')}<th>Total</th><th>Total</th></tr>
+        <th colspan="${activeWeeks().length}">${state.liveMetrics?.meta?.year || state.filters.year || '2026'}</th><th colspan="2">Total</th></tr>
+      <tr>${activeWeeks().map(w => `<th>${w.replace('2026', '')}</th>`).join('')}<th>Total</th><th>Total</th></tr>
       </thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -2050,7 +2312,7 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-    const datasets = PERIODS.map((p, i) => ({
+    const datasets = activePeriods().map((p, i) => ({
       label: p,
       data: labels.map(l => matrix[l]?.[i] ?? 0),
       backgroundColor: PERIOD_COLORS[i],
@@ -2093,7 +2355,7 @@
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
-        labels: DOW_WEEKS,
+        labels: activeWeeks(),
         datasets: days.map((day, i) => {
           const color = DOW_DAY_COLORS[DAY_LABELS.indexOf(day)] || DOW_DAY_COLORS[i];
           const grad = ctx.createLinearGradient(0, 0, 0, 320);
@@ -2101,7 +2363,7 @@
           grad.addColorStop(1, color + '00');
           return {
             label: day,
-            data: DOW_DAY_TRENDS[day] || DOW_WEEKS.map(() => 0),
+            data: activeDayTrends()[day] || activeWeeks().map(() => 0),
             borderColor: color,
             backgroundColor: grad,
             fill: true,
@@ -2180,12 +2442,14 @@
   }
 
   function reasonTrendSlice(filter = 'all') {
-    if (filter === 'all') return { labels: PERIODS, data: TREND_DATA };
+    const periods = activePeriods();
+    const trend = activeTrendData();
+    if (filter === 'all') return { labels: periods, data: trend };
     const n = parseInt(filter, 10);
-    if (!Number.isNaN(n) && n > 0 && n < TREND_DATA.length) {
-      return { labels: PERIODS.slice(-n), data: TREND_DATA.slice(-n) };
+    if (!Number.isNaN(n) && n > 0 && n < trend.length) {
+      return { labels: periods.slice(-n), data: trend.slice(-n) };
     }
-    return { labels: PERIODS, data: TREND_DATA };
+    return { labels: periods, data: trend };
   }
 
   function makeReasonTrendLineChart(canvasId, filter = 'all') {
