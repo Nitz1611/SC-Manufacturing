@@ -54,6 +54,9 @@
     CANTON: [2.42, 2.18, 2.05, 1.92, 2.31, 2.14, 2.48, 2.02, 2.19, 2.06],
     CHARLOTTE: [0.10, 0.08, 0.09, 0.07, 0.11, 0.08, 0.10, 0.07, 0.09, 0.08],
   };
+  const SITE_PERIOD_DEFAULTS = Object.fromEntries(
+    Object.entries(SITE_PERIOD_OVERRIDES).map(([site, vals]) => [site, [...vals]]),
+  );
   const LINE_TREND_SITES = ['ABERDEEN', 'ARLINGTON', 'BELOIT', 'BRIDGEVIEW', 'BROOKHOLLOW', 'CAMBRIDGE'];
   const LINE_TREND_COLORS = ['#2563eb', '#f59e0b', '#10b981', '#8b5cf6', '#ef4444', '#0ea5e9'];
   const TOP_LINE_DT = {
@@ -287,6 +290,26 @@
       const v = Number(src[i]);
       return Number.isFinite(v) ? +v.toFixed(2) : null;
     });
+  }
+
+  function periodValuesHaveSignal(vals) {
+    return (vals || []).some(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0);
+  }
+
+  function resolveSitePeriodTotals(site, metrics) {
+    const live = metrics?.site_by_period?.[site];
+    if (live?.length) {
+      const aligned = alignPeriodValues(live);
+      if (periodValuesHaveSignal(aligned)) return aligned;
+    }
+    const override = SITE_PERIOD_OVERRIDES[site];
+    if (override?.length && periodValuesHaveSignal(override)) return alignPeriodValues(override);
+    const defaults = SITE_PERIOD_DEFAULTS[site];
+    if (defaults?.length && periodValuesHaveSignal(defaults)) return alignPeriodValues(defaults);
+    const total = SITE_DT_TOTALS[site] || 5;
+    const weights = [1.08, 1.02, 0.98, 0.94, 1.05, 1.1, 1.12, 0.92, 0.96, 1.0];
+    const wSum = weights.reduce((a, b) => a + b, 0);
+    return alignPeriodValues(weights.map(w => +(total * w / wSum * 0.42).toFixed(2)));
   }
 
   function filterContextParts() {
@@ -772,7 +795,12 @@
         m.period_trend = m.period_trend.map(v => +(Number(v) * mult * 0.95).toFixed(2));
       }
       if (sqlScoped && m.site_by_period?.[siteKey]?.length) {
-        m.period_trend = alignPeriodValues(m.site_by_period[siteKey]);
+        const scoped = alignPeriodValues(m.site_by_period[siteKey]);
+        if (periodValuesHaveSignal(scoped)) m.period_trend = scoped;
+      }
+      if (!periodValuesHaveSignal(m.period_trend)) {
+        const resolved = resolveSitePeriodTotals(siteKey, m);
+        if (periodValuesHaveSignal(resolved)) m.period_trend = resolved;
       }
       m.meta = { ...(m.meta || {}), filtered_site: siteKey };
     } else if (activeRegions) {
@@ -789,7 +817,62 @@
     }
 
     m.tab_insights = buildTabInsightsClient(m);
+    m.kpis = deriveKpisFromMetrics(m);
     return m;
+  }
+
+  function deriveKpisFromMetrics(m) {
+    const base = m.kpis || {};
+    const rawPct = parseFloat(String(base.downtime_pct?.value || '').replace('%', '').trim());
+    let dtPct = Number.isFinite(rawPct) ? rawPct : 0;
+    let dtHrs = parseHoursValue(base.downtime_hrs?.value);
+    let stops = parseInt(String(base.stops?.value || '0').replace(/,/g, ''), 10);
+    if (Number.isNaN(stops)) stops = 0;
+
+    const sites = activeHeatmapSites();
+    let periodVals = sites.flatMap(s => resolveSitePeriodTotals(s, m))
+      .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0);
+
+    if (!periodVals.length && m.period_trend?.length) {
+      periodVals = m.period_trend.filter(v => v != null && Number(v) > 0);
+    }
+
+    if (periodVals.length && dtPct === 0) {
+      dtPct = periodVals.reduce((a, b) => a + Number(b), 0) / periodVals.length;
+    }
+
+    if (dtHrs === 0 && dtPct > 0) {
+      const siteKey = sites.length === 1 ? sites[0] : null;
+      const mult = siteKey ? (SITE_MULTIPLIERS[siteKey] || 1) : 1;
+      const n = activePeriods().length || 10;
+      dtHrs = Math.round((112474 / 6.2) * dtPct * mult * (periodVals.length / n));
+    }
+
+    if (stops === 0 && dtPct > 0) {
+      const siteKey = sites.length === 1 ? sites[0] : null;
+      const mult = siteKey ? (SITE_MULTIPLIERS[siteKey] || 1) : 1;
+      stops = Math.max(1, Math.round(819 * (dtPct / 6.2) * mult));
+    }
+
+    const benchmark = dtPct > 0 ? dtPct : 6.2;
+    return {
+      downtime_pct: {
+        value: `${dtPct.toFixed(2)}%`,
+        delta: base.downtime_pct?.delta || 'vs prior period',
+        direction: dtPct === 0 ? 'neutral' : dtPct >= benchmark * 1.05 ? 'bad' : 'good',
+      },
+      downtime_hrs: {
+        value: `${Math.round(dtHrs).toLocaleString()} h`,
+        delta: base.downtime_hrs?.delta || '',
+        direction: dtHrs === 0 ? 'neutral' : (base.downtime_hrs?.direction || 'warn'),
+      },
+      stops: {
+        value: String(stops || 0),
+        delta: base.stops?.delta || '',
+        direction: stops === 0 ? 'neutral' : (base.stops?.direction || 'warn'),
+      },
+      oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
+    };
   }
 
   function scheduleDataReload(fromFilterId) {
@@ -1074,7 +1157,9 @@
 
     if (m.site_by_period && Object.keys(m.site_by_period).length) {
       Object.entries(m.site_by_period).forEach(([site, vals]) => {
-        SITE_PERIOD_OVERRIDES[site] = vals.map(v => v == null ? null : +Number(v).toFixed(2));
+        if (periodValuesHaveSignal(vals)) {
+          SITE_PERIOD_OVERRIDES[site] = vals.map(v => v == null ? null : +Number(v).toFixed(2));
+        }
       });
     }
 
@@ -1120,13 +1205,25 @@
 
   function updateMetricStripDOM(kpis) {
     if (!kpis) return;
-    const dt = kpis.downtime_pct || {};
-    const dtHrs = kpis.downtime_hrs || {};
-    const stops = kpis.stops || {};
-    const oee = kpis.oee || {};
+    const resolved = deriveKpisFromMetrics({ kpis, site_by_period: state.liveMetrics?.site_by_period, period_trend: state.liveMetrics?.period_trend });
+    const dt = resolved.downtime_pct || {};
+    const dtHrs = resolved.downtime_hrs || {};
+    const stops = resolved.stops || {};
+    const oee = resolved.oee || {};
+    const mode = showInMode();
+    const primaryLabel = mode === 'percentage'
+      ? 'Unplanned DT %'
+      : mode === 'millions'
+        ? 'Unplanned DT Hours (MM)'
+        : 'Unplanned DT Hours (M)';
+    const primaryValue = mode === 'percentage' ? (dt.value || '—') : formatKpiHoursDisplay(dtHrs.value);
+    const secondaryLabel = mode === 'percentage' ? 'Unplanned DT Hours' : 'Unplanned DT %';
+    const secondaryValue = mode === 'percentage' ? formatKpiHoursDisplay(dtHrs.value) : (dt.value || '—');
+    const primaryMetric = mode === 'percentage' ? dt : dtHrs;
+    const secondaryMetric = mode === 'percentage' ? dtHrs : dt;
     const html = `
-      <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">${dt.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(dt.direction)}">${dt.delta || ''}</div></div>
-      <div class="metric-card"><div class="metric-label">Unplanned DT Hours</div><div class="metric-value">${formatKpiHoursDisplay(dtHrs.value)}</div><div class="metric-delta ${kpiDirectionClass(dtHrs.direction)}">${dtHrs.delta || ''}</div></div>
+      <div class="metric-card"><div class="metric-label">${primaryLabel}</div><div class="metric-value">${primaryValue}</div><div class="metric-delta ${kpiDirectionClass(primaryMetric.direction)}">${primaryMetric.delta || ''}</div></div>
+      <div class="metric-card"><div class="metric-label">${secondaryLabel}</div><div class="metric-value">${secondaryValue}</div><div class="metric-delta ${kpiDirectionClass(secondaryMetric.direction)}">${secondaryMetric.delta || ''}</div></div>
       <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">${stops.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(stops.direction)}">${stops.delta || ''}</div></div>
       <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">${oee.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(oee.direction)}">${oee.delta || ''}</div></div>`;
     document.querySelectorAll('.metric-strip-root').forEach(root => {
@@ -1176,13 +1273,7 @@
   }
 
   function sitePeriodTotals(site) {
-    const live = state.liveMetrics?.site_by_period?.[site];
-    if (live?.length) return alignPeriodValues(live);
-    if (SITE_PERIOD_OVERRIDES[site]) return alignPeriodValues(SITE_PERIOD_OVERRIDES[site]);
-    const total = SITE_DT_TOTALS[site] || 5;
-    const weights = [1.08, 1.02, 0.98, 0.94, 1.05, 1.1, 1.12, 0.92, 0.96, 1.0];
-    const wSum = weights.reduce((a, b) => a + b, 0);
-    return alignPeriodValues(weights.map(w => +(total * w / wSum * 0.42).toFixed(2)));
+    return resolveSitePeriodTotals(site, state.liveMetrics);
   }
 
   function categoryValuesForSiteHeatmap(site, category) {
@@ -1351,18 +1442,21 @@
   function summaryTd(vals, max = 8) {
     const summary = tableSummaryValue(vals);
     if (summary == null) return `<td class="heat-cell heat-empty col-total">-</td>`;
+    const numeric = vals.filter(v => v != null && Number.isFinite(Number(v)));
+    const avgPct = numeric.length ? avgOf(numeric) : null;
     if (isHoursDisplayMode()) {
-      const style = heatStyle(Math.min(summary / totalDtHours() * yearAvgDtPct() * activePeriods().length, max), max, true);
+      const style = heatStyle(avgPct, max, true);
       return `<td class="heat-cell col-total" style="background:${style.bg};color:${style.color}">${formatTableSummary(summary, false)}</td>`;
     }
     return heatTd(summary, max, 'col-total');
   }
 
   function heatmapLegendHTML(compact = false) {
+    const suffix = isHoursDisplayMode() ? ' (color = DT % intensity)' : '';
     return `<div class="heatmap-legend${compact ? ' compact' : ''}">
-      <span class="legend-label">Lower DT %</span>
+      <span class="legend-label">Lower DT %${suffix}</span>
       <div class="legend-bar"></div>
-      <span class="legend-label">Higher DT %</span>
+      <span class="legend-label">Higher DT %${suffix}</span>
     </div>`;
   }
 
@@ -2126,7 +2220,7 @@
             <tbody><tr>
               <td>Unplanned DT %</td>
               ${vals.map(v => heatTd(v, 14)).join('')}
-              ${heatTd(avg, 14, 'col-total')}
+              ${summaryTd(vals, 14)}
             </tr></tbody>
           </table>
         </div>
