@@ -4,3 +4,10 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+*.tsbuildinfo
+
+# Runtime cache — regenerated locally, do not commit
+cache.json
+
+# Build output
+client/dist/
