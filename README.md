@@ -50,22 +50,25 @@ DATABRICKS_SCHEMA=your_schema
 ```
 
 When configured, the server queries **`pgt_plnt_prodtn_metric_view` directly** (no Supervisor).  
-Check `/api/status` — `sql_ok` should be `true`, `mode` should be `live-sql-metric-view`, and the UI status bar shows **"Live unplanned DT data from metric view"**.
+AI tab summaries use the **Supervisor Agent** when `SUPERVISOR_ENDPOINT_NAME` is set in `.env`.
+
+```
+SUPERVISOR_ENDPOINT_NAME=your-supervisor-endpoint-name
+```
+
+Check `/api/status` — `sql_ok` should be `true`, `summaries` should be `supervisor-agent`.
 
 If `mode` is `sql-error`, open `/api/status` and read `sql_test.error` — update `DATABRICKS_METRIC_VIEW` in `.env` with the exact catalog.schema.view from Databricks.
 
-The view has no `Year` column — year filtering uses `YEAR(STRT_DT)` by default. Override the date column if needed:
-
-```
-DATABRICKS_DATE_COLUMN=STRT_DT
-```
+The view has no `Year` column — year filtering uses `YEAR(\`Production Date\`)` by default. Column names match the gold semantic layer (`Unplanned Downtime %`, `Line Desc`, `Downtime Category`, etc.). Override via `.env` if needed — see `.env.example`.
 
 ## API endpoints
 
 | Endpoint | Purpose |
 |----------|---------|
 | `POST /api/analytics/query/:queryKey` | Chart/KPI data (direct SQL) |
-| `POST /api/summaries` | Tab-specific AI narratives |
+| `POST /api/summaries` | Tab-specific AI narrative (Supervisor Agent) |
+| `POST /api/summaries/batch` | All KPI tab summaries for current filters |
 | `POST /api/console-data` | Legacy UI data bundle |
 | `GET /api/warmup` | Warehouse pre-warm |
 

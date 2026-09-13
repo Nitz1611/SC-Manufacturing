@@ -208,6 +208,9 @@
     dataPollTimer: null,
     dataReloadTimer: null,
     lastCoarseKey: null,
+    summaryFilterKey: null,
+    summariesLoaded: false,
+    summaryReloadTimer: null,
   };
 
   let REASONS_DATA_MUTABLE = null;
@@ -406,10 +409,58 @@
       if (state.metricsBase && !isCoarseFilterChange()) {
         applyConsoleData({ metrics: filterMetricsClient(state.metricsBase), dashboard: {} });
         setDataStatus('live', `Filtered to ${state.filters.site} · instant`);
+        loadAiSummaries(false);
         return;
       }
       loadConsoleData(false);
     }, 80);
+  }
+
+  async function loadAiSummaries(force = false) {
+    const filters = apiFiltersFromState();
+    const key = JSON.stringify(filters);
+    if (!force && state.summaryFilterKey === key && state.summariesLoaded) return;
+
+    clearTimeout(state.summaryReloadTimer);
+    state.summaryReloadTimer = setTimeout(async () => {
+      const tabs = ['overview', 'category', 'line', 'dow', 'reason'];
+      tabs.forEach(tab => {
+        document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+          el.textContent = '✦ Generating AI summary from Supervisor…';
+        });
+      });
+
+      try {
+        const res = await fetch('/api/summaries/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ params: filters, forceRefresh: force }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `Summaries ${res.status}`);
+        }
+        const data = await res.json();
+        const summaries = data.summaries || {};
+        Object.entries(summaries).forEach(([tab, text]) => {
+          if (!text) return;
+          document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+            el.textContent = text;
+          });
+        });
+        state.summaryFilterKey = key;
+        state.summariesLoaded = true;
+      } catch (err) {
+        console.warn('[summaries]', err.message);
+        tabs.forEach(tab => {
+          document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+            if (String(el.textContent).includes('Generating')) {
+              el.textContent = 'AI summary unavailable — check SUPERVISOR_ENDPOINT_NAME in .env';
+            }
+          });
+        });
+      }
+    }, 200);
   }
 
   async function loadConsoleData(force = false) {
@@ -450,6 +501,7 @@
       } else if (data._cached) {
         setDataStatus('cached', 'Cached/demo data · check .env SQL settings');
       }
+      loadAiSummaries(false);
       state.dataLoading = false;
     } catch (err) {
       state.dataLoading = false;
@@ -494,7 +546,6 @@
     state.dashboard = payload.dashboard || {};
     applyMetricsToState(metrics);
     updateMetricStripDOM(metrics.kpis);
-    updateAiSummariesDOM(metrics);
     refreshAllTables();
     refreshChartsForTab(state.kpiTab);
     const reasonBody = document.querySelector('.reason-table-body');

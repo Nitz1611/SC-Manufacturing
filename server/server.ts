@@ -7,6 +7,7 @@ import { cacheInfo } from './lib/cache.js';
 import { loadEnv, repoRoot, sqlEnvStatus } from './lib/env.js';
 import { sqlConfigured } from './lib/databricksSql.js';
 import { verifyMetricViewAccess, warmupWarehouse } from './lib/analytics.js';
+import { supervisorConfigured } from './lib/supervisor.js';
 
 loadEnv();
 const ROOT = repoRoot();
@@ -49,6 +50,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('╠══════════════════════════════════════════════════════╣');
   const mode = sqlConfigured() ? 'Live SQL (metric view)     ' : 'Demo fallback (no .env SQL)';
   console.log(`║  Mode       : ${mode.padEnd(38)}║`);
+  const sumMode = supervisorConfigured() ? 'Supervisor Agent (AI summaries) ' : 'Template summaries (no supervisor)';
+  console.log(`║  Summaries  : ${sumMode.padEnd(38)}║`);
   const env = sqlEnvStatus();
   if (env.env_file) {
     console.log(`║  .env       : ${env.env_file.slice(-38).padEnd(38)}║`);

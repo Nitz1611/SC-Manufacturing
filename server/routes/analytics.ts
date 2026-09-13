@@ -3,6 +3,7 @@ import type { QueryKey } from '../../shared/types/dashboard.js';
 import { databricksConfigured, getLastSqlError, getLastSqlSuccessAt, resolveMetricView, runAnalyticsQuery, verifyMetricViewAccess } from '../lib/analytics.js';
 import { sqlEnvStatus } from '../lib/env.js';
 import { sqlColumnSummary } from '../lib/config.js';
+import { supervisorConfigured } from '../lib/supervisor.js';
 import { sqlConfigured, warmupWarehouse } from '../lib/databricksSql.js';
 
 const VALID_KEYS: QueryKey[] = [
@@ -87,6 +88,7 @@ analyticsRouter.get('/status', async (_req, res) => {
     metric_view: metricView,
     sql_columns: sqlColumnSummary(),
     mode: sqlTest.ok ? 'live-sql-metric-view' : configured ? 'sql-error' : 'demo-fallback',
-    supervisor: 'not used for chart data',
+    supervisor: supervisorConfigured() ? process.env.SUPERVISOR_ENDPOINT_NAME : 'not configured',
+    summaries: supervisorConfigured() ? 'supervisor-agent' : 'template-fallback',
   });
 });
