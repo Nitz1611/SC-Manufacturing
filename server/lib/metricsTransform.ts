@@ -253,8 +253,14 @@ export function applySiteFilter(metrics: MetricsPayload, site: string | null): M
   const out = structuredClone(metrics);
   if (out.site_by_period[siteKey]) out.site_by_period = { [siteKey]: out.site_by_period[siteKey] };
   if (out.top_sites_trend[siteKey]) out.top_sites_trend = { [siteKey]: out.top_sites_trend[siteKey] };
-  const mult = SITE_WEIGHTS[siteKey] || 1;
-  out.period_trend = out.period_trend.map(v => +(v * mult * 0.95).toFixed(2));
+  const siteKeys = Object.keys(out.site_by_period || {});
+  const alreadySiteScoped = out.meta?.source === 'sql' || (siteKeys.length === 1 && siteKeys[0] === siteKey);
+  if (!alreadySiteScoped) {
+    const mult = SITE_WEIGHTS[siteKey] || 1;
+    out.period_trend = out.period_trend.map(v => +(v * mult * 0.95).toFixed(2));
+  } else if (out.site_by_period[siteKey]?.length) {
+    out.period_trend = [...out.site_by_period[siteKey]];
+  }
   out.tab_insights = buildTabInsights(out);
   out.meta.filtered_site = siteKey;
   return out;

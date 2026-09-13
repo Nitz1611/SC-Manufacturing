@@ -461,16 +461,68 @@
 
   function totalDtHours() {
     const v = parseHoursValue(state.liveMetrics?.kpis?.downtime_hrs?.value);
-    return v || 112474;
+    if (v > 0) return v;
+    const avg = yearAvgDtPct();
+    if (avg > 0) return Math.round((112474 / 6.2) * avg);
+    return 112474;
   }
 
   function yearAvgDtPct() {
     const trend = state.liveMetrics?.period_trend || activeTrendData();
-    const valid = (trend || []).filter(v => v != null && Number.isFinite(Number(v)));
-    if (valid.length) return valid.reduce((a, b) => a + Number(b), 0) / valid.length;
-    return parsePct(state.liveMetrics?.kpis?.downtime_pct?.value) || 0;
+    const validTrend = (trend || []).filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0);
+    if (validTrend.length) return validTrend.reduce((a, b) => a + Number(b), 0) / validTrend.length;
+
+    const siteValues = activeHeatmapSites().flatMap(s => state.liveMetrics?.site_by_period?.[s] || [])
+      .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0);
+    if (siteValues.length) return siteValues.reduce((a, b) => a + Number(b), 0) / siteValues.length;
+
+    const kpi = parsePct(state.liveMetrics?.kpis?.downtime_pct?.value);
+    if (kpi > 0) return kpi;
+    return 6.2;
   }
 
+  function chartValueFromPct(pct) {
+    if (pct == null || Number.isNaN(Number(pct))) return 0;
+    if (showInMode() === 'percentage') return Number(pct);
+    return pctToHours(pct);
+  }
+
+  function chartYAxisConfig(yMaxHint) {
+    if (showInMode() === 'percentage') {
+      const peak = yMaxHint || 8;
+      return {
+        max: Math.max(peak, Math.ceil(peak * 1.2 / 5) * 5 || 10),
+        title: 'DT %',
+        tickSuffix: '%',
+        decimals: 1,
+        scale: v => v,
+      };
+    }
+    if (showInMode() === 'millions') {
+      return {
+        max: null,
+        title: 'Hours (MM)',
+        tickSuffix: ' MM',
+        decimals: 3,
+        scale: v => v / 1e6,
+      };
+    }
+    return {
+      max: null,
+      title: 'Hours (M)',
+      tickSuffix: ' M',
+      decimals: 2,
+      scale: v => v / 1e3,
+    };
+  }
+
+  function pctMatrixToChartMatrix(matrix) {
+    const out = {};
+    Object.entries(matrix || {}).forEach(([key, vals]) => {
+      out[key] = (vals || []).map(v => chartValueFromPct(v));
+    });
+    return out;
+  }
   function pctToHours(pct) {
     const avg = yearAvgDtPct();
     const total = totalDtHours();
@@ -714,9 +766,13 @@
       const siteKey = String(site).toUpperCase();
       if (m.site_by_period?.[siteKey]) m.site_by_period = { [siteKey]: m.site_by_period[siteKey] };
       if (m.top_sites_trend?.[siteKey]) m.top_sites_trend = { [siteKey]: m.top_sites_trend[siteKey] };
-      const mult = SITE_MULTIPLIERS[siteKey] || 1;
-      if (m.period_trend?.length) {
+      const sqlScoped = m.meta?.source === 'sql' || m.meta?.filtered_site === siteKey;
+      if (m.period_trend?.length && !sqlScoped) {
+        const mult = SITE_MULTIPLIERS[siteKey] || 1;
         m.period_trend = m.period_trend.map(v => +(Number(v) * mult * 0.95).toFixed(2));
+      }
+      if (sqlScoped && m.site_by_period?.[siteKey]?.length) {
+        m.period_trend = alignPeriodValues(m.site_by_period[siteKey]);
       }
       m.meta = { ...(m.meta || {}), filtered_site: siteKey };
     } else if (activeRegions) {
@@ -742,6 +798,7 @@
       if (fromFilterId === 'showIn') {
         refreshAllTables();
         refreshChartsForTab(state.kpiTab);
+        refreshCardChartViews();
         if (state.liveMetrics?.kpis) updateMetricStripDOM(state.liveMetrics.kpis);
         refreshDtAvgBadges();
         updateFilterContext();
@@ -1130,14 +1187,15 @@
   }
 
   function categoryValuesForSiteHeatmap(site, category) {
-    const liveCat = state.liveMetrics?.category_by_period?.[category];
-    if (liveCat?.length) {
-      const mult = SITE_MULTIPLIERS[site] || 1;
-      return alignPeriodValues(liveCat.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2)));
-    }
     const sitePeriods = sitePeriodTotals(site);
     const base = CATEGORY_BASE[category] || [];
     const baseSum = periodBaseTotals();
+    const liveCat = state.liveMetrics?.category_by_period?.[category];
+    const useNetworkCategory = liveCat?.length && !isSiteFiltered() && activeHeatmapSites().length === HEATMAP_SITES.length;
+    if (useNetworkCategory) {
+      const mult = SITE_MULTIPLIERS[site] || 1;
+      return alignPeriodValues(liveCat.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2)));
+    }
     return activePeriods().map((_, i) => {
       if (sitePeriods[i] == null) return null;
       const ratio = (base[i] || 0) / (baseSum[i] || 1);
@@ -2273,7 +2331,8 @@
 
   function lineValuesForSite(site, line) {
     const live = state.liveMetrics?.line_by_period?.[line];
-    if (live?.length) {
+    const useNetworkLine = live?.length && !isSiteFiltered() && activeHeatmapSites().length === HEATMAP_SITES.length;
+    if (useNetworkLine) {
       const mult = SITE_MULTIPLIERS[site] || 1;
       return alignPeriodValues(live.map(v => v == null ? null : +(Number(v) * mult * 0.92).toFixed(2)));
     }
@@ -2974,12 +3033,14 @@
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
-    const allVals = labels.flatMap(l => matrix[l] || []);
+    const chartMatrix = pctMatrixToChartMatrix(matrix);
+    const allVals = labels.flatMap(l => chartMatrix[l] || []);
     const peak = Math.max(...allVals, 0);
-    const yMax = Math.max(yMaxHint || 8, Math.ceil(peak * 1.2 / 5) * 5 || 10);
+    const axis = chartYAxisConfig(yMaxHint || peak);
+    const yMax = axis.max ?? Math.max(peak * 1.15, peak + (showInMode() === 'millions' ? peak * 0.1 : 1));
     const datasets = activePeriods().map((p, i) => ({
       label: p,
-      data: labels.map(l => matrix[l]?.[i] ?? 0),
+      data: labels.map(l => chartMatrix[l]?.[i] ?? 0),
       backgroundColor: PERIOD_COLORS[i],
       borderRadius: { topLeft: 3, topRight: 3 },
       borderSkipped: false,
@@ -3004,10 +3065,26 @@
         },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         scales: {
-          y: { beginAtZero: true, max: yMax, ...PRO_AXIS, title: proAxisTitle('DT %'), ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' } },
+          y: {
+            beginAtZero: true,
+            max: yMax,
+            ...PRO_AXIS,
+            title: proAxisTitle(axis.title),
+            ticks: {
+              ...PRO_AXIS.ticks,
+              callback: v => axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix,
+            },
+          },
           x: { ...PRO_AXIS, ticks: HORIZONTAL_X_TICKS },
         },
       },
+    });
+  }
+
+  function refreshCardChartViews() {
+    ['category', 'line'].forEach(cardId => {
+      if (state.cardViews[cardId] !== 'chart') return;
+      toggleCardView(cardId, 'chart');
     });
   }
 
