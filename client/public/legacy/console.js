@@ -5,12 +5,11 @@
   'use strict';
 
   const SLICERS = {
-    showIn: { id: 'showIn', label: 'Show in', multi: false, options: ['Millions (M)', 'Thousands (K)', 'Actual', 'Percentage (%)'], default: 'Millions (M)' },
+    showIn: { id: 'showIn', label: 'Show in', multi: false, options: ['Millions', 'Thousands', 'Percentage'], default: 'Millions' },
     timeframe: { id: 'timeframe', label: 'Timeframe', multi: false, options: ['FY', 'Quarter', 'Month', 'Week'], default: 'FY' },
     year: { id: 'year', label: 'Year', multi: false, options: ['2026', '2025', '2024', '2023'], default: '2026' },
     site: { id: 'site', label: 'Site', multi: false, options: ['All', 'ABERDEEN', 'ARLINGTON', 'FRISCO', 'MODESTO', 'PLANO'], default: 'All' },
     region: { id: 'region', label: 'Region', multi: true, options: ['North America', 'Latin America', 'Europe', 'Asia Pacific', 'Middle East & Africa'], default: [] },
-    market: { id: 'market', label: 'Market', multi: true, options: ['Snacks', 'Beverages', 'Food', 'Quaker', 'International'], default: [] },
   };
 
   const SITES = ['ABERDEEN', 'ARLINGTON', 'FRISCO', 'MODESTO', 'PLANO'];
@@ -207,7 +206,7 @@
     dataLoading: false,
     dataPollTimer: null,
     dataReloadTimer: null,
-    lastCoarseKey: null,
+    lastDataFilterKey: null,
     summaryFilterKey: null,
     summariesLoaded: false,
     summaryReloadTimer: null,
@@ -224,7 +223,95 @@
   }
 
   function activeWeeks() {
-    return DOW_WEEKS_MUTABLE?.length ? DOW_WEEKS_MUTABLE : DOW_WEEKS;
+    const weeks = DOW_WEEKS_MUTABLE?.length ? DOW_WEEKS_MUTABLE : DOW_WEEKS;
+    return weeks.slice(-6);
+  }
+
+  function activeDayTrendSeries(day) {
+    const full = (DOW_DAY_TRENDS_MUTABLE || DOW_DAY_TRENDS)[day] || [];
+    return full.slice(-activeWeeks().length);
+  }
+
+  function showInMode() {
+    const v = String(state.filters.showIn || 'Millions');
+    if (v.includes('Percent')) return 'percentage';
+    if (v.includes('Thousand')) return 'thousands';
+    return 'millions';
+  }
+
+  function isHoursDisplayMode() {
+    return showInMode() !== 'percentage';
+  }
+
+  function parseHoursValue(str) {
+    return parseFloat(String(str || '').replace(/[^0-9.]/g, '')) || 0;
+  }
+
+  function totalDtHours() {
+    const v = parseHoursValue(state.liveMetrics?.kpis?.downtime_hrs?.value);
+    return v || 112474;
+  }
+
+  function yearAvgDtPct() {
+    const trend = state.liveMetrics?.period_trend || activeTrendData();
+    const valid = (trend || []).filter(v => v != null && Number.isFinite(Number(v)));
+    if (valid.length) return valid.reduce((a, b) => a + Number(b), 0) / valid.length;
+    return parsePct(state.liveMetrics?.kpis?.downtime_pct?.value) || 0;
+  }
+
+  function pctToHours(pct) {
+    const avg = yearAvgDtPct();
+    const total = totalDtHours();
+    const n = activePeriods().length || 1;
+    if (!avg || pct == null || Number.isNaN(Number(pct))) return 0;
+    return (Number(pct) / avg) * (total / n);
+  }
+
+  function cellDisplayValue(value, fromPct = true) {
+    if (value == null || Number.isNaN(Number(value))) return '—';
+    if (showInMode() === 'percentage') {
+      return Number(value).toFixed(2) + '%';
+    }
+    const hours = fromPct ? pctToHours(value) : Number(value);
+    if (showInMode() === 'millions') return (hours / 1e6).toFixed(2) + ' MM';
+    return (hours / 1e3).toFixed(2) + ' M';
+  }
+
+  function tableSummaryHeader() {
+    return isHoursDisplayMode() ? 'Total' : 'Avg DT%';
+  }
+
+  function tableSummaryValue(vals) {
+    const numeric = vals.filter(v => v != null && Number.isFinite(Number(v)));
+    if (!numeric.length) return null;
+    if (isHoursDisplayMode()) {
+      return numeric.reduce((a, v) => a + pctToHours(v), 0);
+    }
+    return avgOf(numeric);
+  }
+
+  function formatTableSummary(val, fromPct = true) {
+    if (val == null) return '—';
+    return cellDisplayValue(val, fromPct);
+  }
+
+  function tableMetricLabel() {
+    return isHoursDisplayMode() ? 'Unplanned Downtime in Hours' : 'Unplanned DT %';
+  }
+
+  function formatKpiHoursDisplay(raw) {
+    if (!raw || raw === '—') return '—';
+    const hours = parseHoursValue(raw);
+    if (showInMode() === 'millions') return (hours / 1e6).toFixed(2) + ' MM';
+    if (showInMode() === 'thousands') return (hours / 1e3).toFixed(2) + ' M';
+    return raw;
+  }
+
+  function refreshDtAvgBadges() {
+    const avg = yearAvgDtPct().toFixed(2) + '%';
+    document.querySelectorAll('.status-badge.accent strong').forEach(el => {
+      if (el.closest('.status-badges')) el.textContent = avg;
+    });
   }
 
   function activeReasonsData() {
@@ -247,9 +334,16 @@
       year: state.filters.year,
       site: state.filters.site,
       region: state.filters.region,
-      market: state.filters.market,
       period: (state.filters.timeframe || 'Week').toLowerCase() === 'week' ? 'week' : (state.filters.timeframe || 'Week').toLowerCase(),
     };
+  }
+
+  function setAiSummaryLoading() {
+    ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
+      document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+        el.textContent = '✦ AI Summary Loading…';
+      });
+    });
   }
 
   function initDataStatusBar() {
@@ -268,14 +362,14 @@
     bar.querySelector('.data-status-text').textContent = text;
   }
 
-  function coarseFilterKey() {
-    return `${state.filters.timeframe}|${state.filters.year}`;
-  }
-
-  function isCoarseFilterChange() {
-    const key = coarseFilterKey();
-    if (state.lastCoarseKey === null) return true;
-    return state.lastCoarseKey !== key;
+  function dataFilterKey() {
+    const f = state.filters;
+    return JSON.stringify({
+      timeframe: f.timeframe,
+      year: f.year,
+      site: f.site,
+      region: f.region,
+    });
   }
 
   function parsePct(value) {
@@ -403,15 +497,19 @@
     return m;
   }
 
-  function scheduleDataReload() {
+  function scheduleDataReload(fromFilterId) {
     clearTimeout(state.dataReloadTimer);
     state.dataReloadTimer = setTimeout(() => {
-      if (state.metricsBase && !isCoarseFilterChange()) {
-        applyConsoleData({ metrics: filterMetricsClient(state.metricsBase), dashboard: {} });
-        setDataStatus('live', `Filtered to ${state.filters.site} · instant`);
-        loadAiSummaries(false);
+      if (fromFilterId === 'showIn') {
+        refreshAllTables();
+        refreshChartsForTab(state.kpiTab);
+        if (state.liveMetrics?.kpis) updateMetricStripDOM(state.liveMetrics.kpis);
+        refreshDtAvgBadges();
         return;
       }
+      state.summariesLoaded = false;
+      state.summaryFilterKey = null;
+      setAiSummaryLoading();
       loadConsoleData(false);
     }, 80);
   }
@@ -467,17 +565,7 @@
 
     clearTimeout(state.summaryReloadTimer);
     state.summaryReloadTimer = setTimeout(async () => {
-      const tabs = ['overview', 'category', 'line', 'dow', 'reason'];
-      const instant = state.liveMetrics?.tab_insights || {};
-      tabs.forEach(tab => {
-        document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-          if (instant[tab]) {
-            el.textContent = instant[tab];
-          } else {
-            el.textContent = '✦ Generating AI summary from Supervisor…';
-          }
-        });
-      });
+      setAiSummaryLoading();
 
       try {
         const res = await fetch('/api/summaries/batch', {
@@ -501,12 +589,13 @@
         const jobId = data._job_id;
         if (!jobId) throw new Error('No job_id from server');
 
+        const tabs = ['overview', 'category', 'line', 'dow', 'reason'];
         await pollSummaryJob(jobId, tabs);
         state.summaryFilterKey = key;
         state.summariesLoaded = true;
       } catch (err) {
         console.warn('[summaries]', err.message);
-        tabs.forEach(tab => {
+        ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
           document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
             if (String(el.textContent).includes('Generating') || String(el.textContent).includes('Supervisor')) {
               el.textContent = 'AI summary unavailable — check SUPERVISOR_ENDPOINT_NAME in .env';
@@ -524,7 +613,10 @@
     }
 
     const showLoading = !state.metricsBase || force;
-    if (showLoading) setDataStatus('loading', 'Loading unplanned DT metrics…');
+    if (showLoading) {
+      setDataStatus('loading', 'Loading unplanned DT metrics…');
+      setAiSummaryLoading();
+    }
 
     try {
       const res = await fetch('/api/console-data', {
@@ -546,7 +638,7 @@
 
       if (data.metrics) {
         state.metricsBase = data.metrics;
-        state.lastCoarseKey = coarseFilterKey();
+        state.lastDataFilterKey = dataFilterKey();
         applyConsoleData({ metrics: filterMetricsClient(data.metrics), dashboard: data.dashboard || {} });
       }
 
@@ -586,7 +678,7 @@
 
       if (job.status === 'done' && job.result?.metrics) {
         state.metricsBase = job.result.metrics;
-        state.lastCoarseKey = coarseFilterKey();
+        state.lastDataFilterKey = dataFilterKey();
         applyConsoleData({ metrics: filterMetricsClient(job.result.metrics), dashboard: {} });
       }
     } catch (err) {
@@ -601,6 +693,7 @@
     applyMetricsToState(metrics);
     updateMetricStripDOM(metrics.kpis);
     updateAiSummariesDOM(metrics);
+    refreshDtAvgBadges();
     refreshAllTables();
     refreshChartsForTab(state.kpiTab);
     const reasonBody = document.querySelector('.reason-table-body');
@@ -684,17 +777,19 @@
   }
 
   function updateMetricStripDOM(kpis) {
-    const root = document.getElementById('metric-strip-root');
-    if (!root || !kpis) return;
+    if (!kpis) return;
     const dt = kpis.downtime_pct || {};
     const dtHrs = kpis.downtime_hrs || {};
     const stops = kpis.stops || {};
     const oee = kpis.oee || {};
-    root.innerHTML = `
+    const html = `
       <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">${dt.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(dt.direction)}">${dt.delta || ''}</div></div>
-      <div class="metric-card"><div class="metric-label">Unplanned DT Hours</div><div class="metric-value">${dtHrs.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(dtHrs.direction)}">${dtHrs.delta || ''}</div></div>
+      <div class="metric-card"><div class="metric-label">Unplanned DT Hours</div><div class="metric-value">${formatKpiHoursDisplay(dtHrs.value)}</div><div class="metric-delta ${kpiDirectionClass(dtHrs.direction)}">${dtHrs.delta || ''}</div></div>
       <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">${stops.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(stops.direction)}">${stops.delta || ''}</div></div>
       <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">${oee.value || '—'}</div><div class="metric-delta ${kpiDirectionClass(oee.direction)}">${oee.delta || ''}</div></div>`;
+    document.querySelectorAll('.metric-strip-root').forEach(root => {
+      root.innerHTML = html;
+    });
   }
 
   function updateAiSummariesDOM(metrics) {
@@ -829,16 +924,17 @@
     downloadCSV(filename, rows);
   }
 
-  function shiftValuesForDay(day, shift) {
-    const base = DOW_SHIFT_BASE[day]?.[shift];
-    if (base) return base.map(v => +v.toFixed(2));
-    const dayTrend = DOW_DAY_TRENDS[day] || DOW_WEEKS.map(() => 0);
-    const mult = shift === 1 ? 1.05 : shift === 2 ? 0.95 : 0.88;
-    return dayTrend.map(v => +(v * mult).toFixed(2));
+  function dayWeekTotals(day) {
+    return activeDayTrendSeries(day).map(v => +Number(v).toFixed(2));
   }
 
-  function dayWeekTotals(day) {
-    return (DOW_DAY_TRENDS[day] || DOW_WEEKS.map(() => 0)).map(v => +v.toFixed(2));
+  function shiftValuesForDay(day, shift) {
+    const base = DOW_SHIFT_BASE[day]?.[shift];
+    const weeks = activeWeeks();
+    if (base) return base.slice(-weeks.length).map(v => +v.toFixed(2));
+    const dayTrend = activeDayTrendSeries(day);
+    const mult = shift === 1 ? 1.05 : shift === 2 ? 0.95 : 0.88;
+    return dayTrend.map(v => +(v * mult).toFixed(2));
   }
 
   function exportDowHeatmapCSV(filename = 'unplanned-dt-by-day-of-week.csv') {
@@ -904,7 +1000,17 @@
     if (value == null || value === '-') return `<td class="heat-cell heat-empty ${extraClass}">-</td>`;
     const isTotalCol = extraClass.includes('col-total');
     const style = heatStyle(value, max, isTotalCol);
-    return `<td class="heat-cell ${extraClass}" style="background:${style.bg};color:${style.color}">${fmtPct(value)}</td>`;
+    return `<td class="heat-cell ${extraClass}" style="background:${style.bg};color:${style.color}">${cellDisplayValue(value, true)}</td>`;
+  }
+
+  function summaryTd(vals, max = 8) {
+    const summary = tableSummaryValue(vals);
+    if (summary == null) return `<td class="heat-cell heat-empty col-total">-</td>`;
+    if (isHoursDisplayMode()) {
+      const style = heatStyle(Math.min(summary / totalDtHours() * yearAvgDtPct() * activePeriods().length, max), max, true);
+      return `<td class="heat-cell col-total" style="background:${style.bg};color:${style.color}">${formatTableSummary(summary, false)}</td>`;
+    }
+    return heatTd(summary, max, 'col-total');
   }
 
   function heatmapLegendHTML(compact = false) {
@@ -916,8 +1022,9 @@
   }
 
   function valClass(v) {
-    if (v >= 5) return 'val-high';
-    if (v >= 2.5) return 'val-mid';
+    const avg = yearAvgDtPct();
+    if (v >= avg * 1.15) return 'val-high';
+    if (v >= avg * 0.85) return 'val-mid';
     return 'val-low';
   }
 
@@ -1087,6 +1194,19 @@
   }
 
   function refreshAllTables() {
+    const metricLabel = tableMetricLabel();
+    document.querySelectorAll('.data-card-title').forEach(el => {
+      const t = el.textContent || '';
+      if (t.includes('Unplanned DT % by Category') || t.includes('Unplanned Downtime in Hours by Category')) {
+        el.textContent = `${metricLabel} by Category`;
+      }
+      if (t.includes('Unplanned DT % by Line') || t.includes('Unplanned Downtime in Hours by Line')) {
+        el.textContent = `${metricLabel} by Line/Category`;
+      }
+      if (t.includes('Unplanned DT % by Day of Week') || t.includes('Unplanned Downtime in Hours by Day of Week')) {
+        el.textContent = `${metricLabel} by Day of Week`;
+      }
+    });
     const catOverview = document.getElementById('view-category-table');
     if (catOverview) catOverview.innerHTML = buildHeatmapTable(true);
     const heatmapTab = document.getElementById('view-heatmap-table');
@@ -1562,7 +1682,7 @@
           <div class="category-detail-stats">
             <div class="detail-stat"><div class="detail-stat-label">Average DT %</div><div class="detail-stat-value">${fmtPct(avg)}</div></div>
             <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${PERIODS[peakIdx]} · ${fmtPct(peak)}</div></div>
-            <div class="detail-stat"><div class="detail-stat-label">vs 5% Target</div><div class="detail-stat-value ${avg >= 5 ? 'val-high' : 'val-low'}">${avg >= 5 ? 'Above target' : 'Below target'}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">vs ${yearAvgDtPct().toFixed(2)}% Avg</div><div class="detail-stat-value ${avg >= yearAvgDtPct() ? 'val-high' : 'val-low'}">${avg >= yearAvgDtPct() ? 'Above avg' : 'Below avg'}</div></div>
           </div>
         </div>
         <div class="table-scroll" style="margin-top:16px">
@@ -1635,7 +1755,7 @@
           <div class="category-detail-stats">
             <div class="detail-stat"><div class="detail-stat-label">Average DT %</div><div class="detail-stat-value">${fmtPct(avg)}</div></div>
             <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${PERIODS[peakIdx]} · ${fmtPct(peak)}</div></div>
-            <div class="detail-stat"><div class="detail-stat-label">vs 5% Target</div><div class="detail-stat-value ${avg >= 5 ? 'val-high' : 'val-low'}">${avg >= 5 ? 'Above target' : 'Below target'}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">vs ${yearAvgDtPct().toFixed(2)}% Avg</div><div class="detail-stat-value ${avg >= yearAvgDtPct() ? 'val-high' : 'val-low'}">${avg >= yearAvgDtPct() ? 'Above avg' : 'Below avg'}</div></div>
           </div>
         </div>
         <div class="table-scroll" style="margin-top:16px">
@@ -1709,7 +1829,7 @@
       const selectAll = document.createElement('div');
       selectAll.className = 'slicer-select-all';
       selectAll.textContent = 'Select All';
-      selectAll.addEventListener('click', e => { e.stopPropagation(); state.filters[cfg.id] = [...cfg.options]; refreshSlicer(wrap, cfg); });
+      selectAll.addEventListener('click', e => { e.stopPropagation(); state.filters[cfg.id] = [...cfg.options]; refreshSlicer(wrap, cfg); scheduleDataReload(cfg.id); });
       panel.appendChild(selectAll);
       const searchWrap = document.createElement('div');
       searchWrap.className = 'slicer-search-wrap';
@@ -1773,7 +1893,7 @@
           refreshAllTables();
         }
         refreshSlicer(wrap, cfg);
-        scheduleDataReload();
+        scheduleDataReload(cfg.id);
       });
       optionsEl.appendChild(row);
     });
@@ -1820,6 +1940,7 @@
     });
     state.kpiTab = tabId;
     updateTopNavUI();
+    if (state.liveMetrics?.kpis) updateMetricStripDOM(state.liveMetrics.kpis);
     requestAnimationFrame(() => refreshChartsForTab(tabId));
   }
 
@@ -1830,7 +1951,7 @@
 
   /* ── Content builders ── */
   function metricStripHTML() {
-    return `<div class="metric-strip" id="metric-strip-root">
+    return `<div class="metric-strip metric-strip-root">
       <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">—</div><div class="metric-delta neutral">Loading…</div></div>
       <div class="metric-card"><div class="metric-label">Unplanned DT Hours</div><div class="metric-value">—</div><div class="metric-delta neutral"></div></div>
       <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">—</div><div class="metric-delta neutral"></div></div>
@@ -1878,13 +1999,14 @@
 
   function buildLineHeatmapTable(showLegend = true) {
     const compareReady = state.compareMode && state.compareContext === 'line' ? ' compare-ready' : '';
+    const periods = activePeriods();
+    const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
+    const summaryHdr = tableSummaryHeader();
     let rows = '';
 
     HEATMAP_SITES.forEach(site => {
       const expanded = !!state.expandedLineSites[site];
       const sitePeriods = linePeriodTotalsForSite(site);
-      const siteTotal = +sumOf(sitePeriods).toFixed(2);
-      const sitePrevTotal = +(siteTotal * 1.08).toFixed(2);
       const chevron = expanded ? '▼' : '▶';
 
       rows += `<tr class="site-row${expanded ? ' expanded' : ''}" data-site="${site}">
@@ -1894,21 +2016,18 @@
         </td>
         <td class="cat-label-cell"></td>
         ${sitePeriods.map(v => heatTd(v, 35)).join('')}
-        ${heatTd(siteTotal, 35, 'col-total')}
-        ${heatTd(sitePrevTotal, 35, 'col-total')}
+        ${summaryTd(sitePeriods, 35)}
       </tr>`;
 
       if (expanded) {
         LINES.forEach(line => {
           const vals = lineValuesForSite(site, line);
-          const total = sumOf(vals);
           const activeCompare = state.compareLine === line ? ' compare-active' : '';
           rows += `<tr class="line-detail-row${compareReady}${activeCompare}" data-line="${line}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${line}</td>
             ${vals.map(v => heatTd(v, 14)).join('')}
-            ${heatTd(total, 14, 'col-total')}
-            ${heatTd(total * 1.08, 14, 'col-total')}
+            ${summaryTd(vals, 14)}
           </tr>`;
         });
 
@@ -1916,16 +2035,15 @@
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Site Total</td>
           ${sitePeriods.map(v => heatTd(v, 35)).join('')}
-          ${heatTd(siteTotal, 35, 'col-total')}
-          ${heatTd(sitePrevTotal, 35, 'col-total')}
+          ${summaryTd(sitePeriods, 35)}
         </tr>`;
       }
     });
 
     return `<div class="table-scroll heatmap-scroll">${showLegend ? heatmapLegendHTML(true) : ''}<table class="data-table heatmap-table"><thead>
       <tr class="header-group"><th rowspan="2">Site</th><th rowspan="2">Line</th>
-        <th colspan="10">2026</th><th colspan="2">Total</th></tr>
-      <tr>${PERIODS.map(p => `<th>${p}</th>`).join('')}<th>2026 Total</th><th>Total</th></tr>
+        <th colspan="${periods.length}">${year}</th><th rowspan="2">${summaryHdr}</th></tr>
+      <tr>${periods.map(p => `<th>${p}</th>`).join('')}</tr>
       </thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -1937,7 +2055,7 @@
           <span class="chart-card-sub">Percentage of unplanned downtime across periods (YTD)</span>
           <div class="status-badges">
             <span class="status-badge">ACTIVE LINES <strong>${Object.keys(TOP_LINE_DT).length} Lines</strong></span>
-            <span class="status-badge accent">OVERALL DT AVG <strong>10.61%</strong></span>
+            <span class="status-badge accent">OVERALL DT AVG <strong>—</strong></span>
           </div>
         </div>
         <div class="heatmap-header-right">
@@ -2041,13 +2159,14 @@
 
   function buildDowHeatmapTable(showLegend = true) {
     const compareReady = state.compareMode && state.compareContext === 'dow' ? ' compare-ready' : '';
+    const weeks = activeWeeks();
+    const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
+    const summaryHdr = tableSummaryHeader();
     let rows = '';
 
     DAY_LABELS.forEach(day => {
       const expanded = !!state.expandedDowDays[day];
       const dayPeriods = dayWeekTotals(day);
-      const dayTotal = +avgOf(dayPeriods).toFixed(2);
-      const dayPrevTotal = +(dayTotal * 1.05).toFixed(2);
       const chevron = expanded ? '▼' : '▶';
 
       rows += `<tr class="site-row dow-day-row${expanded ? ' expanded' : ''}" data-day="${day}">
@@ -2057,21 +2176,18 @@
         </td>
         <td class="cat-label-cell"></td>
         ${dayPeriods.map(v => heatTd(v, 16)).join('')}
-        ${heatTd(dayTotal, 16, 'col-total')}
-        ${heatTd(dayPrevTotal, 16, 'col-total')}
+        ${summaryTd(dayPeriods, 16)}
       </tr>`;
 
       if (expanded) {
         DOW_SHIFTS.forEach(shift => {
           const vals = shiftValuesForDay(day, shift);
-          const total = +avgOf(vals).toFixed(2);
           const activeCompare = state.compareShift === shift ? ' compare-active' : '';
           rows += `<tr class="line-detail-row dow-shift-row${compareReady}${activeCompare}" data-shift="${shift}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${shift}</td>
             ${vals.map(v => heatTd(v, 16)).join('')}
-            ${heatTd(total, 16, 'col-total')}
-            ${heatTd(total * 1.05, 16, 'col-total')}
+            ${summaryTd(vals, 16)}
           </tr>`;
         });
 
@@ -2079,16 +2195,15 @@
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Total</td>
           ${dayPeriods.map(v => heatTd(v, 16)).join('')}
-          ${heatTd(dayTotal, 16, 'col-total')}
-          ${heatTd(dayPrevTotal, 16, 'col-total')}
+          ${summaryTd(dayPeriods, 16)}
         </tr>`;
       }
     });
 
     return `<div class="table-scroll heatmap-scroll">${showLegend ? heatmapLegendHTML(true) : ''}<table class="data-table heatmap-table"><thead>
       <tr class="header-group"><th rowspan="2">Day of Week</th><th rowspan="2">Shift</th>
-        <th colspan="${activeWeeks().length}">${state.liveMetrics?.meta?.year || state.filters.year || '2026'}</th><th colspan="2">Total</th></tr>
-      <tr>${activeWeeks().map(w => `<th>${w.replace('2026', '')}</th>`).join('')}<th>Total</th><th>Total</th></tr>
+        <th colspan="${weeks.length}">${year}</th><th rowspan="2">${summaryHdr}</th></tr>
+      <tr>${weeks.map(w => `<th>${w.replace(String(year), '')}</th>`).join('')}</tr>
       </thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -2143,13 +2258,14 @@
 
   function buildHeatmapTable(showLegend = true) {
     const compareReady = state.compareMode && (state.compareContext === 'category' || state.compareContext === 'heatmap') ? ' compare-ready' : '';
+    const periods = activePeriods();
+    const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
+    const summaryHdr = tableSummaryHeader();
     let rows = '';
 
     HEATMAP_SITES.forEach(site => {
       const expanded = !!state.expandedHeatmapSites[site];
       const sitePeriods = sitePeriodTotals(site);
-      const siteTotal = +sumOf(sitePeriods).toFixed(2);
-      const sitePrevTotal = +(siteTotal * 1.08).toFixed(2);
       const chevron = expanded ? '▼' : '▶';
 
       rows += `<tr class="site-row${expanded ? ' expanded' : ''}" data-site="${site}">
@@ -2159,41 +2275,35 @@
         </td>
         <td class="cat-label-cell"></td>
         ${sitePeriods.map(v => heatTd(v, 35)).join('')}
-        ${heatTd(siteTotal, 35, 'col-total')}
-        ${heatTd(sitePrevTotal, 35, 'col-total')}
+        ${summaryTd(sitePeriods, 35)}
       </tr>`;
 
       if (expanded) {
         CATEGORIES.forEach(cat => {
           const vals = categoryValuesForSiteHeatmap(site, cat);
-          const total = sumOf(vals);
-          const prevTotal = total * 1.08;
           const activeCompare = state.compareCategory === cat ? ' compare-active' : '';
           const activeDetail = state.detailCategory === cat ? ' detail-active' : '';
           rows += `<tr class="cat-row heat-cat-row${compareReady}${activeCompare}${activeDetail}" data-category="${cat}" data-site="${site}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${cat}</td>
             ${vals.map(v => heatTd(v, 8)).join('')}
-            ${heatTd(total, 12, 'col-total')}
-            ${heatTd(prevTotal, 12, 'col-total')}
+            ${summaryTd(vals, 12)}
           </tr>`;
         });
 
-        const totals = PERIODS.map((_, i) => sitePeriods[i]);
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Total</td>
-          ${totals.map(v => heatTd(v, 35)).join('')}
-          ${heatTd(siteTotal, 35, 'col-total')}
-          ${heatTd(sitePrevTotal, 35, 'col-total')}
+          ${sitePeriods.map(v => heatTd(v, 35)).join('')}
+          ${summaryTd(sitePeriods, 35)}
         </tr>`;
       }
     });
 
     return `<div class="table-scroll heatmap-scroll">${showLegend ? heatmapLegendHTML(true) : ''}<table class="data-table heatmap-table"><thead>
       <tr class="header-group"><th rowspan="2">Site</th><th rowspan="2">Year / Category</th>
-        <th colspan="10">2026</th><th colspan="2">Total</th></tr>
-      <tr>${PERIODS.map(p => `<th>${p}</th>`).join('')}<th>2026 Total</th><th>Total</th></tr>
+        <th colspan="${periods.length}">${year}</th><th rowspan="2">${summaryHdr}</th></tr>
+      <tr>${periods.map(p => `<th>${p}</th>`).join('')}</tr>
       </thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -2223,7 +2333,7 @@
           <span class="data-card-title">Unplanned Downtime Heatmap</span>
           <div class="status-badges">
             <span class="status-badge">ACTIVE SITES <strong>${HEATMAP_SITES.length} Sites</strong></span>
-            <span class="status-badge accent">OVERALL DT AVG <strong>5.08%</strong></span>
+            <span class="status-badge accent">OVERALL DT AVG <strong>—</strong></span>
           </div>
         </div>
         <div class="heatmap-header-right">
@@ -2565,10 +2675,13 @@
     if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; }
   }
 
-  function makeGroupedBarChart(canvasId, labels, matrix, yMax, onCategoryClick) {
+  function makeGroupedBarChart(canvasId, labels, matrix, yMaxHint, onCategoryClick) {
     destroyChart(canvasId);
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
+    const allVals = labels.flatMap(l => matrix[l] || []);
+    const peak = Math.max(...allVals, 0);
+    const yMax = Math.max(yMaxHint || 8, Math.ceil(peak * 1.2 / 5) * 5 || 10);
     const datasets = activePeriods().map((p, i) => ({
       label: p,
       data: labels.map(l => matrix[l]?.[i] ?? 0),
@@ -2609,10 +2722,15 @@
     if (!canvas || typeof Chart === 'undefined') return;
     const ctx = canvas.getContext('2d');
     const days = filter === 'all' ? DAY_LABELS : [filter];
+    const weeks = activeWeeks();
+    const series = days.flatMap(day => activeDayTrendSeries(day));
+    const peak = Math.max(...series, 0);
+    const yMax = Math.max(8, Math.ceil((peak + 2) / 2) * 2);
+    const yMin = 0;
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
-        labels: activeWeeks(),
+        labels: weeks,
         datasets: days.map((day, i) => {
           const color = DOW_DAY_COLORS[DAY_LABELS.indexOf(day)] || DOW_DAY_COLORS[i];
           const grad = ctx.createLinearGradient(0, 0, 0, 320);
@@ -2620,16 +2738,16 @@
           grad.addColorStop(1, color + '00');
           return {
             label: day,
-            data: activeDayTrends()[day] || activeWeeks().map(() => 0),
+            data: activeDayTrendSeries(day),
             borderColor: color,
             backgroundColor: grad,
             fill: true,
             tension: 0.42,
-            pointRadius: 5,
-            pointHoverRadius: 8,
+            pointRadius: 4,
+            pointHoverRadius: 7,
             pointBackgroundColor: '#ffffff',
             pointBorderColor: color,
-            pointBorderWidth: 2.5,
+            pointBorderWidth: 2,
             borderWidth: 2.5,
           };
         }),
@@ -2641,15 +2759,16 @@
         scales: {
           y: {
             beginAtZero: true,
-            max: 20,
+            min: yMin,
+            max: yMax,
             ...PRO_AXIS,
             title: proAxisTitle('Unplanned DT %'),
-            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
+            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%', stepSize: yMax <= 20 ? 2 : undefined },
           },
           x: {
             ...PRO_AXIS,
             title: proAxisTitle('Week'),
-            ticks: { ...HORIZONTAL_X_TICKS, autoSkip: true, maxTicksLimit: 11, font: { size: 9 } },
+            ticks: { ...HORIZONTAL_X_TICKS, autoSkip: false, maxTicksLimit: 6, font: { size: 10 } },
           },
         },
       },
@@ -2863,6 +2982,8 @@
     grad.addColorStop(0, '#60a5fa');
     grad.addColorStop(1, '#2563eb');
     const entries = Object.entries(SITE_DT_TOTALS).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    const peak = Math.max(...entries.map(e => e[1]), 0);
+    const yMax = Math.max(10, Math.ceil(peak * 1.2 / 5) * 5);
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
       data: {
@@ -2883,7 +3004,7 @@
         scales: {
           y: {
             beginAtZero: true,
-            max: 30,
+            max: yMax,
             ...PRO_AXIS,
             title: proAxisTitle('DT %'),
             ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
@@ -2904,6 +3025,8 @@
     const canvas = document.getElementById(canvasId);
     if (!canvas || typeof Chart === 'undefined') return;
     const entries = Object.entries(CATEGORY_DT_TOTALS).sort((a, b) => b[1] - a[1]);
+    const peak = Math.max(...entries.map(e => e[1]), 0);
+    const yMax = Math.max(8, Math.ceil(peak * 1.2 / 2) * 2);
     state.charts[canvasId] = new Chart(canvas, {
       type: 'bar',
       data: {
@@ -2924,7 +3047,7 @@
         scales: {
           y: {
             beginAtZero: true,
-            max: 20,
+            max: yMax,
             ...PRO_AXIS,
             title: proAxisTitle('DT %'),
             ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
