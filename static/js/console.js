@@ -200,12 +200,16 @@
     cardViews: { category: 'table', line: 'table' },
     compareDay: null,
     compareShift: null,
+    focusSourceChartId: null,
   };
+
+  const FOCUS_CANVAS_ID = 'focus-mode-canvas';
 
   document.addEventListener('DOMContentLoaded', () => {
     buildTopNav();
     initFilters();
     initCompare();
+    initFocusMode();
     renderKpiContent();
     switchPage('kpi-overview', true);
     switchKpiTab('overview', true);
@@ -605,6 +609,170 @@
     destroyChart('detail-chart');
     document.querySelectorAll('.cat-row, .heat-cat-row, .line-detail-row, .dow-shift-row').forEach(r => {
       r.classList.remove('compare-active', 'detail-active');
+    });
+  }
+
+  const FOCUS_CHARTS = {
+    'chart-dow': { render: id => makeDowTrendLineChart(id, 'all') },
+    'chart-reason': { render: id => makeReasonChart(id) },
+    'chart-trend': { render: id => makeReasonTrendLineChart(id, 'all') },
+    'chart-category': {
+      chartViewOnly: true,
+      render: id => makeGroupedBarChart(id, CATEGORIES, CATEGORY_BASE, 8, null),
+    },
+    'chart-line': {
+      chartViewOnly: true,
+      render: id => makeGroupedBarChart(id, LINES, LINE_BASE, 14, null),
+    },
+    'chart-top-sites': {
+      selectId: 'top-sites-select',
+      render: id => makeTopSitesLineChart(id, state.topSitesCount),
+    },
+    'chart-cat-by-site': {
+      selectId: 'site-metric-select',
+      render: id => makeSiteBarChart(id),
+    },
+    'chart-cat-all-sites': {
+      selectId: 'cat-metric-select',
+      render: id => makeCategoryBarChart(id),
+    },
+    'chart-top-lines': {
+      selectId: 'top-lines-select',
+      render: id => makeTopLinesBarChart(id, parseInt(document.getElementById('top-lines-select')?.value || '10', 10)),
+    },
+    'chart-line-donut': {
+      selectId: 'line-donut-select',
+      isDonut: true,
+      render: id => makeCategoryDonutChart(id),
+    },
+    'chart-line-trend': {
+      selectId: 'line-trend-select',
+      render: id => makeLineTrendChart(id, state.lineTrendFilter),
+    },
+    'chart-tab-dow': {
+      selectId: 'dow-chart-select',
+      render: id => makeDowTrendLineChart(id, document.getElementById('dow-chart-select')?.value || 'all'),
+    },
+    'chart-tab-reason-trend': {
+      selectId: 'reason-trend-select',
+      render: id => makeReasonTrendLineChart(id, state.reasonTrendFilter),
+    },
+  };
+
+  function focusModeBtnHTML(chartId, chartViewOnly = false) {
+    const extraClass = chartViewOnly ? ' chart-view-only' : '';
+    return `<button type="button" class="focus-mode-btn${extraClass}" data-focus-chart="${chartId}" title="Focus Mode" aria-label="Open expanded focus view">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+      Focus
+    </button>`;
+  }
+
+  function ensureFocusOverlay() {
+    if (document.getElementById('focus-mode-overlay')) return;
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="focus-mode-overlay" class="focus-mode-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="focus-mode-title">
+        <div class="focus-mode-backdrop" aria-hidden="true"></div>
+        <div class="focus-mode-panel">
+          <div class="focus-mode-header">
+            <div class="focus-mode-header-text">
+              <h2 class="focus-mode-title" id="focus-mode-title"></h2>
+              <p class="focus-mode-sub"></p>
+            </div>
+            <div class="focus-mode-header-actions">
+              <select class="chart-select focus-mode-select hidden" aria-label="Focus view filter"></select>
+              <button type="button" class="focus-mode-close" aria-label="Close focus mode">&times;</button>
+            </div>
+          </div>
+          <div class="focus-mode-body">
+            <div id="focus-mode-visual-host"></div>
+          </div>
+        </div>
+      </div>`);
+  }
+
+  function closeFocusMode() {
+    destroyChart(FOCUS_CANVAS_ID);
+    const overlay = document.getElementById('focus-mode-overlay');
+    overlay?.classList.add('hidden');
+    document.body.classList.remove('focus-mode-open');
+    state.focusSourceChartId = null;
+  }
+
+  function openFocusMode(sourceChartId) {
+    const config = FOCUS_CHARTS[sourceChartId];
+    if (!config) return;
+
+    ensureFocusOverlay();
+    closeInlinePanel();
+
+    const btn = document.querySelector(`.focus-mode-btn[data-focus-chart="${sourceChartId}"]`);
+    const card = btn?.closest('.data-card');
+    const title = card?.querySelector('.data-card-title')?.textContent?.trim() || 'Visual';
+    const sub = card?.querySelector('.chart-card-sub')?.textContent?.trim() || '';
+
+    const overlay = document.getElementById('focus-mode-overlay');
+    const host = document.getElementById('focus-mode-visual-host');
+    const focusSelect = overlay.querySelector('.focus-mode-select');
+
+    if (config.isDonut) {
+      host.innerHTML = `<div class="donut-chart-layout focus-donut-layout">
+        <div class="donut-canvas-wrap focus-donut-canvas-wrap"><canvas id="${FOCUS_CANVAS_ID}"></canvas></div>
+        <div class="donut-legend" id="${FOCUS_CANVAS_ID}-legend" aria-label="Category legend"></div>
+      </div>`;
+    } else {
+      host.innerHTML = `<div class="focus-mode-chart-wrap"><canvas id="${FOCUS_CANVAS_ID}"></canvas></div>`;
+    }
+
+    overlay.querySelector('.focus-mode-title').textContent = title;
+    const subEl = overlay.querySelector('.focus-mode-sub');
+    subEl.textContent = sub;
+    subEl.style.display = sub ? '' : 'none';
+
+    focusSelect.replaceWith(focusSelect.cloneNode(true));
+    const freshSelect = overlay.querySelector('.focus-mode-select');
+    if (config.selectId) {
+      const srcSelect = document.getElementById(config.selectId);
+      if (srcSelect) {
+        freshSelect.innerHTML = srcSelect.innerHTML;
+        freshSelect.value = srcSelect.value;
+        freshSelect.classList.remove('hidden');
+        freshSelect.addEventListener('change', e => {
+          srcSelect.value = e.target.value;
+          srcSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          config.render(FOCUS_CANVAS_ID);
+        });
+      } else {
+        freshSelect.classList.add('hidden');
+      }
+    } else {
+      freshSelect.classList.add('hidden');
+    }
+
+    overlay.classList.remove('hidden');
+    document.body.classList.add('focus-mode-open');
+    state.focusSourceChartId = sourceChartId;
+
+    requestAnimationFrame(() => {
+      config.render(FOCUS_CANVAS_ID);
+      overlay.querySelector('.focus-mode-close')?.focus();
+    });
+  }
+
+  function initFocusMode() {
+    ensureFocusOverlay();
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('.focus-mode-btn');
+      if (btn?.dataset.focusChart) {
+        e.preventDefault();
+        openFocusMode(btn.dataset.focusChart);
+        return;
+      }
+      if (e.target.closest('.focus-mode-close') || e.target.classList.contains('focus-mode-backdrop')) {
+        closeFocusMode();
+      }
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && state.focusSourceChartId) closeFocusMode();
     });
   }
 
@@ -1621,20 +1789,23 @@
     const exportBtn = exportId ? exportBtnHTML(exportId) : '';
     const view = includeToggle ? (state.cardViews[cardId] || 'table') : 'table';
     const compareBtn = compareButtonHTML(cardId, compareType, view);
+    const focusBtn = includeToggle ? focusModeBtnHTML(`chart-${cardId}`, true) : '';
     const toggle = includeToggle ? `<div class="view-toggle">
         <button type="button" class="view-toggle-btn active" data-view="table" data-card="${cardId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
         <button type="button" class="view-toggle-btn" data-view="chart" data-card="${cardId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>
       </div>` : '';
-    return `<div class="card-header-actions">${exportBtn}${compareBtn}${toggle}</div>`;
+    return `<div class="card-header-actions">${exportBtn}${compareBtn}${focusBtn}${toggle}</div>`;
   }
 
   function dataCard(title, body, toggleId, compareCard = false, exportId = null, compareType = 'category') {
+    const canvasMatch = body.match(/<canvas id="([^"]+)"/);
+    const chartFocusBtn = canvasMatch && !toggleId ? focusModeBtnHTML(canvasMatch[1]) : '';
     const actions = (compareCard || toggleId)
       ? (compareCard ? categoryCardActions(toggleId, !!toggleId, exportId, compareType) : `<div class="card-header-actions">${exportId ? exportBtnHTML(exportId) : ''}<div class="view-toggle">
           <button type="button" class="view-toggle-btn active" data-view="table" data-card="${toggleId}" title="Table"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
           <button type="button" class="view-toggle-btn" data-view="chart" data-card="${toggleId}" title="Chart"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 16l4-8 4 5 5-9"/></svg></button>
         </div></div>`)
-      : '';
+      : (chartFocusBtn ? `<div class="card-header-actions">${chartFocusBtn}</div>` : '');
     return `<div class="data-card"><div class="data-card-header"><span class="data-card-title">${title}</span>${actions}</div><div class="data-card-body">${body}</div></div>`;
   }
 
@@ -1753,6 +1924,8 @@
     document.querySelectorAll(`.view-toggle-btn[data-card="${cardId}"]`).forEach(b => {
       b.classList.toggle('active', b.dataset.view === view);
     });
+    const card = document.querySelector(`.view-toggle-btn[data-card="${cardId}"]`)?.closest('.data-card');
+    if (card) card.classList.toggle('chart-view-active', view === 'chart');
     const tableEl = document.getElementById(`view-${cardId}-table`);
     const chartEl = document.getElementById(`view-${cardId}-chart`);
     if (view === 'table') {
@@ -2088,7 +2261,10 @@
           <span class="data-card-title">${title}</span>
           ${subtitle ? `<div class="chart-card-sub">${subtitle}</div>` : ''}
         </div>
-        <select class="chart-select" id="${selectId}" aria-label="${title} filter">${opts}</select>
+        <div class="chart-card-header-actions">
+          ${focusModeBtnHTML(canvasId)}
+          <select class="chart-select" id="${selectId}" aria-label="${title} filter">${opts}</select>
+        </div>
       </div>
       <div class="data-card-body chart-body-pro">
         ${bodyContent}
