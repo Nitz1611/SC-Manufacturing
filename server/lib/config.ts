@@ -17,6 +17,39 @@ export function resolveMetricView(): string {
     : `${catalog}.pgt_plnt_prodtn_metric_view`;
 }
 
+export function dateColumn(): string {
+  return process.env.DATABRICKS_DATE_COLUMN?.trim() || 'STRT_DT';
+}
+
+/** SQL expression for fiscal/network period label (P1…P10). Override if view has no Period column. */
+export function periodExpression(): string {
+  return process.env.DATABRICKS_PERIOD_EXPR?.trim() || 'Period';
+}
+
+/** SQL expression for fiscal week label. Override if view has no Week column. */
+export function weekExpression(): string {
+  return process.env.DATABRICKS_WEEK_EXPR?.trim() || 'Week';
+}
+
+/** SQL expression for shift grouping. */
+export function shiftExpression(): string {
+  return process.env.DATABRICKS_SHIFT_EXPR?.trim() || 'COALESCE(CAST(Shift AS STRING), CAST(SHIFT_KEY AS STRING))';
+}
+
+export function yearFilterExpression(): string {
+  return `(:year IS NULL OR YEAR(${dateColumn()}) = :year)`;
+}
+
+function applySqlFragments(sql: string): string {
+  return sql
+    .replace(/\{\{year_filter\}\}/g, yearFilterExpression())
+    .replace(/\(:year IS NULL OR Year = :year\)/gi, yearFilterExpression())
+    .replace(/\{\{period_expr\}\}/g, periodExpression())
+    .replace(/\{\{week_expr\}\}/g, weekExpression())
+    .replace(/\{\{shift_expr\}\}/g, shiftExpression())
+    .replace(/\{\{date_col\}\}/g, dateColumn());
+}
+
 export function loadQuerySql(queryKey: string): string {
   const file = path.join(QUERIES_DIR, `${queryKey}.obo.sql`);
   if (!fs.existsSync(file)) {
@@ -26,6 +59,7 @@ export function loadQuerySql(queryKey: string): string {
   const metricView = resolveMetricView();
   sql = sql.replace(/\{\{catalog\}\}\.pgt_plnt_prodtn_metric_view/g, metricView);
   sql = sql.replace(/\{\{catalog\}\}/g, process.env.DATABRICKS_CATALOG || 'main');
+  sql = applySqlFragments(sql);
   return sql.replace(/^--[^\n]*\n/gm, '').trim();
 }
 

@@ -6,5 +6,5 @@ SELECT
   SUM(STOPS) AS stops
 FROM {{catalog}}.pgt_plnt_prodtn_metric_view
 WHERE 1 = 1
-  AND (:year IS NULL OR Year = :year)
+  AND {{year_filter}}
   AND (:site IS NULL OR UPPER(Site) = UPPER(:site))
