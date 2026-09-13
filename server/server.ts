@@ -6,13 +6,13 @@ import dotenv from 'dotenv';
 import { analyticsRouter } from './routes/analytics.js';
 import { summariesRouter } from './routes/summaries.js';
 import { cacheInfo } from './lib/cache.js';
+import { sqlConfigured } from './lib/databricksSql.js';
 
-dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.env') });
-dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.env') });
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+dotenv.config({ path: path.join(ROOT, '.env') });
 
 const app = express();
 const PORT = Number(process.env.PORT || process.env.DATABRICKS_APP_PORT || 8000);
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 app.use(cors());
 app.use(express.json());
@@ -33,8 +33,8 @@ app.get('*', (_req, res) => {
       res.status(200).send(`
         <!DOCTYPE html><html><body style="font-family:Inter,sans-serif;padding:40px">
         <h1>SC Manufacturing Console</h1>
-        <p>VR architecture server is running on port ${PORT}.</p>
-        <p>Run <code>npm run dev</code> from repo root to start the React client (Vite dev server proxies /api here).</p>
+        <p>Server is running on port ${PORT}.</p>
+        <p>Run <code>npm run dev</code> from repo root to start the React client.</p>
         <p><a href="/api/status">/api/status</a></p>
         </body></html>`);
     }
@@ -44,10 +44,11 @@ app.get('*', (_req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('╔══════════════════════════════════════════════════════╗');
-  console.log('║  SC Manufacturing Console — VR Architecture          ║');
+  console.log('║  SC Manufacturing Console                            ║');
   console.log(`║  http://localhost:${PORT}                              ║`);
   console.log('╠══════════════════════════════════════════════════════╣');
-  console.log(`║  Mode       : ${(process.env.DATABRICKS_WAREHOUSE_ID ? 'SQL + cache fallback' : 'Cache-only (dev)').padEnd(38)}║`);
+  const mode = sqlConfigured() ? 'Live SQL (metric view)     ' : 'Demo fallback (no .env SQL)';
+  console.log(`║  Mode       : ${mode.padEnd(38)}║`);
   console.log(`║  Analytics  : POST /api/analytics/query/:queryKey    ║`);
   console.log(`║  Summaries  : POST /api/summaries                    ║`);
   console.log(`║  Legacy     : POST /api/console-data                   ║`);

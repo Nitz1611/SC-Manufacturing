@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { QueryKey } from '../../shared/types/dashboard.js';
-import { runAnalyticsQuery } from '../lib/analytics.js';
+import { databricksConfigured, runAnalyticsQuery } from '../lib/analytics.js';
+import { sqlConfigured, warmupWarehouse } from '../lib/databricksSql.js';
 
 const VALID_KEYS: QueryKey[] = [
   'dashboard_dt_kpis',
@@ -42,15 +43,28 @@ analyticsRouter.post('/analytics/query/:queryKey', async (req, res) => {
 });
 
 analyticsRouter.get('/warmup', async (_req, res) => {
-  res.json({ ok: true, message: 'Warehouse warmup ping' });
+  try {
+    if (sqlConfigured()) {
+      await warmupWarehouse();
+      return res.json({ ok: true, message: 'SQL warehouse warmed up' });
+    }
+    return res.json({ ok: true, message: 'SQL not configured' });
+  } catch (e) {
+    return res.status(500).json({ error: (e as Error).message });
+  }
 });
 
 analyticsRouter.get('/status', (_req, res) => {
+  const configured = databricksConfigured();
   res.json({
     ok: true,
-    architecture: 'vr-dashboard',
+    architecture: 'sc-manufacturing',
+    sql_configured: configured,
     warehouse: process.env.DATABRICKS_WAREHOUSE_ID || 'NOT SET',
+    host: process.env.DATABRICKS_HOST || process.env.DATABRICKS_SERVER_HOSTNAME || 'NOT SET',
     catalog: process.env.DATABRICKS_CATALOG || 'main',
-    mode: process.env.DATABRICKS_WAREHOUSE_ID ? 'sql+cache-fallback' : 'cache-only',
+    metric_view: process.env.DATABRICKS_METRIC_VIEW || '(catalog).pgt_plnt_prodtn_metric_view',
+    mode: configured ? 'live-sql-metric-view' : 'demo-fallback',
+    supervisor: 'not used for chart data',
   });
 });

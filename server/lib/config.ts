@@ -12,9 +12,21 @@ export function loadQuerySql(queryKey: string): string {
     throw new Error(`Query file not found: ${queryKey}.obo.sql`);
   }
   let sql = fs.readFileSync(file, 'utf-8');
-  const catalog = process.env.DATABRICKS_CATALOG || 'main';
-  sql = sql.replace(/\{\{catalog\}\}/g, catalog);
+  const metricView =
+    process.env.DATABRICKS_METRIC_VIEW
+    || `${process.env.DATABRICKS_CATALOG || 'main'}.${process.env.DATABRICKS_SCHEMA ? process.env.DATABRICKS_SCHEMA + '.' : ''}pgt_plnt_prodtn_metric_view`;
+  sql = sql.replace(/\{\{catalog\}\}\.pgt_plnt_prodtn_metric_view/g, metricView);
+  sql = sql.replace(/\{\{catalog\}\}/g, process.env.DATABRICKS_CATALOG || 'main');
   return sql.replace(/^--[^\n]*\n/gm, '').trim();
+}
+
+/** Bind :year and :site placeholders for local/dev SQL execution */
+export function bindSqlParams(sql: string, params: Record<string, string | null>): string {
+  const yearLit = params.year ? String(params.year) : 'NULL';
+  const siteLit = params.site
+    ? `'${params.site.replace(/'/g, "''").toUpperCase()}'`
+    : 'NULL';
+  return sql.replace(/:year\b/g, yearLit).replace(/:site\b/g, siteLit);
 }
 
 export function normalizeParams(raw: Record<string, unknown> = {}): Record<string, string | null> {

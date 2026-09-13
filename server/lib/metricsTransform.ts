@@ -291,11 +291,179 @@ export function queryResultForKey(queryKey: string, metrics: MetricsPayload): un
   }
 }
 
-export function rowsToMetricsBundle(rowsByKey: Record<string, { rows: Record<string, unknown>[] }>, filters: Record<string, string | null>): MetricsPayload {
-  const dashKey = JSON.stringify({ period: filters.period || 'week' });
-  // Prefer enriched cache path — rows used when SQL live
-  const base = metricsFromCache(filters);
-  return enrichMetrics(base, filters, 'sql');
+function sortPeriods(labels: string[]): string[] {
+  return [...new Set(labels)].sort((a, b) => {
+    const na = parseInt(String(a).replace(/\D/g, ''), 10) || 0;
+    const nb = parseInt(String(b).replace(/\D/g, ''), 10) || 0;
+    return na - nb || String(a).localeCompare(String(b));
+  });
+}
+
+function pivotMetricRows(
+  rows: Record<string, unknown>[],
+  entityKey: string,
+  periods: string[],
+): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  for (const row of rows) {
+    const entity = String(row[entityKey] || '').toUpperCase();
+    const period = String(row.period_label || '');
+    const val = Number(row.dt_pct ?? 0);
+    if (!entity || !period) continue;
+    if (!out[entity]) out[entity] = periods.map(() => 0);
+    const idx = periods.indexOf(period);
+    if (idx >= 0) out[entity][idx] = +val.toFixed(2);
+  }
+  return out;
+}
+
+export interface SqlQueryResults {
+  kpis: Record<string, unknown>[];
+  periodTrend: Record<string, unknown>[];
+  siteByPeriod: Record<string, unknown>[];
+  categoryByPeriod: Record<string, unknown>[];
+  lineByPeriod: Record<string, unknown>[];
+  reasons: Record<string, unknown>[];
+  dow: Record<string, unknown>[];
+  topLines: Record<string, unknown>[];
+  shiftComparison: Record<string, unknown>[];
+}
+
+export function buildMetricsFromSql(
+  results: SqlQueryResults,
+  filters: Record<string, string | null>,
+): MetricsPayload {
+  const periodLabels = sortPeriods(
+    results.periodTrend.map(r => String(r.period_label || '')).filter(Boolean),
+  );
+  const periods = periodLabels.length ? periodLabels : PERIODS;
+  const period_trend = periods.map(p => {
+    const row = results.periodTrend.find(r => String(r.period_label) === p);
+    return row ? +Number(row.dt_pct || 0).toFixed(2) : 0;
+  });
+
+  const k = results.kpis[0] || {};
+  const dtPct = Number(k.downtime_pct ?? 0);
+  const dtHrs = Number(k.downtime_hrs ?? 0);
+  const stops = Number(k.stops ?? 0);
+
+  const kpis = {
+    downtime_pct: {
+      value: `${dtPct.toFixed(2)}%`,
+      delta: 'vs prior period',
+      direction: dtPct > 5 ? 'bad' as const : 'good' as const,
+    },
+    downtime_hrs: {
+      value: `${Math.round(dtHrs).toLocaleString()} h`,
+      delta: '',
+      direction: 'warn' as const,
+    },
+    stops: {
+      value: String(Math.round(stops)),
+      delta: '',
+      direction: 'warn' as const,
+    },
+    oee: { value: 'N/A', delta: 'Not in metric view', direction: 'warn' as const },
+  };
+
+  const site_by_period = pivotMetricRows(results.siteByPeriod, 'site', periods);
+  const category_by_period = pivotMetricRows(
+    results.categoryByPeriod.map(r => ({ ...r, site: r.category })),
+    'site',
+    periods,
+  );
+  // Fix category keys - pivot used 'site' as entityKey hack, redo properly
+  const category_by_period_fixed: Record<string, number[]> = {};
+  for (const row of results.categoryByPeriod) {
+    const cat = String(row.category || 'Unknown');
+    const period = String(row.period_label || '');
+    const val = Number(row.dt_pct ?? 0);
+    if (!category_by_period_fixed[cat]) category_by_period_fixed[cat] = periods.map(() => 0);
+    const idx = periods.indexOf(period);
+    if (idx >= 0) category_by_period_fixed[cat][idx] = +val.toFixed(2);
+  }
+
+  const line_by_period: Record<string, number[]> = {};
+  for (const row of results.lineByPeriod) {
+    const line = String(row.line || '').toUpperCase();
+    const period = String(row.period_label || '');
+    const val = Number(row.dt_pct ?? 0);
+    if (!line) continue;
+    if (!line_by_period[line]) line_by_period[line] = periods.map(() => 0);
+    const idx = periods.indexOf(period);
+    if (idx >= 0) line_by_period[line][idx] = +val.toFixed(2);
+  }
+
+  const top_lines: Record<string, number> = {};
+  for (const row of results.topLines) {
+    const line = String(row.line || '').toUpperCase();
+    if (line) top_lines[line] = +Number(row.dt_pct || 0).toFixed(2);
+  }
+
+  const weeks = sortPeriods(
+    results.dow.map(r => String(r.week_label || '')).filter(Boolean),
+  );
+  const dowWeeks = weeks.length ? weeks : WEEKS;
+
+  const dow_by_day_week: Record<string, Record<string, number>> = {};
+  for (const row of results.dow) {
+    const day = String(row.day_name || '');
+    const week = String(row.week_label || '');
+    const val = Number(row.dt_pct ?? 0);
+    if (!day || !week) continue;
+    if (!dow_by_day_week[day]) dow_by_day_week[day] = {};
+    dow_by_day_week[day][week] = +val.toFixed(2);
+  }
+
+  const reasons = results.reasons.map(r => ({
+    reason: String(r.reason || 'Unknown'),
+    hours: +Number(r.hours || 0).toFixed(2),
+    pct: +Number(r.pct || 0).toFixed(2),
+  }));
+
+  const shift_comparison = results.shiftComparison.map(r => ({
+    shift: String(r.shift || 'Shift'),
+    hours: +Number(r.hours || 0).toFixed(2),
+  }));
+
+  const top_sites_trend: Record<string, number[]> = {};
+  const siteTotals = Object.entries(site_by_period)
+    .map(([site, vals]) => [site, vals.reduce((a, b) => a + b, 0)] as const)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  for (const [site] of siteTotals) {
+    top_sites_trend[site] = site_by_period[site];
+  }
+
+  const yearNum = filters.year ? parseInt(filters.year, 10) : 2026;
+  const m: MetricsPayload = {
+    meta: {
+      year: yearNum,
+      period: periods[periods.length - 1] || 'P09',
+      week: dowWeeks[dowWeeks.length - 1] || '',
+      source: 'sql',
+      filters: Object.fromEntries(
+        Object.entries(filters).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]),
+      ),
+    },
+    periods,
+    weeks: dowWeeks,
+    kpis,
+    tab_insights: {},
+    site_by_period,
+    category_by_period: Object.keys(category_by_period_fixed).length
+      ? category_by_period_fixed
+      : category_by_period,
+    line_by_period,
+    period_trend,
+    reasons,
+    dow_by_day_week,
+    top_lines,
+    top_sites_trend,
+    shift_comparison,
+  };
+  m.tab_insights = buildTabInsights(m);
+  return m;
 }
 
 export { transformDashboard, synthesizeFromTrend };

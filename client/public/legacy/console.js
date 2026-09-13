@@ -436,11 +436,10 @@
         applyConsoleData({ metrics: filterMetricsClient(data.metrics), dashboard: data.dashboard || {} });
       }
 
-      if (data._refreshing && data._job_id) {
-        setDataStatus('loading', 'Showing cached data · refreshing from Genie in background…');
-        state.dataPollTimer = setInterval(() => pollConsoleJob(data._job_id, true), 1500);
+      if (data._source === 'sql' || data.metrics?.meta?.source === 'sql') {
+        setDataStatus('live', 'Live unplanned DT data from metric view');
       } else if (data._cached) {
-        setDataStatus('cached', 'Unplanned DT data loaded from cache · slicers respond instantly');
+        setDataStatus('cached', 'Cached/demo data · check .env SQL settings');
       }
       state.dataLoading = false;
     } catch (err) {

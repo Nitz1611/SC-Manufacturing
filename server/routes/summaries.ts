@@ -1,8 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { getMetricsBundle, metricsBundleToConsolePayload, runAnalyticsQuery } from '../lib/analytics.js';
-import { buildTabInsights, applySiteFilter } from '../lib/metricsTransform.js';
-import type { MetricsPayload } from '../../shared/types/dashboard.js';
+import {
+  getMetricsBundle,
+  metricsBundleToConsolePayload,
+  warmupWarehouse,
+} from '../lib/analytics.js';
+import { buildTabInsights } from '../lib/metricsTransform.js';
+import { sqlConfigured } from '../lib/databricksSql.js';
 
 const summarySchema = z.object({
   entityType: z.enum(['overview', 'category', 'line', 'dow', 'reason']),
@@ -15,7 +19,7 @@ const SUMMARY_TTL_MS = Number(process.env.SUMMARY_CACHE_TTL_HOURS || 24) * 3600 
 
 export const summariesRouter = Router();
 
-summariesRouter.post('/summaries', (req, res) => {
+summariesRouter.post('/summaries', async (req, res) => {
   const parsed = summarySchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.message });
@@ -30,23 +34,34 @@ summariesRouter.post('/summaries', (req, res) => {
     }
   }
 
-  const metrics = getMetricsBundle(params);
-  const narrative = metrics.tab_insights[entityType] || buildTabInsights(metrics)[entityType] || '';
-  clientSummaryCache.set(cacheKey, { narrative, ts: Date.now() });
-  return res.json({ narrative, cached: false, entityType });
+  try {
+    const metrics = await getMetricsBundle(params);
+    const narrative = metrics.tab_insights[entityType] || buildTabInsights(metrics)[entityType] || '';
+    clientSummaryCache.set(cacheKey, { narrative, ts: Date.now() });
+    return res.json({ narrative, cached: false, entityType, source: metrics.meta.source });
+  } catch (e) {
+    return res.status(500).json({ error: (e as Error).message });
+  }
 });
 
 summariesRouter.get('/warmup', async (_req, res) => {
-  // VR pattern: fire-and-forget warehouse wake — no-op in cache mode
-  res.json({ ok: true, message: 'Warmup acknowledged' });
+  try {
+    if (sqlConfigured()) {
+      await warmupWarehouse();
+      return res.json({ ok: true, message: 'SQL warehouse warmed up' });
+    }
+    return res.json({ ok: true, message: 'SQL not configured — skipped' });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: (e as Error).message });
+  }
 });
 
-/** Legacy bridge — aggregates analytics into console-data shape for existing UI */
-summariesRouter.post('/console-data', (req, res) => {
+summariesRouter.post('/console-data', async (req, res) => {
   const filters = (req.body?.filters || {}) as Record<string, unknown>;
-  const metrics = getMetricsBundle(filters);
-  res.json(metricsBundleToConsolePayload(metrics));
+  try {
+    const metrics = await getMetricsBundle(filters);
+    res.json(metricsBundleToConsolePayload(metrics));
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
 });
-
-export { getMetricsBundle, applySiteFilter };
-export type { MetricsPayload };
