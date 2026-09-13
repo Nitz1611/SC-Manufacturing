@@ -51,16 +51,18 @@ async function executeQuery(
   return executeStatement(sql);
 }
 
-async function loadMetricsFromSql(norm: Record<string, string | null>): Promise<MetricsPayload> {
+/** Run SQL in two waves to avoid hammering the warehouse with 11 concurrent scans. */
+async function loadMetricsFromSql(
+  norm: Record<string, string | null>,
+  onProgress?: (message: string) => void,
+): Promise<MetricsPayload> {
+  onProgress?.('Querying KPIs, sites, and trends…');
   const [
     kpis,
     periodTrend,
     siteByPeriod,
-    categoryByPeriod,
-    lineByPeriod,
     reasons,
     dow,
-    dowByShift,
     topLines,
     shiftComparison,
     filterOptions,
@@ -68,14 +70,18 @@ async function loadMetricsFromSql(norm: Record<string, string | null>): Promise<
     executeQuery('dashboard_dt_kpis', norm),
     executeQuery('dashboard_dt_period_trend', norm),
     executeQuery('dashboard_dt_site_by_period', norm),
-    executeQuery('dashboard_dt_category_by_period', norm),
-    executeQuery('dashboard_dt_line_by_period', norm),
     executeQuery('dashboard_dt_reasons', norm),
     executeQuery('dashboard_dt_dow', norm),
-    executeQuery('dashboard_dt_dow_by_shift', norm),
     executeQuery('dashboard_dt_top_lines', norm),
     executeQuery('dashboard_dt_shift_comparison', norm),
     executeQuery('dashboard_filter_options', norm),
+  ]);
+
+  onProgress?.('Querying category, line, and shift breakdowns…');
+  const [categoryByPeriod, lineByPeriod, dowByShift] = await Promise.all([
+    executeQuery('dashboard_dt_category_by_period', norm),
+    executeQuery('dashboard_dt_line_by_period', norm),
+    executeQuery('dashboard_dt_dow_by_shift', norm),
   ]);
 
   const results: SqlQueryResults = {
@@ -138,6 +144,30 @@ function setMemoryCached(norm: Record<string, string | null>, metrics: MetricsPa
   memoryCache.set(coarseCacheKey(norm), { data: metrics, ts: Date.now() });
 }
 
+/** Return cached metrics if available (memory or disk), without hitting SQL. */
+export function getCachedMetricsBundle(filters: Record<string, unknown> = {}): MetricsPayload | null {
+  const norm = normalizeParams(filters);
+  return getMemoryCached(norm) || loadPriorSqlCache(filters);
+}
+
+/** Return in-memory cache only (fresh within TTL). */
+export function getFreshMetricsBundle(filters: Record<string, unknown> = {}): MetricsPayload | null {
+  const norm = normalizeParams(filters);
+  return getMemoryCached(norm);
+}
+
+/** Refresh metrics from SQL and update caches. Used by background console-data jobs. */
+export async function refreshMetricsBundle(
+  filters: Record<string, unknown>,
+  onProgress?: (message: string) => void,
+): Promise<MetricsPayload> {
+  const norm = normalizeParams(filters);
+  const metrics = await loadMetricsFromSql(norm, onProgress);
+  const scoped = applySiteFilter(metrics, norm.site);
+  setMemoryCached(norm, scoped);
+  return scoped;
+}
+
 export async function getMetricsBundle(filters: Record<string, unknown> = {}): Promise<MetricsPayload> {
   const norm = normalizeParams(filters);
   const mem = getMemoryCached(norm);
@@ -196,14 +226,17 @@ export async function runAnalyticsQuery(
   return { rows, source: metrics.meta.source, cached: true };
 }
 
-export function metricsBundleToConsolePayload(metrics: MetricsPayload) {
+export function metricsBundleToConsolePayload(
+  metrics: MetricsPayload | null,
+  extras: { _job_id?: string | null; _refreshing?: boolean } = {},
+) {
   return {
     metrics,
     dashboard: {},
-    _cached: metrics.meta.source !== 'sql',
-    _refreshing: false,
-    _job_id: null,
-    _source: metrics.meta.source,
+    _cached: metrics ? metrics.meta.source !== 'sql' : true,
+    _refreshing: extras._refreshing ?? false,
+    _job_id: extras._job_id ?? null,
+    _source: metrics?.meta?.source ?? 'loading',
   };
 }
 

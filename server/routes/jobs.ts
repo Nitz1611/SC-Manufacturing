@@ -16,7 +16,7 @@ jobsRouter.get('/job/:id', (req, res) => {
     return res.json({
       status: 'running',
       elapsed,
-      message: job.message || `Supervisor querying Genie views… (${elapsed}s elapsed)`,
+      message: job.message || `Background task running… (${elapsed}s elapsed)`,
     });
   }
 

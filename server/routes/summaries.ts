@@ -1,8 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  getCachedMetricsBundle,
+  getFreshMetricsBundle,
   getMetricsBundle,
   metricsBundleToConsolePayload,
+  refreshMetricsBundle,
   resolveMetricView,
   warmupWarehouse,
 } from '../lib/analytics.js';
@@ -13,6 +16,7 @@ import {
   failJob,
   finishJob,
   newJobId,
+  updateJobMessage,
 } from '../lib/jobs.js';
 import { getAllSupervisorSummaries, getSupervisorSummary, supervisorConfigured } from '../lib/supervisor.js';
 import type { SummaryEntity } from '../lib/summaryPrompts.js';
@@ -211,13 +215,55 @@ summariesRouter.get('/warmup', async (_req, res) => {
 
 summariesRouter.post('/console-data', async (req, res) => {
   const filters = (req.body?.filters || {}) as Record<string, unknown>;
+  const force = Boolean(req.body?.force);
+
+  if (!force) {
+    const fresh = getFreshMetricsBundle(filters);
+    if (fresh) {
+      return res.json(metricsBundleToConsolePayload(fresh));
+    }
+  }
+
+  if (sqlConfigured()) {
+    const jobId = newJobId();
+    createJob(jobId, 'Connecting to Databricks metric view…');
+
+    void (async () => {
+      try {
+        const metrics = await refreshMetricsBundle(filters, msg => updateJobMessage(jobId, msg));
+        finishJob(jobId, { metrics });
+        console.log(`[job ${jobId.slice(0, 8)}] Metrics refresh complete`);
+      } catch (e) {
+        failJob(jobId, (e as Error).message);
+        console.error(`[job ${jobId.slice(0, 8)}] Metrics refresh failed:`, (e as Error).message);
+      }
+    })();
+
+    const cached = getCachedMetricsBundle(filters);
+    if (cached) {
+      const payload = metricsBundleToConsolePayload(cached, { _job_id: jobId, _refreshing: true });
+      payload._cached = true;
+      payload._source = cached.meta?.source === 'sql' ? 'cache' : payload._source;
+      return res.json(payload);
+    }
+
+    return res.json({
+      metrics: null,
+      dashboard: {},
+      _cached: true,
+      _refreshing: true,
+      _job_id: jobId,
+      _source: 'loading',
+      status: 'running',
+    });
+  }
+
   try {
     const metrics = await getMetricsBundle(filters);
-    const payload = metricsBundleToConsolePayload(metrics);
-    res.json(payload);
+    return res.json(metricsBundleToConsolePayload(metrics));
   } catch (e) {
     const message = (e as Error).message;
-    res.status(503).json({
+    return res.status(503).json({
       error: message,
       metrics: null,
       _source: 'error',

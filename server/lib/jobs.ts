@@ -28,8 +28,15 @@ export function newJobId(): string {
   return crypto.randomUUID();
 }
 
-export function createJob(id: string): void {
-  jobs.set(id, { status: 'running', result: null, error: '', started: Date.now() });
+export function createJob(id: string, message?: string): void {
+  jobs.set(id, { status: 'running', result: null, error: '', started: Date.now(), message });
+}
+
+export function updateJobMessage(id: string, message: string): void {
+  const job = jobs.get(id);
+  if (job?.status === 'running') {
+    jobs.set(id, { ...job, message });
+  }
 }
 
 export function finishJob(id: string, result: unknown): void {

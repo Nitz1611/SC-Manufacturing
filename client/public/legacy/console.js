@@ -1097,15 +1097,29 @@
         state.metricsBase = data.metrics;
         state.lastDataFilterKey = dataFilterKey();
         applyConsoleData({ metrics: filterMetricsClient(data.metrics), dashboard: data.dashboard || {} });
+        dismissBootSplash();
+        loadAiSummaries(false);
       }
 
-      if (data._source === 'sql' || data.metrics?.meta?.source === 'sql') {
+      if (data._job_id) {
+        const pollMs = 2000;
+        state.dataLoading = true;
+        setDataStatus('loading', data._refreshing ? 'Refreshing from metric view…' : 'Querying Databricks…');
+        if (!data.metrics) setBootStatus('Querying Databricks metric view');
+        state.dataPollTimer = setInterval(() => pollConsoleJob(data._job_id, false), pollMs);
+        pollConsoleJob(data._job_id, false);
+      } else if (data._source === 'sql' || data.metrics?.meta?.source === 'sql') {
         setDataStatus('live', 'Live unplanned DT data from metric view');
+        state.dataLoading = false;
+        if (!data.metrics) loadAiSummaries(false);
       } else if (data._cached) {
         setDataStatus('cached', 'Cached/demo data · check .env SQL settings');
+        state.dataLoading = false;
+        if (!data.metrics) loadAiSummaries(false);
+      } else {
+        state.dataLoading = false;
+        if (!data.metrics) loadAiSummaries(false);
       }
-      loadAiSummaries(false);
-      state.dataLoading = false;
     } catch (err) {
       state.dataLoading = false;
       setDataStatus('error', `Data load failed: ${err.message}`);
@@ -1121,7 +1135,11 @@
       const job = await res.json();
 
       if (job.status === 'running') {
-        if (!background) setDataStatus('loading', job.message || `Refreshing… ${job.elapsed || 0}s`);
+        const msg = job.message || `Querying metric view… ${job.elapsed || 0}s`;
+        if (!background) {
+          setDataStatus('loading', msg);
+          setBootStatus(msg);
+        }
         return;
       }
 
@@ -1130,8 +1148,13 @@
       state.dataLoading = false;
 
       if (job.status === 'error') {
-        if (!state.metricsBase) setDataStatus('error', job.error || 'Refresh failed');
-        else setDataStatus('cached', 'Showing cached unplanned DT data · refresh failed');
+        if (!state.metricsBase) {
+          setDataStatus('error', (job.error || 'Refresh failed').slice(0, 120));
+          dismissBootSplash();
+        } else {
+          setDataStatus('cached', 'Showing cached data · refresh failed');
+        }
+        loadAiSummaries(false);
         return;
       }
 
@@ -1139,6 +1162,9 @@
         state.metricsBase = job.result.metrics;
         state.lastDataFilterKey = dataFilterKey();
         applyConsoleData({ metrics: filterMetricsClient(job.result.metrics), dashboard: {} });
+        setDataStatus('live', 'Live unplanned DT data from metric view');
+        dismissBootSplash();
+        loadAiSummaries(false);
       }
     } catch (err) {
       console.warn('[poll]', err.message);
@@ -1319,8 +1345,9 @@
     renderKpiContent();
     switchPage('kpi-overview', true);
     switchKpiTab('overview', true);
+    fetch('/api/warmup').catch(() => {});
     loadConsoleData(false);
-    setTimeout(dismissBootSplash, 4000);
+    setTimeout(dismissBootSplash, 120000);
     document.addEventListener('click', closeSlicersOnOutsideClick);
   });
 
