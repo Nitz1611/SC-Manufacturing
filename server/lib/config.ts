@@ -110,6 +110,23 @@ export function dtTypeFilter(): string {
   return `TRIM(${col}) IN ('Unplanned', 'Unspecified')`;
 }
 
+/** UC metric views require MEASURE() — AVG/SUM on measure columns is invalid. */
+function measureExpr(columnExpr: string): string {
+  return `MEASURE(${columnExpr})`;
+}
+
+export function dtPctMeasure(): string {
+  return measureExpr(dtPctColumn());
+}
+
+export function dtHoursMeasure(): string {
+  return measureExpr(dtHoursColumn());
+}
+
+export function stopsMeasure(): string {
+  return measureExpr(stopsColumn());
+}
+
 export function yearFilterExpression(): string {
   return `(:year IS NULL OR YEAR(${dateColumn()}) = :year)`;
 }
@@ -129,6 +146,9 @@ function applySqlFragments(sql: string): string {
     .replace(/\{\{dt_pct\}\}/g, dtPctColumn())
     .replace(/\{\{dt_hours\}\}/g, dtHoursColumn())
     .replace(/\{\{stops_col\}\}/g, stopsColumn())
+    .replace(/\{\{dt_pct_m\}\}/g, dtPctMeasure())
+    .replace(/\{\{dt_hours_m\}\}/g, dtHoursMeasure())
+    .replace(/\{\{stops_m\}\}/g, stopsMeasure())
     .replace(/\{\{dt_type_filter\}\}/g, dtTypeFilter());
 }
 
