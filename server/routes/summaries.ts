@@ -6,10 +6,23 @@ import {
   resolveMetricView,
   warmupWarehouse,
 } from '../lib/analytics.js';
+import {
+  claudeConfigured,
+  getClaudeBatchSummaries,
+  getClaudeTabSummary,
+} from '../lib/claudeSummary.js';
 import { buildTabInsights } from '../lib/metricsTransform.js';
 import { sqlConfigured } from '../lib/databricksSql.js';
 import { getAllSupervisorSummaries, getSupervisorSummary, supervisorConfigured } from '../lib/supervisor.js';
 import type { SummaryEntity } from '../lib/summaryPrompts.js';
+
+const SUMMARY_TABS: SummaryEntity[] = ['overview', 'category', 'line', 'dow', 'reason'];
+
+function resolveSummaryBackend(): 'claude' | 'supervisor' | 'template' {
+  if (claudeConfigured()) return 'claude';
+  if (supervisorConfigured()) return 'supervisor';
+  return 'template';
+}
 
 const summarySchema = z.object({
   entityType: z.enum(['overview', 'category', 'line', 'dow', 'reason']),
@@ -73,8 +86,18 @@ summariesRouter.post('/summaries', async (req, res) => {
   }
 
   try {
-    if (supervisorConfigured()) {
-      const { narrative, source } = await getSupervisorSummary(entityType, filtersFromParams(params));
+    const filters = filtersFromParams(params);
+    const backend = resolveSummaryBackend();
+
+    if (backend === 'claude') {
+      const metrics = await getMetricsBundle(params);
+      const { narrative, source } = await getClaudeTabSummary(entityType, filters, metrics);
+      summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
+      return res.json({ narrative, cached: false, entityType, source });
+    }
+
+    if (backend === 'supervisor') {
+      const { narrative, source } = await getSupervisorSummary(entityType, filters);
       summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
       return res.json({ narrative, cached: false, entityType, source });
     }
@@ -108,21 +131,36 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
   const filters = filtersFromParams(params);
 
   if (!forceRefresh) {
-    const tabs: SummaryEntity[] = ['overview', 'category', 'line', 'dow', 'reason'];
-    const allCached = tabs.every(tab => {
+    const allCached = SUMMARY_TABS.every(tab => {
       const hit = summaryCache.get(summaryCacheKey(tab, params));
       return hit && Date.now() - hit.ts < SUMMARY_TTL_MS;
     });
     if (allCached) {
+      const firstHit = summaryCache.get(summaryCacheKey(SUMMARY_TABS[0], params))!;
       const summaries = Object.fromEntries(
-        tabs.map(tab => [tab, summaryCache.get(summaryCacheKey(tab, params))!.narrative]),
+        SUMMARY_TABS.map(tab => [tab, summaryCache.get(summaryCacheKey(tab, params))!.narrative]),
       );
-      return res.json({ summaries, cached: true, source: 'supervisor' });
+      return res.json({ summaries, cached: true, source: firstHit.source });
     }
   }
 
   try {
-    if (supervisorConfigured()) {
+    const backend = resolveSummaryBackend();
+    const metrics = await getMetricsBundle(params);
+    const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
+
+    if (backend === 'claude') {
+      const summaries = await getClaudeBatchSummaries(filters, metrics);
+      const source = 'claude';
+      for (const [tab, narrative] of Object.entries(summaries)) {
+        if (narrative) {
+          summaryCache.set(summaryCacheKey(tab, params), { narrative, source, ts: Date.now() });
+        }
+      }
+      return res.json({ summaries, cached: false, source });
+    }
+
+    if (backend === 'supervisor') {
       const summaries = await getAllSupervisorSummaries(filters);
       const source = 'supervisor';
       for (const [tab, narrative] of Object.entries(summaries)) {
@@ -133,9 +171,7 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
       return res.json({ summaries, cached: false, source });
     }
 
-    const metrics = await getMetricsBundle(params);
-    const insights = metrics.tab_insights || buildTabInsights(metrics);
-    return res.json({ summaries: insights, cached: false, source: 'template' });
+    return res.json({ summaries: templateInsights, cached: false, source: 'template' });
   } catch (e) {
     return res.status(500).json({ error: (e as Error).message });
   }

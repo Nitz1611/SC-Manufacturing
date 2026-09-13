@@ -424,9 +424,14 @@
     clearTimeout(state.summaryReloadTimer);
     state.summaryReloadTimer = setTimeout(async () => {
       const tabs = ['overview', 'category', 'line', 'dow', 'reason'];
+      const instant = state.liveMetrics?.tab_insights || {};
       tabs.forEach(tab => {
         document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-          el.textContent = '✦ Generating AI summary from Supervisor…';
+          if (instant[tab]) {
+            el.textContent = instant[tab];
+          } else {
+            el.textContent = '✦ Generating AI summary…';
+          }
         });
       });
 
@@ -455,7 +460,7 @@
         tabs.forEach(tab => {
           document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
             if (String(el.textContent).includes('Generating')) {
-              el.textContent = 'AI summary unavailable — check SUPERVISOR_ENDPOINT_NAME in .env';
+              el.textContent = 'AI summary unavailable — check CLAUDE_SERVING_ENDPOINT in .env';
             }
           });
         });
@@ -546,6 +551,7 @@
     state.dashboard = payload.dashboard || {};
     applyMetricsToState(metrics);
     updateMetricStripDOM(metrics.kpis);
+    updateAiSummariesDOM(metrics);
     refreshAllTables();
     refreshChartsForTab(state.kpiTab);
     const reasonBody = document.querySelector('.reason-table-body');
