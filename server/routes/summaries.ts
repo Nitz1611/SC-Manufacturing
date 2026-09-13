@@ -44,7 +44,6 @@ function filtersFromParams(params: Record<string, unknown>): Record<string, unkn
     year: params.year,
     site: params.site,
     region: params.region,
-    market: params.market,
     period: params.period,
   };
 }
