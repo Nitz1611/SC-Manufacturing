@@ -3,10 +3,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
+let loadedEnvFile: string | null = null;
+
 /** Repo root (folder containing root package.json with npm workspaces). */
 export function repoRoot(): string {
   let dir = path.dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
     const pkgPath = path.join(dir, 'package.json');
     if (fs.existsSync(pkgPath)) {
       try {
@@ -23,32 +25,64 @@ export function repoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 }
 
-function envCandidates(root: string): string[] {
-  const unique = new Set<string>([
-    path.join(root, '.env'),
-    path.join(process.cwd(), '.env'),
-    path.join(process.cwd(), '..', '.env'),
-  ]);
-  return [...unique];
+function walkEnvPaths(start: string): string[] {
+  const paths: string[] = [];
+  let dir = path.resolve(start);
+  for (let i = 0; i < 8; i++) {
+    paths.push(path.join(dir, '.env'));
+    paths.push(path.join(dir, '.env.txt'));
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return paths;
+}
+
+export function envSearchPaths(): string[] {
+  const unique = new Set<string>();
+  const ordered: string[] = [];
+
+  const add = (p: string) => {
+    const resolved = path.resolve(p);
+    if (!unique.has(resolved)) {
+      unique.add(resolved);
+      ordered.push(resolved);
+    }
+  };
+
+  if (process.env.DOTENV_PATH) add(process.env.DOTENV_PATH);
+  for (const p of walkEnvPaths(repoRoot())) add(p);
+  for (const p of walkEnvPaths(process.cwd())) add(p);
+
+  return ordered;
 }
 
 export function loadEnv(): string | null {
-  const root = repoRoot();
-  for (const envPath of envCandidates(root)) {
+  for (const envPath of envSearchPaths()) {
     if (!fs.existsSync(envPath)) continue;
     const result = dotenv.config({ path: envPath });
     if (!result.error) {
+      loadedEnvFile = envPath;
       console.log(`[env] loaded ${envPath}`);
       return envPath;
     }
     console.warn(`[env] failed to parse ${envPath}: ${result.error.message}`);
   }
-  console.warn(`[env] no .env found (looked in ${envCandidates(root).join(', ')})`);
+
+  loadedEnvFile = null;
+  console.warn(`[env] no .env found. repo_root=${repoRoot()} cwd=${process.cwd()}`);
   return null;
 }
 
+export function getLoadedEnvFile(): string | null {
+  return loadedEnvFile;
+}
+
 export function sqlEnvStatus(): {
+  repo_root: string;
+  cwd: string;
   env_file: string | null;
+  env_search: Array<{ path: string; exists: boolean }>;
   missing: string[];
   host_set: boolean;
   token_set: boolean;
@@ -63,11 +97,13 @@ export function sqlEnvStatus(): {
   if (!token.trim()) missing.push('DATABRICKS_PAT_TOKEN');
   if (!warehouse.trim()) missing.push('DATABRICKS_WAREHOUSE_ID');
 
-  const root = repoRoot();
-  const envFile = envCandidates(root).find(p => fs.existsSync(p)) ?? null;
+  const search = envSearchPaths().map(p => ({ path: p, exists: fs.existsSync(p) }));
 
   return {
-    env_file: envFile,
+    repo_root: repoRoot(),
+    cwd: process.cwd(),
+    env_file: getLoadedEnvFile() ?? search.find(s => s.exists)?.path ?? null,
+    env_search: search,
     missing,
     host_set: Boolean(host.trim()),
     token_set: Boolean(token.trim()),

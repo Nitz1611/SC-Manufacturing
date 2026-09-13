@@ -62,7 +62,10 @@ analyticsRouter.get('/status', (_req, res) => {
     ok: true,
     architecture: 'sc-manufacturing',
     sql_configured: configured,
+    repo_root: env.repo_root,
+    cwd: env.cwd,
     env_file: env.env_file,
+    env_search: env.env_search,
     env_vars_set: {
       host: env.host_set,
       token: env.token_set,
