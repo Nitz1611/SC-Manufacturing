@@ -13,6 +13,7 @@ from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
 from supervisor import get_dashboard, ask_question, get_rca
 import cache as cache_store
+import metrics as metrics_store
 
 load_dotenv()
 
@@ -71,6 +72,25 @@ def _run_dashboard_job(jid: str, filters: dict, cache_key: str):
         print(f"[job {jid[:8]}] Failed: {e}")
 
 
+def _run_metrics_job(jid: str, filters: dict, cache_key: str):
+    try:
+        print(f"[job {jid[:8]}] Refreshing metrics cache…")
+        norm = metrics_store.normalize_filters(filters)
+        data = metrics_store.get_metrics(filters)
+        data = metrics_store.enrich_metrics_for_console(data, norm)
+        cache_store.set(cache_key, data)
+        _finish_job(jid, {"metrics": data})
+        print(f"[job {jid[:8]}] Metrics cache refreshed")
+    except Exception as e:
+        _fail_job(jid, str(e))
+        print(f"[job {jid[:8]}] Metrics refresh failed: {e}")
+
+
+def _run_console_data_job(jid: str, filters: dict, cache_key: str):
+    """Background refresh only — UI already has instant cache payload."""
+    _run_metrics_job(jid, filters, cache_key)
+
+
 # ── GET /api/status ───────────────────────────────────────────────
 @app.route("/api/status")
 def status():
@@ -125,6 +145,62 @@ def dashboard():
     print(f"[server] Started background job {jid[:8]} for filters={filters}")
 
     return jsonify({"_job_id": jid, "_cached": False, "status": "running"})
+
+
+# ── POST /api/metrics ─────────────────────────────────────────────
+@app.route("/api/metrics", methods=["POST"])
+def api_metrics():
+    body    = request.get_json(silent=True) or {}
+    filters = body.get("filters", {})
+    force   = body.get("force", False)
+    norm    = metrics_store.normalize_filters(filters)
+    key     = metrics_store.coarse_cache_key(norm)
+
+    if not force:
+        cached = cache_store.get(key)
+        if cached:
+            metrics = metrics_store.enrich_metrics_for_console(cached, norm)
+            return jsonify({**metrics, "_cached": True, "_job_id": None})
+
+    _cleanup_old_jobs()
+    jid = _new_job()
+    t   = threading.Thread(target=_run_metrics_job, args=(jid, filters, key), daemon=True)
+    t.start()
+    return jsonify({"_job_id": jid, "_cached": False, "status": "running"})
+
+
+# ── POST /api/console-data ────────────────────────────────────────
+@app.route("/api/console-data", methods=["POST"])
+def console_data():
+    """Instant metrics from cache; background refresh when stale."""
+    body    = request.get_json(silent=True) or {}
+    filters = body.get("filters", {})
+    force   = body.get("force", False)
+    norm    = metrics_store.normalize_filters(filters)
+    cache_key = metrics_store.coarse_cache_key(norm)
+
+    cached = None if force else cache_store.get(cache_key)
+    if cached:
+        metrics = metrics_store.enrich_metrics_for_console(cached, norm)
+    else:
+        metrics = metrics_store.metrics_from_cache(filters)
+
+    needs_refresh = force or (cached is None and metrics_store._supervisor_configured())
+
+    jid = None
+    if needs_refresh:
+        _cleanup_old_jobs()
+        jid = _new_job()
+        t = threading.Thread(target=_run_console_data_job, args=(jid, filters, cache_key), daemon=True)
+        t.start()
+
+    return jsonify({
+        "metrics": metrics,
+        "dashboard": {},
+        "_cached": cached is not None,
+        "_refreshing": bool(jid),
+        "_job_id": jid,
+    })
 
 
 # ── GET /api/job/<jid> — browser polls this ───────────────────────
