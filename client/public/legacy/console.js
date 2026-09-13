@@ -1168,8 +1168,7 @@
   }
 
   function categoryValuesForSite(site, category) {
-    const mult = SITE_MULTIPLIERS[site] || 1;
-    return (CATEGORY_BASE[category] || []).map(v => +(v * mult).toFixed(2));
+    return categoryValuesForSiteHeatmap(site, category);
   }
 
   function periodBaseTotals() {
@@ -1755,10 +1754,11 @@
     state.compareCategory = category;
 
     const site = activeSite();
-    const compareSites = anchorEl?.classList.contains('heat-cat-row') ? HEATMAP_SITES : SITES;
+    const compareSites = anchorEl?.classList.contains('heat-cat-row') ? activeHeatmapSites() : SITES;
+    const periods = activePeriods();
     const rows = compareSites.map(s => {
-      const vals = categoryValuesForSite(s, category);
-      const total = avgOf(vals);
+      const vals = categoryValuesForSiteHeatmap(s, category);
+      const total = tableSummaryValue(vals) ?? avgOf(vals.filter(v => v != null));
       return { site: s, vals, total, isCurrent: s === site };
     });
     const best = rows.reduce((a, b) => (a.total < b.total ? a : b));
@@ -1781,8 +1781,8 @@
           <table class="data-table compare-table">
             <thead><tr>
               <th>Site</th>
-              ${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}
-              <th>Avg</th>
+              ${periods.map(p => `<th>2026 ${p}</th>`).join('')}
+              <th>${tableSummaryHeader()}</th>
             </tr></thead>
             <tbody>
               ${rows.map(r => {
@@ -1790,7 +1790,7 @@
                 return `<tr class="${cls}${r.isCurrent ? ' selected' : ''}">
                   <td>${r.site}${r.isCurrent ? ' ★' : ''}</td>
                   ${r.vals.map(v => heatTd(v, 8).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
-                  ${heatTd(r.total, 12, 'col-total compare-cell')}
+                  ${summaryTd(r.vals, 12)}
                 </tr>`;
               }).join('')}
             </tbody>
@@ -1813,9 +1813,9 @@
         type: 'bar',
         data: {
           labels: compareSites,
-          datasets: PERIODS.map((p, i) => ({
+          datasets: periods.map((p, i) => ({
             label: p,
-            data: rows.map(r => r.vals[i]),
+            data: rows.map(r => chartValueFromPct(r.vals[i])),
             backgroundColor: PERIOD_COLORS[i],
             borderRadius: { topLeft: 3, topRight: 3 },
             borderSkipped: false,
@@ -1825,7 +1825,14 @@
           ...CHART_DEFAULTS,
           plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
           scales: {
-            y: { beginAtZero: true, grid: { color: 'rgba(0,40,85,0.06)' }, ticks: { callback: v => v + '%' } },
+            y: {
+              beginAtZero: true,
+              ...PRO_AXIS,
+              title: proAxisTitle(chartYAxisConfig().title),
+              ticks: {
+                callback: v => chartYAxisConfig().scale(v).toFixed(chartYAxisConfig().decimals) + chartYAxisConfig().tickSuffix,
+              },
+            },
             x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
           },
         },
@@ -2001,10 +2008,15 @@
     state.detailCategory = category;
 
     const site = activeSite();
-    const vals = categoryValuesForSite(site, category);
-    const avg = avgOf(vals);
-    const peak = Math.max(...vals);
-    const peakIdx = vals.indexOf(peak);
+    const periods = activePeriods();
+    const vals = categoryValuesForSiteHeatmap(site, category);
+    const summary = tableSummaryValue(vals);
+    const numeric = vals.filter(v => v != null && Number.isFinite(Number(v)));
+    const peak = numeric.length ? Math.max(...numeric.map(Number)) : 0;
+    const peakIdx = numeric.length ? vals.findIndex(v => Number(v) === peak) : 0;
+    const metricLabel = tableMetricLabel();
+    const summaryLabel = isHoursDisplayMode() ? 'Total' : 'Average DT %';
+    const summaryDisplay = summary != null ? formatTableSummary(summary, !isHoursDisplayMode()) : '—';
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2013,7 +2025,7 @@
       <div class="inline-panel-header">
         <div>
           <div class="inline-panel-title">Detailed View — ${category}</div>
-          <div class="inline-panel-sub">${site} · period breakdown</div>
+          <div class="inline-panel-sub">${site} · ${metricLabel.toLowerCase()} by period</div>
         </div>
         <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
       </div>
@@ -2021,18 +2033,18 @@
         <div class="inline-detail-grid">
           <div class="compare-chart-wrap"><canvas id="detail-chart"></canvas></div>
           <div class="category-detail-stats">
-            <div class="detail-stat"><div class="detail-stat-label">Average DT %</div><div class="detail-stat-value">${fmtPct(avg)}</div></div>
-            <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${PERIODS[peakIdx]} · ${fmtPct(peak)}</div></div>
-            <div class="detail-stat"><div class="detail-stat-label">vs ${yearAvgDtPct().toFixed(2)}% Avg</div><div class="detail-stat-value ${avg >= yearAvgDtPct() ? 'val-high' : 'val-low'}">${avg >= yearAvgDtPct() ? 'Above avg' : 'Below avg'}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">${summaryLabel}</div><div class="detail-stat-value">${summaryDisplay}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${periods[peakIdx] || '—'} · ${cellDisplayValue(peak)}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">vs ${yearAvgDtPct().toFixed(2)}% Avg</div><div class="detail-stat-value ${peak >= yearAvgDtPct() ? 'val-high' : 'val-low'}">${peak >= yearAvgDtPct() ? 'Above avg' : 'Below avg'}</div></div>
           </div>
         </div>
         <div class="table-scroll" style="margin-top:16px">
           <table class="data-table compare-table heatmap-table">
-            <thead><tr><th>Metric</th>${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}<th>Avg</th></tr></thead>
+            <thead><tr><th>Metric</th>${periods.map(p => `<th>2026 ${p}</th>`).join('')}<th>${tableSummaryHeader()}</th></tr></thead>
             <tbody><tr>
-              <td>Unplanned DT %</td>
+              <td>${metricLabel}</td>
               ${vals.map(v => heatTd(v, 8)).join('')}
-              ${heatTd(avg, 12, 'col-total')}
+              ${summaryTd(vals, 12)}
             </tr></tbody>
           </table>
         </div>
@@ -2045,13 +2057,14 @@
       destroyChart('detail-chart');
       const canvas = document.getElementById('detail-chart');
       if (!canvas || typeof Chart === 'undefined') return;
+      const axis = chartYAxisConfig(Math.max(...vals.map(v => chartValueFromPct(v)), 0));
       state.charts['detail-chart'] = new Chart(canvas, {
         type: 'bar',
         data: {
-          labels: PERIODS,
+          labels: periods,
           datasets: [{
-            label: `${category} DT %`,
-            data: vals,
+            label: category,
+            data: vals.map(v => chartValueFromPct(v)),
             backgroundColor: PERIOD_COLORS,
             borderRadius: { topLeft: 4, topRight: 4 },
             borderSkipped: false,
@@ -2061,7 +2074,15 @@
           ...CHART_DEFAULTS,
           plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
           scales: {
-            y: { beginAtZero: true, ...PRO_AXIS, ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' } },
+            y: {
+              beginAtZero: true,
+              ...PRO_AXIS,
+              title: proAxisTitle(axis.title),
+              ticks: {
+                ...PRO_AXIS.ticks,
+                callback: v => axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix,
+              },
+            },
             x: { ...PRO_AXIS },
           },
         },
