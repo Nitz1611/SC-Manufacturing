@@ -218,6 +218,8 @@
     dataPollTimer: null,
     dataReloadTimer: null,
     lastDataFilterKey: null,
+    metricsJobId: null,
+    metricsJobFilterKey: null,
     summaryFilterKey: null,
     summariesLoaded: false,
     summaryReloadTimer: null,
@@ -290,7 +292,8 @@
       SLICERS.region.options = fo.regions;
       const current = state.filters.region || [];
       const valid = current.filter(r => fo.regions.includes(r));
-      state.filters.region = valid.length ? valid : [...fo.regions];
+      if (valid.length) state.filters.region = valid;
+      else if (!current.length) state.filters.region = [...fo.regions];
     }
     if (fo.years?.length) SLICERS.year.options = fo.years.map(String);
     refreshAllSlicers();
@@ -304,7 +307,10 @@
   function sitesForRegions(regions) {
     if (!regions?.length) return [...allMetricSites()];
     const map = metricSiteRegionMap();
-    return allMetricSites().filter(s => regions.includes(map[s]));
+    return allMetricSites().filter(s => {
+      const r = map[String(s).toUpperCase()];
+      return r && regions.includes(r);
+    });
   }
 
   function siteSlicerOptions() {
@@ -314,6 +320,16 @@
   }
 
   function activeHeatmapSites() {
+    if (isLiveSql()) {
+      const keys = Object.keys(state.liveMetrics?.site_by_period || {}).sort();
+      const site = state.filters.site;
+      if (site && site !== 'All') {
+        const siteKey = String(site).toUpperCase();
+        return [siteKey];
+      }
+      return keys.length ? keys : allMetricSites();
+    }
+
     let sites = [...allMetricSites()];
     const site = state.filters.site;
     if (site && site !== 'All') {
@@ -674,13 +690,16 @@
   /* ── Live data API ── */
   function apiFiltersFromState() {
     const activeRegions = regionsSelected();
+    const site = state.filters.site;
+    const tf = String(state.filters.timeframe || 'FY').toLowerCase();
+    const tfMap = { fy: 'fiscal_year', quarter: 'quarter', month: 'month', week: 'week', year: 'fiscal_year' };
     return {
       showIn: state.filters.showIn,
       timeframe: state.filters.timeframe,
       year: state.filters.year,
-      site: state.filters.site,
+      site: site && site !== 'All' ? String(site).toUpperCase() : 'All',
       region: activeRegions || [],
-      period: (state.filters.timeframe || 'Week').toLowerCase() === 'week' ? 'week' : (state.filters.timeframe || 'Week').toLowerCase(),
+      period: tfMap[tf] || tf,
     };
   }
 
@@ -710,11 +729,14 @@
 
   function dataFilterKey() {
     const f = state.filters;
+    const tf = String(f.timeframe || 'FY').toLowerCase();
+    const tfMap = { fy: 'fiscal_year', quarter: 'quarter', month: 'month', week: 'week', year: 'fiscal_year' };
+    const activeRegions = regionsSelected();
     return JSON.stringify({
-      timeframe: f.timeframe,
-      year: f.year,
-      site: f.site,
-      region: f.region,
+      period: tfMap[tf] || tf,
+      year: f.year || '2026',
+      site: f.site && f.site !== 'All' ? String(f.site).toUpperCase() : null,
+      regions: activeRegions ? activeRegions.join(',') : null,
     });
   }
 
@@ -829,6 +851,11 @@
   function filterMetricsClient(base) {
     if (!base) return base;
     const m = JSON.parse(JSON.stringify(base));
+    if (isLiveSql(m)) {
+      m.tab_insights = buildTabInsightsClient(m);
+      return m;
+    }
+
     const site = state.filters.site;
     const activeRegions = regionsSelected();
     const allowedSites = new Set(activeHeatmapSites());
@@ -1065,8 +1092,13 @@
       clearInterval(state.dataPollTimer);
       state.dataPollTimer = null;
     }
+    state.metricsJobId = null;
 
-    const showLoading = !state.metricsBase || force;
+    const filterKey = dataFilterKey();
+    const filtersChanged = Boolean(state.lastDataFilterKey && state.lastDataFilterKey !== filterKey);
+    const shouldForce = force || filtersChanged;
+
+    const showLoading = !state.metricsBase || shouldForce;
     if (showLoading) {
       setDataStatus('loading', 'Loading unplanned DT metrics…');
       setAiSummaryLoading();
@@ -1077,7 +1109,7 @@
       const res = await fetch('/api/console-data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filters: apiFiltersFromState(), force }),
+        body: JSON.stringify({ filters: apiFiltersFromState(), force: shouldForce }),
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
@@ -1104,6 +1136,8 @@
       if (data._job_id) {
         const pollMs = 2000;
         state.dataLoading = true;
+        state.metricsJobId = data._job_id;
+        state.metricsJobFilterKey = filterKey;
         setDataStatus('loading', data._refreshing ? 'Refreshing from metric view…' : 'Querying Databricks…');
         if (!data.metrics) setBootStatus('Querying Databricks metric view');
         state.dataPollTimer = setInterval(() => pollConsoleJob(data._job_id, false), pollMs);
@@ -1130,6 +1164,7 @@
   }
 
   async function pollConsoleJob(jobId, background = false) {
+    if (jobId !== state.metricsJobId) return;
     try {
       const res = await fetch(`/api/job/${jobId}`);
       const job = await res.json();
@@ -1143,9 +1178,12 @@
         return;
       }
 
+      if (jobId !== state.metricsJobId) return;
+
       clearInterval(state.dataPollTimer);
       state.dataPollTimer = null;
       state.dataLoading = false;
+      state.metricsJobId = null;
 
       if (job.status === 'error') {
         if (!state.metricsBase) {
@@ -1159,6 +1197,7 @@
       }
 
       if (job.status === 'done' && job.result?.metrics) {
+        if (state.metricsJobFilterKey && state.metricsJobFilterKey !== dataFilterKey()) return;
         state.metricsBase = job.result.metrics;
         state.lastDataFilterKey = dataFilterKey();
         applyConsoleData({ metrics: filterMetricsClient(job.result.metrics), dashboard: {} });
@@ -2470,6 +2509,9 @@
         refreshSlicer(wrap, cfg);
         syncSiteRegionFilters(cfg.id);
         if (cfg.id === 'site' || cfg.id === 'region') refreshAllSlicers();
+        if (cfg.id === 'site' || cfg.id === 'region' || cfg.id === 'timeframe' || cfg.id === 'year' || cfg.multi) {
+          applySiteFilterUiState();
+        }
         scheduleDataReload(cfg.id);
       });
       optionsEl.appendChild(row);

@@ -280,11 +280,11 @@ function deriveKpisFromSitePeriods(metrics: MetricsPayload, siteKey: string): Me
       downtime_pct: {
         value: `${dtPct.toFixed(2)}%`,
         delta: base.downtime_pct?.delta || 'vs prior period',
-        direction: base.downtime_pct?.direction || 'neutral',
+        direction: (base.downtime_pct?.direction || 'warn') as 'good' | 'bad' | 'warn',
       },
       downtime_hrs: base.downtime_hrs,
       stops: base.stops,
-      oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
+      oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' as const },
     };
   }
 
@@ -339,9 +339,29 @@ export function applySiteFilter(metrics: MetricsPayload, site: string | null): M
   const out = structuredClone(metrics);
   if (out.site_by_period[siteKey]) out.site_by_period = { [siteKey]: out.site_by_period[siteKey] };
   if (out.top_sites_trend[siteKey]) out.top_sites_trend = { [siteKey]: out.top_sites_trend[siteKey] };
+  if (out.site_category_by_period) {
+    out.site_category_by_period = out.site_category_by_period[siteKey]
+      ? { [siteKey]: out.site_category_by_period[siteKey] }
+      : {};
+  }
+  if (out.site_line_by_period) {
+    out.site_line_by_period = out.site_line_by_period[siteKey]
+      ? { [siteKey]: out.site_line_by_period[siteKey] }
+      : {};
+  }
+
+  if (out.meta?.source === 'sql') {
+    if (out.site_by_period[siteKey]?.length) {
+      out.period_trend = [...out.site_by_period[siteKey]];
+    }
+    out.meta.filtered_site = siteKey;
+    out.tab_insights = buildTabInsights(out);
+    return out;
+  }
+
   const siteKeys = Object.keys(out.site_by_period || {});
-  const alreadySiteScoped = out.meta?.source === 'sql' || (siteKeys.length === 1 && siteKeys[0] === siteKey);
-  if (!alreadySiteScoped && out.meta?.source !== 'sql') {
+  const alreadySiteScoped = siteKeys.length === 1 && siteKeys[0] === siteKey;
+  if (!alreadySiteScoped) {
     const mult = SITE_WEIGHTS[siteKey] || 1;
     out.period_trend = out.period_trend.map(v => +(v * mult * 0.95).toFixed(2));
   } else if (out.site_by_period[siteKey]?.length) {

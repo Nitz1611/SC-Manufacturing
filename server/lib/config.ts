@@ -215,7 +215,9 @@ export function normalizeParams(raw: Record<string, unknown> = {}): Record<strin
   };
   const period = tfMap[timeframe.toLowerCase()] || timeframe.toLowerCase();
   const year = raw.year && String(raw.year).toLowerCase() !== 'all' ? String(raw.year) : null;
-  const site = raw.site && String(raw.site).toLowerCase() !== 'all' ? String(raw.site) : null;
+  const site = raw.site && String(raw.site).toLowerCase() !== 'all'
+    ? String(raw.site).toUpperCase()
+    : null;
   let regions: string | null = null;
   if (Array.isArray(raw.region) && raw.region.length) {
     regions = raw.region.map(String).join(',');

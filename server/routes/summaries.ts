@@ -9,6 +9,7 @@ import {
   resolveMetricView,
   warmupWarehouse,
 } from '../lib/analytics.js';
+import { coarseCacheKey, normalizeParams } from '../lib/config.js';
 import { buildTabInsights } from '../lib/metricsTransform.js';
 import { sqlConfigured } from '../lib/databricksSql.js';
 import {
@@ -231,7 +232,7 @@ summariesRouter.post('/console-data', async (req, res) => {
     void (async () => {
       try {
         const metrics = await refreshMetricsBundle(filters, msg => updateJobMessage(jobId, msg));
-        finishJob(jobId, { metrics });
+        finishJob(jobId, { metrics, filterKey: coarseCacheKey(normalizeParams(filters)) });
         console.log(`[job ${jobId.slice(0, 8)}] Metrics refresh complete`);
       } catch (e) {
         failJob(jobId, (e as Error).message);
@@ -239,11 +240,11 @@ summariesRouter.post('/console-data', async (req, res) => {
       }
     })();
 
-    const cached = getCachedMetricsBundle(filters);
+    const cached = force ? null : getCachedMetricsBundle(filters);
     if (cached) {
       const payload = metricsBundleToConsolePayload(cached, { _job_id: jobId, _refreshing: true });
       payload._cached = true;
-      payload._source = cached.meta?.source === 'sql' ? 'cache' : payload._source;
+      payload._source = 'cache';
       return res.json(payload);
     }
 

@@ -108,9 +108,9 @@ async function loadMetricsFromSql(
 function loadPriorSqlCache(filters: Record<string, unknown>): MetricsPayload | null {
   const norm = normalizeParams(filters);
   const key = coarseCacheKey(norm);
-  const cached = cacheGet(key) as Partial<MetricsPayload> | null;
-  if (cached && (cached.kpis || cached.period_trend) && cached.meta?.source === 'sql') {
-    return applySiteFilter(enrichMetrics(cached, norm, 'cache'), norm.site);
+  const cached = cacheGet(key) as MetricsPayload | null;
+  if (cached?.kpis && cached.meta?.source === 'sql') {
+    return applySiteFilter(structuredClone(cached), norm.site);
   }
   return null;
 }
@@ -120,8 +120,8 @@ function loadMetricsFromDemoFallback(filters: Record<string, unknown>): MetricsP
   const key = coarseCacheKey(norm);
 
   const cached = cacheGet(key) as Partial<MetricsPayload> | null;
-  if (cached && (cached.kpis || cached.period_trend) && cached.meta?.source === 'sql') {
-    return applySiteFilter(enrichMetrics(cached, norm, 'cache'), norm.site);
+  if (cached?.kpis && cached.meta?.source === 'sql') {
+    return applySiteFilter(structuredClone(cached as MetricsPayload), norm.site);
   }
 
   const dashKey = JSON.stringify({ period: norm.period || 'week' });
