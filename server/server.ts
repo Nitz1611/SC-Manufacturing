@@ -1,15 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
 import { analyticsRouter } from './routes/analytics.js';
 import { summariesRouter } from './routes/summaries.js';
 import { cacheInfo } from './lib/cache.js';
+import { loadEnv, repoRoot, sqlEnvStatus } from './lib/env.js';
 import { sqlConfigured } from './lib/databricksSql.js';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-dotenv.config({ path: path.join(ROOT, '.env') });
+loadEnv();
+const ROOT = repoRoot();
 
 const app = express();
 const PORT = Number(process.env.PORT || process.env.DATABRICKS_APP_PORT || 8000);
@@ -24,7 +23,7 @@ app.get('/api/cache/info', (_req, res) => {
   res.json(cacheInfo());
 });
 
-const clientDist = path.join(ROOT, '../client/dist');
+const clientDist = path.join(ROOT, 'client/dist');
 app.use(express.static(clientDist));
 app.get('*', (_req, res) => {
   const index = path.join(clientDist, 'index.html');
@@ -49,6 +48,13 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('╠══════════════════════════════════════════════════════╣');
   const mode = sqlConfigured() ? 'Live SQL (metric view)     ' : 'Demo fallback (no .env SQL)';
   console.log(`║  Mode       : ${mode.padEnd(38)}║`);
+  const env = sqlEnvStatus();
+  if (env.env_file) {
+    console.log(`║  .env       : ${env.env_file.slice(-38).padEnd(38)}║`);
+  }
+  if (env.missing.length) {
+    console.log(`║  Missing    : ${env.missing.join(', ').slice(0, 38).padEnd(38)}║`);
+  }
   console.log(`║  Analytics  : POST /api/analytics/query/:queryKey    ║`);
   console.log(`║  Summaries  : POST /api/summaries                    ║`);
   console.log(`║  Legacy     : POST /api/console-data                   ║`);
