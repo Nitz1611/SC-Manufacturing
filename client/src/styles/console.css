@@ -1383,6 +1383,32 @@ body {
   50% { opacity: 0.35; }
 }
 
+.filter-context-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 24px;
+  background: linear-gradient(90deg, rgba(0, 40, 85, 0.04) 0%, rgba(0, 102, 204, 0.06) 100%);
+  border-bottom: 1px solid rgba(0, 40, 85, 0.08);
+  font-size: 12px;
+}
+
+.filter-context-label {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.filter-context-value {
+  color: #1e3a5f;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── REASON TABLE ── */
 .reason-table-card .reason-table-body {
   padding: 0;

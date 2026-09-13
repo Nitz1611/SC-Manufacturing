@@ -190,7 +190,11 @@ export function normalizeParams(raw: Record<string, unknown> = {}): Record<strin
 }
 
 export function coarseCacheKey(params: Record<string, string | null>): string {
-  return `metrics_${JSON.stringify({ period: params.period || 'week', year: params.year || '2026' })}`;
+  return `metrics_${JSON.stringify({
+    period: params.period || 'week',
+    year: params.year || '2026',
+    site: params.site || null,
+  })}`;
 }
 
 export function sqlColumnSummary() {
