@@ -8,4 +8,4 @@ WHERE {{dt_type_filter}}
   AND {{year_filter}}
   AND (:site IS NULL OR UPPER(Site) = UPPER(:site))
 GROUP BY {{category_col}}, {{period_expr}}
-ORDER BY category, MIN(`Production Period`)
+ORDER BY category, MIN({{period_sort}})

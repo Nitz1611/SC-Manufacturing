@@ -7,19 +7,36 @@ export const QUERIES_DIR = path.join(ROOT, 'config', 'queries');
 export const CACHE_FILE = path.join(ROOT, 'cache.json');
 
 /** Gold-table defaults for pgt_plnt_prodtn_metric_view (UC semantic layer column names). */
-const GOLD = {
-  date: '`Production Date`',
-  period: "CONCAT('P', CAST(`Production Period` AS STRING))",
-  week: "CONCAT(CAST(YEAR(`Production Date`) AS STRING), 'P', LPAD(CAST(`Production Period` AS STRING), 2, '0'), 'W', LPAD(CAST(`Production week` AS STRING), 2, '0'))",
-  shift: 'CAST(`Shift` AS STRING)',
-  line: '`Line Desc`',
-  category: '`Downtime Category`',
-  reason: '`Downtime Reason`',
-  dtPct: '`Unplanned Downtime %`',
-  dtHours: '`Unplanned Downtime Hours`',
+const GOLD_NAMES = {
+  date: 'Production Date',
+  period: 'Production Period',
+  week: 'Production week',
+  shift: 'Shift',
+  line: 'Line Desc',
+  category: 'Downtime Category',
+  reason: 'Downtime Reason',
+  dtPct: 'Unplanned Downtime %',
+  dtHours: 'Unplanned Downtime Hours',
+  dtType: 'Downtime Type',
   stops: 'STOPS',
-  dtTypeFilter: "TRIM(`Downtime Type`) IN ('Unplanned', 'Unspecified')",
 };
+
+/** Backtick-quote identifiers with spaces or special characters (Databricks SQL). */
+export function quoteIdent(name: string): string {
+  const t = name.trim();
+  if (!t) return t;
+  if (t.startsWith('`') && t.endsWith('`')) return t;
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(t)) return t;
+  return `\`${t.replace(/`/g, '``')}\``;
+}
+
+function resolveColumn(envKey: string, defaultName: string): string {
+  const raw = process.env[envKey]?.trim();
+  if (raw && (raw.includes('(') || /\bCONCAT\b/i.test(raw) || /\bCAST\b/i.test(raw))) {
+    return raw;
+  }
+  return quoteIdent(raw || defaultName);
+}
 
 export function resolveMetricView(): string {
   if (process.env.DATABRICKS_METRIC_VIEW?.trim()) {
@@ -33,47 +50,64 @@ export function resolveMetricView(): string {
 }
 
 export function dateColumn(): string {
-  return process.env.DATABRICKS_DATE_COLUMN?.trim() || GOLD.date;
+  return resolveColumn('DATABRICKS_DATE_COLUMN', GOLD_NAMES.date);
 }
 
 export function periodExpression(): string {
-  return process.env.DATABRICKS_PERIOD_EXPR?.trim() || GOLD.period;
+  const raw = process.env.DATABRICKS_PERIOD_EXPR?.trim();
+  if (raw) return raw;
+  const p = quoteIdent(GOLD_NAMES.period);
+  return `CONCAT('P', CAST(${p} AS STRING))`;
+}
+
+export function periodSortColumn(): string {
+  return quoteIdent(GOLD_NAMES.period);
 }
 
 export function weekExpression(): string {
-  return process.env.DATABRICKS_WEEK_EXPR?.trim() || GOLD.week;
+  const raw = process.env.DATABRICKS_WEEK_EXPR?.trim();
+  if (raw) return raw;
+  const dt = dateColumn();
+  const p = quoteIdent(GOLD_NAMES.period);
+  const w = quoteIdent(GOLD_NAMES.week);
+  return `CONCAT(CAST(YEAR(${dt}) AS STRING), 'P', LPAD(CAST(${p} AS STRING), 2, '0'), 'W', LPAD(CAST(${w} AS STRING), 2, '0'))`;
 }
 
 export function shiftExpression(): string {
-  return process.env.DATABRICKS_SHIFT_EXPR?.trim() || GOLD.shift;
+  const raw = process.env.DATABRICKS_SHIFT_EXPR?.trim();
+  if (raw) return raw;
+  return `CAST(${quoteIdent(GOLD_NAMES.shift)} AS STRING)`;
 }
 
 export function lineColumn(): string {
-  return process.env.DATABRICKS_LINE_COLUMN?.trim() || GOLD.line;
+  return resolveColumn('DATABRICKS_LINE_COLUMN', GOLD_NAMES.line);
 }
 
 export function categoryColumn(): string {
-  return process.env.DATABRICKS_CATEGORY_COLUMN?.trim() || GOLD.category;
+  return resolveColumn('DATABRICKS_CATEGORY_COLUMN', GOLD_NAMES.category);
 }
 
 export function reasonColumn(): string {
-  return process.env.DATABRICKS_REASON_COLUMN?.trim() || GOLD.reason;
+  return resolveColumn('DATABRICKS_REASON_COLUMN', GOLD_NAMES.reason);
 }
 
 export function dtPctColumn(): string {
-  return process.env.DATABRICKS_DT_PCT_COLUMN?.trim() || GOLD.dtPct;
+  return resolveColumn('DATABRICKS_DT_PCT_COLUMN', GOLD_NAMES.dtPct);
 }
 
 export function dtHoursColumn(): string {
-  return process.env.DATABRICKS_DT_HOURS_COLUMN?.trim() || GOLD.dtHours;
+  return resolveColumn('DATABRICKS_DT_HOURS_COLUMN', GOLD_NAMES.dtHours);
 }
 
 export function stopsColumn(): string {
-  return process.env.DATABRICKS_STOPS_COLUMN?.trim() || GOLD.stops;
+  return resolveColumn('DATABRICKS_STOPS_COLUMN', GOLD_NAMES.stops);
 }
 
 export function dtTypeFilter(): string {
-  return process.env.DATABRICKS_DT_TYPE_FILTER?.trim() || GOLD.dtTypeFilter;
+  const raw = process.env.DATABRICKS_DT_TYPE_FILTER?.trim();
+  if (raw) return raw;
+  const col = quoteIdent(GOLD_NAMES.dtType);
+  return `TRIM(${col}) IN ('Unplanned', 'Unspecified')`;
 }
 
 export function yearFilterExpression(): string {
@@ -85,6 +119,7 @@ function applySqlFragments(sql: string): string {
     .replace(/\{\{year_filter\}\}/g, yearFilterExpression())
     .replace(/\(:year IS NULL OR Year = :year\)/gi, yearFilterExpression())
     .replace(/\{\{period_expr\}\}/g, periodExpression())
+    .replace(/\{\{period_sort\}\}/g, periodSortColumn())
     .replace(/\{\{week_expr\}\}/g, weekExpression())
     .replace(/\{\{shift_expr\}\}/g, shiftExpression())
     .replace(/\{\{date_col\}\}/g, dateColumn())
