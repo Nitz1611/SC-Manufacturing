@@ -19,6 +19,12 @@
     BELOIT: 1.1, BRIDGEVIEW: 4.5, BROOKHOLLOW: 1.05, CAMBRIDGE: 0.72, CANTON: 0.52,
     CHARLOTTE: 0.04, DENVER: 0.88, HOUSTON: 0.95,
   };
+  const SITE_REGION_MAP = {
+    ABERDEEN: 'North America', ARLINGTON: 'North America', BELOIT: 'North America',
+    BRIDGEVIEW: 'North America', BROOKHOLLOW: 'North America', CAMBRIDGE: 'North America',
+    CANTON: 'North America', CHARLOTTE: 'North America', DENVER: 'North America',
+    FRISCO: 'North America', HOUSTON: 'North America', MODESTO: 'North America', PLANO: 'North America',
+  };
   const TOP_SITES = ['BRIDGEVIEW', 'BROOKHOLLOW', 'BELOIT', 'ABERDEEN', 'ARLINGTON'];
   const TOP_SITE_COLORS = ['#2563eb', '#f59e0b', '#10b981', '#8b5cf6', '#0ea5e9'];
   const SITE_DT_TOTALS = {
@@ -234,6 +240,102 @@
     return full.slice(-activeWeeks().length);
   }
 
+  function regionsSelected() {
+    const regions = state.filters.region || [];
+    return regions.length && regions.length < SLICERS.region.options.length ? regions : null;
+  }
+
+  function sitesForRegions(regions) {
+    if (!regions?.length) return [...HEATMAP_SITES];
+    return HEATMAP_SITES.filter(s => regions.includes(SITE_REGION_MAP[s]));
+  }
+
+  function siteSlicerOptions() {
+    const active = regionsSelected();
+    if (!active) return ['All', ...HEATMAP_SITES];
+    return ['All', ...sitesForRegions(active)];
+  }
+
+  function activeHeatmapSites() {
+    let sites = [...HEATMAP_SITES];
+    const site = state.filters.site;
+    if (site && site !== 'All') {
+      sites = sites.filter(s => s === String(site).toUpperCase());
+    }
+    const active = regionsSelected();
+    if (active) {
+      const allowed = new Set(sitesForRegions(active));
+      sites = sites.filter(s => allowed.has(s));
+    }
+    return sites.length ? sites : [...HEATMAP_SITES];
+  }
+
+  function syncSiteRegionFilters(changedId) {
+    if (changedId === 'site') {
+      const site = state.filters.site;
+      if (site && site !== 'All') {
+        const region = SITE_REGION_MAP[String(site).toUpperCase()];
+        if (region) state.filters.region = [region];
+      }
+    } else if (changedId === 'region') {
+      const site = state.filters.site;
+      if (site && site !== 'All') {
+        const allowed = sitesForRegions(state.filters.region);
+        if (!allowed.includes(String(site).toUpperCase())) {
+          state.filters.site = 'All';
+        }
+      }
+    }
+  }
+
+  function refreshAllSlicers() {
+    document.querySelectorAll('.slicer[data-slicer-id]').forEach(wrap => {
+      const cfg = SLICERS[wrap.dataset.slicerId];
+      if (cfg) refreshSlicer(wrap, cfg);
+    });
+  }
+
+  function childPeriodTotals(site, children, getValues) {
+    return activePeriods().map((_, i) => {
+      let sum = 0;
+      let has = false;
+      children.forEach(child => {
+        const v = getValues(site, child)[i];
+        if (v != null && Number.isFinite(Number(v))) {
+          sum += Number(v);
+          has = true;
+        }
+      });
+      return has ? +sum.toFixed(2) : null;
+    });
+  }
+
+  function networkWeekTrend() {
+    const weeks = activeWeeks();
+    const dow = state.liveMetrics?.dow_by_day_week;
+    if (dow && Object.keys(dow).length) {
+      return weeks.map(week => {
+        const vals = [];
+        Object.values(dow).forEach(weekMap => {
+          if (weekMap?.[week] != null) vals.push(Number(weekMap[week]));
+        });
+        return vals.length ? +(vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2) : null;
+      });
+    }
+    const allWeeks = DOW_WEEKS_MUTABLE?.length ? DOW_WEEKS_MUTABLE : DOW_WEEKS;
+    return weeks.map(week => {
+      const idx = allWeeks.indexOf(week);
+      if (idx < 0) return null;
+      const dayVals = DAY_LABELS.map(d => (DOW_DAY_TRENDS_MUTABLE || DOW_DAY_TRENDS)[d]?.[idx]).filter(v => v != null);
+      return dayVals.length ? +(avgOf(dayVals).toFixed(2)) : null;
+    });
+  }
+
+  function templateSummaries() {
+    if (!state.liveMetrics) return {};
+    return state.liveMetrics.tab_insights || buildTabInsightsClient(state.liveMetrics);
+  }
+
   function showInMode() {
     const v = String(state.filters.showIn || 'Millions');
     if (v.includes('Percent')) return 'percentage';
@@ -275,7 +377,7 @@
       return Number(value).toFixed(2) + '%';
     }
     const hours = fromPct ? pctToHours(value) : Number(value);
-    if (showInMode() === 'millions') return (hours / 1e6).toFixed(2) + ' MM';
+    if (showInMode() === 'millions') return (hours / 1e6).toFixed(3) + ' MM';
     return (hours / 1e3).toFixed(2) + ' M';
   }
 
@@ -304,7 +406,7 @@
   function formatKpiHoursDisplay(raw) {
     if (!raw || raw === '—') return '—';
     const hours = parseHoursValue(raw);
-    if (showInMode() === 'millions') return (hours / 1e6).toFixed(2) + ' MM';
+    if (showInMode() === 'millions') return (hours / 1e6).toFixed(3) + ' MM';
     if (showInMode() === 'thousands') return (hours / 1e3).toFixed(2) + ' M';
     return raw;
   }
@@ -484,18 +586,45 @@
 
   function filterMetricsClient(base) {
     if (!base) return base;
-    const site = state.filters.site;
-    if (!site || site === 'All') return base;
     const m = JSON.parse(JSON.stringify(base));
-    const siteKey = String(site).toUpperCase();
-    if (m.site_by_period?.[siteKey]) m.site_by_period = { [siteKey]: m.site_by_period[siteKey] };
-    if (m.top_sites_trend?.[siteKey]) m.top_sites_trend = { [siteKey]: m.top_sites_trend[siteKey] };
-    const mult = SITE_MULTIPLIERS[siteKey] || 1;
-    if (m.period_trend?.length) {
-      m.period_trend = m.period_trend.map(v => +(Number(v) * mult * 0.95).toFixed(2));
+    const site = state.filters.site;
+    const activeRegions = regionsSelected();
+    const allowedSites = new Set(activeHeatmapSites());
+
+    if (m.site_by_period) {
+      m.site_by_period = Object.fromEntries(
+        Object.entries(m.site_by_period).filter(([s]) => allowedSites.has(s)),
+      );
     }
+    if (m.top_sites_trend) {
+      m.top_sites_trend = Object.fromEntries(
+        Object.entries(m.top_sites_trend).filter(([s]) => allowedSites.has(s)),
+      );
+    }
+
+    if (site && site !== 'All') {
+      const siteKey = String(site).toUpperCase();
+      if (m.site_by_period?.[siteKey]) m.site_by_period = { [siteKey]: m.site_by_period[siteKey] };
+      if (m.top_sites_trend?.[siteKey]) m.top_sites_trend = { [siteKey]: m.top_sites_trend[siteKey] };
+      const mult = SITE_MULTIPLIERS[siteKey] || 1;
+      if (m.period_trend?.length) {
+        m.period_trend = m.period_trend.map(v => +(Number(v) * mult * 0.95).toFixed(2));
+      }
+      m.meta = { ...(m.meta || {}), filtered_site: siteKey };
+    } else if (activeRegions) {
+      const siteEntries = Object.entries(m.site_by_period || {});
+      if (siteEntries.length && m.period_trend?.length) {
+        const n = m.period_trend.length;
+        const averaged = Array.from({ length: n }, (_, i) => {
+          const vals = siteEntries.map(([, arr]) => arr[i]).filter(v => v != null && Number.isFinite(Number(v)));
+          return vals.length ? +(vals.reduce((a, b) => a + Number(b), 0) / vals.length).toFixed(2) : m.period_trend[i];
+        });
+        m.period_trend = averaged;
+      }
+      m.meta = { ...(m.meta || {}), filtered_regions: activeRegions.join(', ') };
+    }
+
     m.tab_insights = buildTabInsightsClient(m);
-    m.meta = { ...(m.meta || {}), filtered_site: siteKey };
     return m;
   }
 
@@ -517,7 +646,9 @@
   }
 
   function applySummaryTexts(summaries) {
-    Object.entries(summaries || {}).forEach(([tab, text]) => {
+    const fallback = templateSummaries();
+    ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
+      const text = summaries?.[tab] || fallback[tab];
       if (!text) return;
       document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
         el.textContent = text;
@@ -549,7 +680,12 @@
           }
 
           if (job.status === 'done') {
-            applySummaryTexts(job.result?.summaries || {});
+            const summaries = job.result?.summaries || {};
+            const merged = {};
+            ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
+              merged[tab] = summaries[tab] || templateSummaries()[tab] || '';
+            });
+            applySummaryTexts(merged);
             resolve(job.result);
           }
         } catch (e) {
@@ -597,13 +733,20 @@
         state.summariesLoaded = true;
       } catch (err) {
         console.warn('[summaries]', err.message);
-        ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
-          document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-            if (String(el.textContent).includes('Generating') || String(el.textContent).includes('Supervisor')) {
-              el.textContent = 'AI summary unavailable — check SUPERVISOR_ENDPOINT_NAME in .env';
-            }
+        const fallback = templateSummaries();
+        if (Object.keys(fallback).length) {
+          applySummaryTexts(fallback);
+          state.summaryFilterKey = key;
+          state.summariesLoaded = true;
+        } else {
+          ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
+            document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+              if (String(el.textContent).includes('Loading') || String(el.textContent).includes('Supervisor')) {
+                el.textContent = `AI summary unavailable — ${err.message}`;
+              }
+            });
           });
-        });
+        }
       }
     }, 200);
   }
@@ -924,7 +1067,7 @@
   function exportHeatmapCategoryCSV(filename = 'unplanned-dt-by-category.csv') {
     const headers = ['Site', 'Category', ...PERIODS.map(p => `2026 ${p}`), '2026 Total', 'Total'];
     const rows = [headers];
-    HEATMAP_SITES.forEach(site => {
+    activeHeatmapSites().forEach(site => {
       const sitePeriods = sitePeriodTotals(site);
       const siteTotal = +sumOf(sitePeriods).toFixed(2);
       const sitePrevTotal = +(siteTotal * 1.08).toFixed(2);
@@ -942,7 +1085,7 @@
   function exportLineHeatmapCSV(filename = 'unplanned-dt-by-line.csv') {
     const headers = ['Site', 'Line', ...PERIODS.map(p => `2026 ${p}`), '2026 Total', 'Total'];
     const rows = [headers];
-    HEATMAP_SITES.forEach(site => {
+    activeHeatmapSites().forEach(site => {
       const sitePeriods = linePeriodTotalsForSite(site);
       const siteTotal = +sumOf(sitePeriods).toFixed(2);
       const sitePrevTotal = +(siteTotal * 1.08).toFixed(2);
@@ -1851,6 +1994,7 @@
   function buildSlicer(cfg) {
     const wrap = document.createElement('div');
     wrap.className = 'slicer';
+    wrap.dataset.slicerId = cfg.id;
     const trigger = document.createElement('button');
     trigger.type = 'button';
     trigger.className = 'slicer-trigger';
@@ -1894,7 +2038,8 @@
     const optionsEl = wrap.querySelector('.slicer-options');
     optionsEl.innerHTML = '';
     const term = (searchTerm || '').toLowerCase();
-    cfg.options.filter(opt => !term || opt.toLowerCase().includes(term)).forEach(opt => {
+    const options = cfg.id === 'site' ? siteSlicerOptions() : cfg.options;
+    options.filter(opt => !term || opt.toLowerCase().includes(term)).forEach(opt => {
       const row = document.createElement('div');
       row.className = 'slicer-option';
       const selected = cfg.multi ? state.filters[cfg.id].includes(opt) : state.filters[cfg.id] === opt;
@@ -1926,6 +2071,8 @@
           refreshAllTables();
         }
         refreshSlicer(wrap, cfg);
+        syncSiteRegionFilters(cfg.id);
+        if (cfg.id === 'site' || cfg.id === 'region') refreshAllSlicers();
         scheduleDataReload(cfg.id);
       });
       optionsEl.appendChild(row);
@@ -2037,7 +2184,7 @@
     const summaryHdr = tableSummaryHeader();
     let rows = '';
 
-    HEATMAP_SITES.forEach(site => {
+    activeHeatmapSites().forEach(site => {
       const expanded = !!state.expandedLineSites[site];
       const sitePeriods = linePeriodTotalsForSite(site);
       const chevron = expanded ? '▼' : '▶';
@@ -2064,11 +2211,12 @@
           </tr>`;
         });
 
+        const childTotals = childPeriodTotals(site, LINES, lineValuesForSite);
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Site Total</td>
-          ${sitePeriods.map(v => heatTd(v, 35)).join('')}
-          ${summaryTd(sitePeriods, 35)}
+          ${childTotals.map(v => heatTd(v, 35)).join('')}
+          ${summaryTd(childTotals, 35)}
         </tr>`;
       }
     });
@@ -2296,7 +2444,7 @@
     const summaryHdr = tableSummaryHeader();
     let rows = '';
 
-    HEATMAP_SITES.forEach(site => {
+    activeHeatmapSites().forEach(site => {
       const expanded = !!state.expandedHeatmapSites[site];
       const sitePeriods = sitePeriodTotals(site);
       const chevron = expanded ? '▼' : '▶';
@@ -2324,11 +2472,12 @@
           </tr>`;
         });
 
+        const childTotals = childPeriodTotals(site, CATEGORIES, categoryValuesForSiteHeatmap);
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Total</td>
-          ${sitePeriods.map(v => heatTd(v, 35)).join('')}
-          ${summaryTd(sitePeriods, 35)}
+          ${childTotals.map(v => heatTd(v, 35)).join('')}
+          ${summaryTd(childTotals, 35)}
         </tr>`;
       }
     });
@@ -2486,7 +2635,7 @@
       <div class="overview-grid-3">
         ${dataCard('Unplanned DT % by Day of Week', '<div class="chart-wrap short"><canvas id="chart-dow"></canvas></div>')}
         ${dataCard('Unplanned DT Hours by Reason', '<div class="chart-wrap short"><canvas id="chart-reason"></canvas></div>')}
-        ${dataCard('Unplanned DT % by Period Trend', '<div class="chart-wrap short"><canvas id="chart-trend"></canvas></div>')}
+        ${dataCard('Unplanned DT % by Week Trend (Latest 6 Weeks)', '<div class="chart-wrap short"><canvas id="chart-trend"></canvas></div>')}
       </div>`;
 
     bindCompareButtons();
@@ -2916,7 +3065,65 @@
   }
 
   function makeTrendChart(canvasId) {
-    makeReasonTrendLineChart(canvasId, 'all');
+    makeOverviewWeekTrendChart(canvasId);
+  }
+
+  function makeOverviewWeekTrendChart(canvasId) {
+    destroyChart(canvasId);
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === 'undefined') return;
+    const ctx = canvas.getContext('2d');
+    const weeks = activeWeeks();
+    const year = String(state.filters.year || state.liveMetrics?.meta?.year || '2026');
+    const labels = weeks.map(w => w.replace(year, ''));
+    const data = networkWeekTrend().map(v => (v == null ? 0 : v));
+    const lineColor = PERIOD_COLORS[2];
+    const grad = ctx.createLinearGradient(0, 0, 0, 320);
+    grad.addColorStop(0, lineColor + '35');
+    grad.addColorStop(1, lineColor + '00');
+    const peak = Math.max(...data, 0);
+    const minY = Math.max(0, Math.floor((Math.min(...data.filter(v => v > 0), peak) || peak) * 10) / 10 - 0.5);
+    const maxY = Math.ceil((peak + 0.5) * 10) / 10;
+    state.charts[canvasId] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Unplanned DT %',
+          data,
+          borderColor: lineColor,
+          backgroundColor: grad,
+          fill: true,
+          tension: 0.42,
+          pointRadius: 5,
+          pointHoverRadius: 8,
+          pointBackgroundColor: '#ffffff',
+          pointBorderColor: lineColor,
+          pointBorderWidth: 2.5,
+          borderWidth: 2.5,
+        }],
+      },
+      options: {
+        ...CHART_DEFAULTS,
+        plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
+        interaction: { intersect: false, mode: 'index' },
+        scales: {
+          y: {
+            min: minY,
+            max: maxY,
+            ...PRO_AXIS,
+            title: proAxisTitle('Unplanned DT %'),
+            ticks: { ...PRO_AXIS.ticks, callback: v => v.toFixed(1) + '%' },
+          },
+          x: {
+            ...PRO_AXIS,
+            title: proAxisTitle('Week'),
+            ticks: { ...HORIZONTAL_X_TICKS, autoSkip: false, maxTicksLimit: 6, font: { size: 10 } },
+          },
+        },
+      },
+      plugins: [linePointLabelPlugin(v => Number(v).toFixed(2) + '%')],
+    });
   }
 
   function chartCardWithSelect(title, subtitle, canvasId, selectId, options, wrapClass = '') {

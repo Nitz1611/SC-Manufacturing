@@ -176,8 +176,16 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
       finishJob(jobId, { summaries, source: 'supervisor' });
       console.log(`[job ${jobId.slice(0, 8)}] Done — ${Object.values(summaries).filter(Boolean).length} tabs`);
     } catch (e) {
-      failJob(jobId, (e as Error).message);
-      console.error(`[job ${jobId.slice(0, 8)}] Failed:`, (e as Error).message);
+      try {
+        const metrics = await getMetricsBundle(params);
+        const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
+        storeBatchSummaries(params, templateInsights, 'template-fallback');
+        finishJob(jobId, { summaries: templateInsights, source: 'template-fallback' });
+        console.warn(`[job ${jobId.slice(0, 8)}] Supervisor failed — using template fallback:`, (e as Error).message);
+      } catch (inner) {
+        failJob(jobId, (e as Error).message);
+        console.error(`[job ${jobId.slice(0, 8)}] Failed:`, (e as Error).message);
+      }
     }
   })();
 
