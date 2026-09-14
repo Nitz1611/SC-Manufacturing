@@ -274,11 +274,45 @@ export function initManufacturingConsole(): () => void {
   }
 
   function activeDayTrendSeries(day) {
-    if (isHoursDisplayMode() && DOW_DAY_TRENDS_HRS_MUTABLE?.[day]?.length) {
-      return DOW_DAY_TRENDS_HRS_MUTABLE[day].slice(-activeWeeks().length);
+    return dowDayTrendValues(day);
+  }
+
+  /** DT% values are sometimes stored in the hours field — detect and convert. */
+  function dowHoursLooksLikePct(hours, pct) {
+    if (hours == null || pct == null || Number.isNaN(Number(hours)) || Number.isNaN(Number(pct))) return false;
+    const h = Number(hours);
+    const p = Number(pct);
+    if (h <= 0 || p <= 0) return false;
+    return h <= 100 && Math.abs(h - p) < 4;
+  }
+
+  function resolveDowWeekHours(day, weekIdx, weekCount) {
+    const pctSeries = (DOW_DAY_TRENDS_MUTABLE || DOW_DAY_TRENDS)[day] || [];
+    const hrsSeries = DOW_DAY_TRENDS_HRS_MUTABLE?.[day] || [];
+    const pctSlice = pctSeries.slice(-weekCount);
+    const hrsSlice = hrsSeries.slice(-weekCount);
+    const pct = pctSlice[weekIdx];
+    const hrs = hrsSlice[weekIdx];
+
+    if (hrs != null && Number(hrs) > 0 && !dowHoursLooksLikePct(hrs, pct)) {
+      return +Number(hrs).toFixed(2);
+    }
+    if (pct != null && !Number.isNaN(Number(pct)) && Number(pct) > 0) {
+      return +pctToHours(pct).toFixed(2);
+    }
+    if (hrs != null && Number(hrs) > 0) {
+      return +pctToHours(hrs).toFixed(2);
+    }
+    return null;
+  }
+
+  function dowDayTrendValues(day) {
+    const weekCount = activeWeeks().length;
+    if (isHoursDisplayMode()) {
+      return Array.from({ length: weekCount }, (_, i) => resolveDowWeekHours(day, i, weekCount));
     }
     const full = (DOW_DAY_TRENDS_MUTABLE || DOW_DAY_TRENDS)[day] || [];
-    return full.slice(-activeWeeks().length);
+    return full.slice(-weekCount);
   }
 
   function isLiveSql(metrics) {
@@ -749,24 +783,98 @@ export function initManufacturingConsole(): () => void {
     return Number(value);
   }
 
+  function niceStepSize(roughStep) {
+    if (!Number.isFinite(roughStep) || roughStep <= 0) return 0.01;
+    const exp = Math.floor(Math.log10(roughStep));
+    const base = Math.pow(10, exp);
+    const frac = roughStep / base;
+    const niceFrac = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+    return niceFrac * base;
+  }
+
   function yScaleFromValues(chartValues) {
-    const peak = Math.max(...chartValues, 0);
+    const positive = chartValues.filter(v => Number.isFinite(Number(v)) && Number(v) > 0);
+    const peak = positive.length ? Math.max(...positive.map(Number)) : 0;
     const axis = chartYAxisConfig(peak);
     if (showInMode() === 'percentage') {
       const yMax = axis.max ?? Math.max(Math.ceil(peak * 1.15), 5);
       const stepSize = yMax <= 10 ? 1 : yMax <= 25 ? 2 : 5;
       return { axis, yMax, stepSize };
     }
-    const padded = peak > 0 ? peak * 1.2 : 0.01;
-    const stepSize = padded <= 0.05 ? 0.01 : padded <= 0.2 ? 0.02 : padded <= 1 ? 0.1 : padded <= 5 ? 0.5 : 1;
+
+    const defaultMax = showInMode() === 'millions' ? 0.004 : 0.04;
+    const defaultStep = showInMode() === 'millions' ? 0.001 : 0.01;
+    if (peak <= 0) {
+      return { axis, yMax: defaultMax, stepSize: defaultStep };
+    }
+
+    const padded = peak * 1.18;
+    const stepSize = niceStepSize(padded / 4);
     const yMax = Math.max(stepSize, Math.ceil(padded / stepSize) * stepSize);
     return { axis, yMax, stepSize };
   }
 
-  function proYAxisScale(scaleCfg) {
-    const { axis, yMax, stepSize } = scaleCfg;
+  /** Zoom Y-axis into the data band so multi-series line charts stay readable. */
+  function lineYScaleFromValues(chartValues) {
+    const axis = chartYAxisConfig();
+    const positive = chartValues
+      .filter(v => Number.isFinite(Number(v)) && Number(v) > 0)
+      .map(Number);
+    if (positive.length < 1) return yScaleFromValues(chartValues);
+
+    const sorted = [...positive].sort((a, b) => a - b);
+    const trimIdx = positive.length >= 6
+      ? Math.min(sorted.length - 1, Math.floor(sorted.length * 0.92))
+      : sorted.length - 1;
+    const robustMax = sorted[trimIdx];
+    const trimmed = positive.filter(v => v <= robustMax * 1.04);
+    const dataMin = Math.min(...trimmed);
+    const dataMax = Math.max(...trimmed);
+    const span = dataMax - dataMin;
+    const floor = stepFloor(axis);
+
+    if (span <= 0) {
+      const pad = Math.max(dataMax * 0.15, floor);
+      const yMax = dataMax + pad;
+      const yMin = Math.max(0, dataMax - pad);
+      return {
+        axis,
+        yMin: yMin > 0 && yMin / yMax > 0.08 ? yMin : undefined,
+        yMax,
+        stepSize: niceStepSize((yMax - (yMin > 0 ? yMin : 0)) / 4),
+      };
+    }
+
+    const pad = Math.max(span * 0.14, dataMax * 0.06, floor);
+    const yMin = Math.max(0, dataMin - pad);
+    const yMax = dataMax + pad;
+    const fullScale = yScaleFromValues(chartValues);
+
+    // Keep a zero baseline when the series already spans most of the chart.
+    if (dataMin / fullScale.yMax < 0.12 && span / fullScale.yMax > 0.35) {
+      return fullScale;
+    }
+
     return {
-      beginAtZero: true,
+      axis,
+      yMin: yMin > 0 && yMin / yMax > 0.05 ? yMin : undefined,
+      yMax,
+      stepSize: niceStepSize((yMax - (yMin > 0 ? yMin : 0)) / 4),
+    };
+  }
+
+  function stepFloor(axis) {
+    if (showInMode() === 'millions') return 0.0005;
+    if (showInMode() === 'thousands') return 0.05;
+    return 0.5;
+  }
+
+  function proYAxisScale(scaleCfg) {
+    const { axis, yMax, yMin, stepSize } = scaleCfg;
+    const tickDecimals = stepSize != null && stepSize < 0.001 ? 4 : axis.decimals;
+    return {
+      beginAtZero: yMin == null || yMin <= 0,
+      ...(yMin != null && yMin > 0 ? { min: yMin } : {}),
       max: yMax,
       ...PRO_AXIS,
       title: proAxisTitle(axis.title),
@@ -774,7 +882,7 @@ export function initManufacturingConsole(): () => void {
         ...PRO_AXIS.ticks,
         stepSize,
         maxTicksLimit: 8,
-        callback: v => Number(v).toFixed(axis.decimals) + axis.tickSuffix,
+        callback: v => Number(v).toFixed(tickDecimals) + axis.tickSuffix,
       },
     };
   }
@@ -1694,13 +1802,20 @@ export function initManufacturingConsole(): () => void {
     }
 
     if (m.dow_by_day_week && Object.keys(m.dow_by_day_week).length) {
+      const weekOrder = (m.weeks?.length ? m.weeks : activeWeeks()).map(String);
       DOW_DAY_TRENDS_MUTABLE = {};
       DOW_DAY_TRENDS_HRS_MUTABLE = {};
       DAY_LABELS.forEach(day => {
         const weekMap = m.dow_by_day_week[day] || {};
         const weekMapHrs = m.dow_by_day_week_hrs?.[day] || {};
-        DOW_DAY_TRENDS_MUTABLE[day] = activeWeeks().map(w => +(weekMap[w] ?? 0).toFixed(2));
-        DOW_DAY_TRENDS_HRS_MUTABLE[day] = activeWeeks().map(w => +(weekMapHrs[w] ?? 0).toFixed(2));
+        DOW_DAY_TRENDS_MUTABLE[day] = weekOrder.map(w => {
+          const v = weekMap[w];
+          return v == null ? null : +Number(v).toFixed(2);
+        });
+        DOW_DAY_TRENDS_HRS_MUTABLE[day] = weekOrder.map(w => {
+          const v = weekMapHrs[w];
+          return v == null ? null : +Number(v).toFixed(2);
+        });
       });
     }
 
@@ -3966,7 +4081,7 @@ export function initManufacturingConsole(): () => void {
     const days = filter === 'all' ? DAY_LABELS : [filter];
     const weeks = activeWeeks();
     const series = days.flatMap(day => activeDayTrendSeries(day).map(v => chartValueFromMetric(v)));
-    const yScale = yScaleFromValues(series);
+    const yScale = lineYScaleFromValues(series);
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -4140,7 +4255,7 @@ export function initManufacturingConsole(): () => void {
     const peak = Math.max(...data, 0);
     const minY = useHours ? 0 : Math.max(0, Math.floor((Math.min(...data.filter(v => v > 0), peak) || peak) * 10) / 10 - 0.5);
     const maxY = useHours ? null : Math.ceil((peak + 0.5) * 10) / 10;
-    const hoursYScale = useHours ? yScaleFromValues(data) : null;
+    const hoursYScale = useHours ? lineYScaleFromValues(data) : null;
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
