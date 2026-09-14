@@ -1225,9 +1225,13 @@
   }
 
   function applySummaryTexts(summaries) {
+    const looksLikeStreamGarbage = (text) => {
+      const t = String(text || '');
+      return t.includes('response.output_text.delta') || /^data:\s*\{/.test(t.trim());
+    };
     ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
       const text = summaries?.[tab];
-      if (!text) return;
+      if (!text || looksLikeStreamGarbage(text)) return;
       document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
         el.textContent = text;
       });

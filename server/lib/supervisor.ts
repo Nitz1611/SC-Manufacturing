@@ -92,6 +92,7 @@ function parseJsonBlock(raw: string): Record<string, unknown> {
   }
 
   if (best) return unwrapResponse(best);
+  if (looksLikeSseStream(cleaned)) return {};
   return { narrative: cleaned.slice(0, 500) };
 }
 
@@ -153,6 +154,90 @@ function unwrapResponse(d: Record<string, unknown>): Record<string, unknown> {
   if ('narrative' in d || 'key_insights' in d || 'observations' in d || 'insight' in d) return d;
 
   return d;
+}
+
+function extractSseDataPayloads(raw: string): string[] {
+  const payloads: string[] = [];
+  const re = /^data:\s*(.*)$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw)) !== null) {
+    payloads.push(match[1].trim());
+  }
+  return payloads;
+}
+
+function looksLikeSseStream(raw: string): boolean {
+  return raw.includes('data:') && (
+    raw.includes('response.output_text.delta') ||
+    raw.includes('response.completed') ||
+    raw.includes('response.output_item.done')
+  );
+}
+
+/** Reassemble Databricks Open Responses SSE chunks into plain text or a JSON response body. */
+function parseSupervisorSseStream(raw: string): { text: string; rawForContinue: string } {
+  if (!looksLikeSseStream(raw)) {
+    return { text: raw, rawForContinue: raw };
+  }
+
+  const deltas: string[] = [];
+  const outputTexts: string[] = [];
+  let completedResponse: Record<string, unknown> | null = null;
+  const continueLines: string[] = [];
+
+  for (const dataLine of extractSseDataPayloads(raw)) {
+    if (!dataLine || dataLine === '[DONE]') continue;
+
+    if (dataLine.includes('task_continue_request')) {
+      continueLines.push(`data: ${dataLine}`);
+    }
+
+    try {
+      const event = JSON.parse(dataLine) as Record<string, unknown>;
+      const type = String(event.type || '');
+
+      if (type === 'response.output_text.delta') {
+        deltas.push(String(event.delta || ''));
+        continue;
+      }
+
+      if (type === 'response.completed' && event.response && typeof event.response === 'object') {
+        completedResponse = event.response as Record<string, unknown>;
+        continue;
+      }
+
+      if (type === 'response.output_item.done') {
+        const item = event.item as Record<string, unknown> | undefined;
+        if (Array.isArray(item?.content)) {
+          for (const block of item.content) {
+            if (!block || typeof block !== 'object') continue;
+            const chunk = block as Record<string, unknown>;
+            if (chunk.type === 'output_text' || chunk.type === 'text') {
+              const t = String(chunk.text || '').trim();
+              if (t) outputTexts.push(t);
+            }
+          }
+        } else if (typeof item?.text === 'string' && item.text.trim()) {
+          outputTexts.push(item.text.trim());
+        }
+      }
+    } catch {
+      // skip malformed SSE JSON lines
+    }
+  }
+
+  const rawForContinue = continueLines.length ? continueLines.join('\n\n') : raw;
+
+  if (completedResponse) {
+    return { text: JSON.stringify(completedResponse), rawForContinue };
+  }
+
+  const assembled = (outputTexts.join('') || deltas.join('')).trim();
+  if (assembled) {
+    return { text: assembled, rawForContinue };
+  }
+
+  return { text: raw, rawForContinue };
 }
 
 async function readResponseBody(resp: Response): Promise<string> {
@@ -217,10 +302,12 @@ async function callSupervisor(messages: Message[], metrics?: MetricsPayload | nu
 
   for (let attempt = 0; attempt < MAX_CONTINUATIONS; attempt++) {
     console.log(`[supervisor] attempt ${attempt + 1}/${MAX_CONTINUATIONS}…`);
-    raw = await postOnce(conversation);
+    const streamRaw = await postOnce(conversation);
+    const { text: assembled, rawForContinue } = parseSupervisorSseStream(streamRaw);
+    raw = assembled;
     if (DEBUG) console.log(`[supervisor] response ${raw.length} chars: ${raw.slice(0, 300)}`);
 
-    const taskContinue = LONG_TASK ? findTaskContinueCheckpoint(raw) : null;
+    const taskContinue = LONG_TASK ? findTaskContinueCheckpoint(rawForContinue) : null;
     if (taskContinue) {
       console.log(`[supervisor] task_continue checkpoint step=${taskContinue.step ?? '?'} — resuming…`);
       conversation.push({
@@ -271,11 +358,24 @@ async function callSupervisor(messages: Message[], metrics?: MetricsPayload | nu
   throw new Error('Supervisor max continuations reached');
 }
 
+function isGarbageNarrative(text: string): boolean {
+  const t = text.trim();
+  return (
+    looksLikeSseStream(t) ||
+    t.startsWith('data:') ||
+    t.includes('"response.output_text.delta"') ||
+    t.includes('"type":"response.output_text.delta"')
+  );
+}
+
 function extractNarrative(raw: string): string {
-  const parsed = parseJsonBlock(raw);
+  const { text } = parseSupervisorSseStream(raw);
+  const parsed = parseJsonBlock(text);
 
   if (typeof parsed.narrative === 'string' && parsed.narrative.trim()) {
-    return parsed.narrative.trim().slice(0, 600);
+    const narrative = parsed.narrative.trim();
+    if (isGarbageNarrative(narrative)) return '';
+    return narrative.slice(0, 600);
   }
 
   if (typeof parsed.insight === 'string' && parsed.insight.trim()) {
@@ -291,8 +391,10 @@ function extractNarrative(raw: string): string {
     if (first?.text) return String(first.text).slice(0, 600);
   }
 
-  const cleaned = raw.replace(/```json\s*|```\s*/g, '').trim();
-  if (cleaned && !cleaned.startsWith('{')) return cleaned.slice(0, 600);
+  const cleaned = text.replace(/```json\s*|```\s*/g, '').trim();
+  if (cleaned && !cleaned.startsWith('{') && !isGarbageNarrative(cleaned)) {
+    return cleaned.slice(0, 600);
+  }
   return '';
 }
 
