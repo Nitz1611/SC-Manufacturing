@@ -842,6 +842,12 @@ export function initManufacturingConsole(): () => void {
   function setDataStatus(mode, text) {
     const bar = document.getElementById('data-status-bar');
     if (!bar) return;
+    // Only surface loading and error states — hide cache/live status from the UI.
+    if (mode === 'cached' || mode === 'live') {
+      bar.style.display = 'none';
+      return;
+    }
+    bar.style.display = '';
     bar.className = `data-status-bar ${mode}`;
     bar.querySelector('.data-status-text').textContent = text;
   }
@@ -1267,7 +1273,7 @@ export function initManufacturingConsole(): () => void {
           if (job.status === 'running') {
             tabs.forEach(tab => {
               document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-                el.textContent = '✦ Supervisor querying Genie…';
+                el.textContent = '✦ Generating AI summaries…';
               });
             });
             return;
@@ -1276,7 +1282,7 @@ export function initManufacturingConsole(): () => void {
           clearInterval(timer);
 
           if (job.status === 'error') {
-            reject(new Error(job.error || 'Supervisor returned an error'));
+            reject(new Error(job.error || 'AI summary generation failed'));
             return;
           }
 
@@ -1336,7 +1342,7 @@ export function initManufacturingConsole(): () => void {
         console.warn('[summaries]', err.message);
         ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
           document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-            if (String(el.textContent).includes('Loading') || String(el.textContent).includes('Supervisor')) {
+            if (String(el.textContent).includes('Loading') || String(el.textContent).includes('Generating AI')) {
               el.textContent = `AI summary unavailable — ${err.message}`;
             }
           });

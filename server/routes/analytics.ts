@@ -4,6 +4,8 @@ import { databricksConfigured, getLastSqlError, getLastSqlSuccessAt, resolveMetr
 import { sqlEnvStatus } from '../lib/env.js';
 import { consoleDemoMode, sqlColumnSummary } from '../lib/config.js';
 import { runningJobCount } from '../lib/jobs.js';
+import { claudeConfigured, claudeEndpoint } from '../lib/claudeSummary.js';
+import { resolveSummaryProvider, summaryProviderLabel } from '../lib/summaryProvider.js';
 import { supervisorConfigured } from '../lib/supervisor.js';
 import { sqlConfigured, warmupWarehouse } from '../lib/databricksSql.js';
 import { getPreloadStatus } from '../lib/preload.js';
@@ -98,8 +100,10 @@ analyticsRouter.get('/status', async (_req, res) => {
           ? 'demo-fallback'
           : 'production-no-demo',
     demo_mode: consoleDemoMode(),
+    summary_provider: resolveSummaryProvider(),
+    summaries: summaryProviderLabel(resolveSummaryProvider()),
+    claude: claudeConfigured() ? claudeEndpoint() : 'not configured',
     supervisor: supervisorConfigured() ? process.env.SUPERVISOR_ENDPOINT_NAME : 'not configured',
-    summaries: supervisorConfigured() ? 'supervisor-agent' : 'template-fallback',
     active_supervisor_jobs: runningJobCount(),
     preload: getPreloadStatus(),
   });

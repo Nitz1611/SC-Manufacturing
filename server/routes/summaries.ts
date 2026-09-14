@@ -9,6 +9,7 @@ import {
   resolveMetricView,
   warmupWarehouse,
 } from '../lib/analytics.js';
+import { getClaudeBatchSummaries, getClaudeTabSummary } from '../lib/claudeSummary.js';
 import { coarseCacheKey, consoleDemoMode, normalizeParams } from '../lib/config.js';
 import { buildTabInsights } from '../lib/metricsTransform.js';
 import { sqlConfigured } from '../lib/databricksSql.js';
@@ -20,7 +21,8 @@ import {
   updateJobMessage,
 } from '../lib/jobs.js';
 import { getPreloadStatus, preloadEnabled } from '../lib/preload.js';
-import { getAllSupervisorSummaries, getSupervisorSummary, supervisorConfigured } from '../lib/supervisor.js';
+import { resolveSummaryProvider, summaryProviderLabel } from '../lib/summaryProvider.js';
+import { getAllSupervisorSummaries, getSupervisorSummary } from '../lib/supervisor.js';
 import type { SummaryEntity } from '../lib/summaryPrompts.js';
 
 const SUMMARY_TABS: SummaryEntity[] = ['overview', 'category', 'line', 'dow', 'reason'];
@@ -63,6 +65,10 @@ async function fallbackNarrative(
   return insights;
 }
 
+async function metricsForSummaries(params: Record<string, unknown>) {
+  return getCachedMetricsBundle(params) || await getMetricsBundle(params);
+}
+
 function cachedBatchSummaries(params: Record<string, unknown>): Record<string, string> | null {
   const summaries = Object.fromEntries(
     SUMMARY_TABS.map(tab => {
@@ -86,9 +92,26 @@ function storeBatchSummaries(
   }
 }
 
+async function generateBatchSummaries(
+  provider: ReturnType<typeof resolveSummaryProvider>,
+  filters: Record<string, unknown>,
+  params: Record<string, unknown>,
+): Promise<Record<string, string>> {
+  const metrics = await metricsForSummaries(params);
+
+  if (provider === 'claude') {
+    return getClaudeBatchSummaries(filters, metrics);
+  }
+  if (provider === 'supervisor') {
+    return getAllSupervisorSummaries(filters, metrics);
+  }
+
+  return metrics.tab_insights || buildTabInsights(metrics);
+}
+
 export const summariesRouter = Router();
 
-/** Supervisor Agent → Genie for tab narrative. */
+/** Tab narrative — Claude Opus by default, or Supervisor when configured. */
 summariesRouter.post('/summaries', async (req, res) => {
   const parsed = summarySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -96,8 +119,9 @@ summariesRouter.post('/summaries', async (req, res) => {
   }
   const { entityType, params, forceRefresh } = parsed.data;
   const cacheKey = summaryCacheKey(entityType, params);
+  const provider = resolveSummaryProvider();
 
-  if (!forceRefresh && !supervisorConfigured()) {
+  if (!forceRefresh) {
     const hit = summaryCache.get(cacheKey);
     if (hit && Date.now() - hit.ts < SUMMARY_TTL_MS) {
       return res.json({
@@ -110,17 +134,22 @@ summariesRouter.post('/summaries', async (req, res) => {
   }
 
   try {
-    if (supervisorConfigured()) {
-      const filters = filtersFromParams(params);
-      const metrics = getCachedMetricsBundle(params);
-      const { narrative, source } = await getSupervisorSummary(entityType, filters, metrics);
-      summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
-      return res.json({ narrative, cached: false, entityType, source });
+    const filters = filtersFromParams(params);
+    const metrics = await metricsForSummaries(params);
+    let narrative: string;
+    let source: string;
+
+    if (provider === 'claude') {
+      ({ narrative, source } = await getClaudeTabSummary(entityType, filters, metrics));
+    } else if (provider === 'supervisor') {
+      ({ narrative, source } = await getSupervisorSummary(entityType, filters, metrics));
+    } else {
+      narrative = await fallbackNarrative(entityType, params);
+      source = 'template';
     }
 
-    const narrative = await fallbackNarrative(entityType, params);
-    summaryCache.set(cacheKey, { narrative, source: 'template', ts: Date.now() });
-    return res.json({ narrative, cached: false, entityType, source: 'template' });
+    summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
+    return res.json({ narrative, cached: false, entityType, source });
   } catch (e) {
     try {
       const narrative = await fallbackNarrative(entityType, params);
@@ -137,10 +166,7 @@ summariesRouter.post('/summaries', async (req, res) => {
   }
 });
 
-/**
- * Background Supervisor job + browser polling for AI summaries.
- * Returns cached summaries immediately, or `_job_id` for async Genie queries.
- */
+/** Background job + browser polling for batch AI summaries. */
 summariesRouter.post('/summaries/batch', async (req, res) => {
   const parsed = batchSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -148,8 +174,9 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
   }
   const { params, forceRefresh } = parsed.data;
   const filters = filtersFromParams(params);
+  const provider = resolveSummaryProvider();
 
-  if (!forceRefresh && !supervisorConfigured()) {
+  if (!forceRefresh) {
     const cached = cachedBatchSummaries(params);
     if (cached) {
       const firstHit = summaryCache.get(summaryCacheKey(SUMMARY_TABS[0], params))!;
@@ -162,7 +189,7 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
     }
   }
 
-  if (!supervisorConfigured()) {
+  if (provider === 'template') {
     try {
       const metrics = await getMetricsBundle(params);
       const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
@@ -173,23 +200,23 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
   }
 
   const jobId = newJobId();
-  createJob(jobId);
+  createJob(jobId, provider === 'claude' ? 'Generating AI summaries…' : 'Connecting to Supervisor…');
 
   void (async () => {
     try {
-      console.log(`[job ${jobId.slice(0, 8)}] Starting Supervisor batch…`);
-      const metrics = getCachedMetricsBundle(params);
-      const summaries = await getAllSupervisorSummaries(filters, metrics);
-      storeBatchSummaries(params, summaries, 'supervisor');
-      finishJob(jobId, { summaries, source: 'supervisor' });
+      console.log(`[job ${jobId.slice(0, 8)}] Starting ${provider} batch…`);
+      const summaries = await generateBatchSummaries(provider, filters, params);
+      const source = summaryProviderLabel(provider);
+      storeBatchSummaries(params, summaries, source);
+      finishJob(jobId, { summaries, source });
       console.log(`[job ${jobId.slice(0, 8)}] Done — ${Object.values(summaries).filter(Boolean).length} tabs`);
     } catch (e) {
       try {
-        const metrics = getCachedMetricsBundle(params) || await getMetricsBundle(params);
+        const metrics = await metricsForSummaries(params);
         const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
         storeBatchSummaries(params, templateInsights, 'template-fallback');
         finishJob(jobId, { summaries: templateInsights, source: 'template-fallback' });
-        console.warn(`[job ${jobId.slice(0, 8)}] Supervisor failed — using template fallback:`, (e as Error).message);
+        console.warn(`[job ${jobId.slice(0, 8)}] ${provider} failed — template fallback:`, (e as Error).message);
       } catch (inner) {
         failJob(jobId, (e as Error).message);
         console.error(`[job ${jobId.slice(0, 8)}] Failed:`, (e as Error).message);
@@ -201,7 +228,7 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
     _job_id: jobId,
     _cached: false,
     status: 'running',
-    source: 'supervisor',
+    source: summaryProviderLabel(provider),
   });
 });
 

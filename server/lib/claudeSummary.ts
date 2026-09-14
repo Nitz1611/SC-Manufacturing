@@ -1,6 +1,6 @@
 /**
- * DEPRECATED: SC Manufacturing uses Supervisor Agent → Genie.
- * Kept for reference only; not wired into summary routes.
+ * Claude Opus summaries via Databricks Model Serving.
+ * Default AI path for tab narratives; Supervisor Agent is optional via SUMMARY_PROVIDER=supervisor.
  */
 import type { MetricsPayload } from '../../shared/types/dashboard.js';
 import { buildFilterContext, type SummaryEntity } from './summaryPrompts.js';

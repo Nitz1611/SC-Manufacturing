@@ -9,7 +9,7 @@ import { loadEnv, repoRoot, sqlEnvStatus } from './lib/env.js';
 import { sqlConfigured } from './lib/databricksSql.js';
 import { verifyMetricViewAccess, warmupWarehouse } from './lib/analytics.js';
 import { startPreloadScheduler } from './lib/preload.js';
-import { supervisorConfigured } from './lib/supervisor.js';
+import { resolveSummaryProvider, summaryProviderLabel } from './lib/summaryProvider.js';
 
 loadEnv();
 const ROOT = repoRoot();
@@ -53,7 +53,10 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('╠══════════════════════════════════════════════════════╣');
   const mode = sqlConfigured() ? 'Live SQL (metric view)     ' : 'Demo fallback (no .env SQL)';
   console.log(`║  Mode       : ${mode.padEnd(38)}║`);
-  const sumMode = supervisorConfigured() ? 'Supervisor Agent (AI summaries) ' : 'Template summaries (no supervisor)';
+  const provider = resolveSummaryProvider();
+  const sumMode = provider === 'template'
+    ? 'Template summaries (no AI endpoint) '
+    : `${summaryProviderLabel(provider)} (AI summaries) `;
   console.log(`║  Summaries  : ${sumMode.padEnd(38)}║`);
   const env = sqlEnvStatus();
   if (env.env_file) {
