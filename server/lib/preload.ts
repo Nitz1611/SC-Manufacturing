@@ -1,12 +1,12 @@
 /**
- * Background preload — one SQL load per year×region (All sites) then fan-out
- * all site/timeframe cache keys in memory for instant filter changes.
+ * Background preload — refresh all filter combinations every N minutes so
+ * console filter changes are served instantly from memory/disk cache.
+ * AI summaries are NOT preloaded; those always go through Supervisor on demand.
  */
 import {
   getFreshMetricsBundle,
   getMemoryCacheStats,
   refreshMetricsBundle,
-  resolveMetricsBundle,
   runAnalyticsQuery,
   warmMemoryCacheFromDisk,
 } from './analytics.js';
@@ -14,7 +14,7 @@ import { buildFilterOptions } from './metricsTransform.js';
 import { sqlConfigured } from './databricksSql.js';
 
 const INTERVAL_MS = Number(process.env.PRELOAD_INTERVAL_MINUTES || 15) * 60 * 1000;
-const CONCURRENCY = Math.max(1, Number(process.env.PRELOAD_CONCURRENCY || 6));
+const CONCURRENCY = Math.max(1, Number(process.env.PRELOAD_CONCURRENCY || 3));
 const DEFAULT_YEAR = String(process.env.PRELOAD_DEFAULT_YEAR || '2026');
 
 export function preloadEnabled(): boolean {
@@ -24,7 +24,6 @@ export function preloadEnabled(): boolean {
 export interface PreloadStatus {
   enabled: boolean;
   running: boolean;
-  ready: boolean;
   interval_minutes: number;
   concurrency: number;
   lastRunStartedAt: number | null;
@@ -35,13 +34,11 @@ export interface PreloadStatus {
   combinationsSkipped: number;
   memoryCacheEntries: number;
   nextRunAt: number | null;
-  queueLength: number;
 }
 
 const status: PreloadStatus = {
   enabled: preloadEnabled(),
   running: false,
-  ready: false,
   interval_minutes: INTERVAL_MS / 60000,
   concurrency: CONCURRENCY,
   lastRunStartedAt: null,
@@ -52,38 +49,29 @@ const status: PreloadStatus = {
   combinationsSkipped: 0,
   memoryCacheEntries: 0,
   nextRunAt: null,
-  queueLength: 0,
 };
 
 let schedulerStarted = false;
 let nextRunTimer: ReturnType<typeof setTimeout> | null = null;
-const priorityQueue: Record<string, unknown>[] = [];
-const queuedKeys = new Set<string>();
-
-function comboKey(combo: Record<string, unknown>): string {
-  return JSON.stringify({
-    year: combo.year,
-    site: 'All',
-    region: combo.region || [],
-    timeframe: combo.timeframe || 'Week',
-  });
-}
 
 async function loadFilterCombinations(): Promise<Record<string, unknown>[]> {
   const { rows } = await runAnalyticsQuery('dashboard_filter_options', {});
   const options = buildFilterOptions(rows as Record<string, unknown>[]);
   const years = options.years.length ? options.years.map(String) : [DEFAULT_YEAR];
+  const sites: (string | null)[] = [null, ...options.sites];
   const regionSets: (string[] | null)[] = [null, ...options.regions.map(r => [r])];
 
   const combos: Record<string, unknown>[] = [];
   for (const year of years) {
-    for (const region of regionSets) {
-      combos.push({
-        year,
-        site: 'All',
-        region: region || [],
-        timeframe: 'Week',
-      });
+    for (const site of sites) {
+      for (const region of regionSets) {
+        combos.push({
+          year,
+          site: site || 'All',
+          region: region || [],
+          timeframe: 'Week',
+        });
+      }
     }
   }
 
@@ -91,7 +79,8 @@ async function loadFilterCombinations(): Promise<Record<string, unknown>[]> {
     const score = (c: Record<string, unknown>) => {
       let s = 0;
       if (String(c.year) === DEFAULT_YEAR) s += 100;
-      if (!c.region || (Array.isArray(c.region) && c.region.length === 0)) s += 50;
+      if (c.site === 'All') s += 50;
+      if (!c.region || (Array.isArray(c.region) && c.region.length === 0)) s += 25;
       return s;
     };
     return score(b) - score(a);
@@ -103,44 +92,16 @@ async function loadFilterCombinations(): Promise<Record<string, unknown>[]> {
 async function runPool<T>(
   items: T[],
   concurrency: number,
-  worker: (item: T) => Promise<void>,
+  worker: (item: T, index: number) => Promise<void>,
 ): Promise<void> {
   let index = 0;
   async function next(): Promise<void> {
     while (index < items.length) {
       const i = index++;
-      await worker(items[i]);
+      await worker(items[i], i);
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => next()));
-}
-
-export function prioritizePreloadCombo(filters: Record<string, unknown>): void {
-  if (!preloadEnabled()) return;
-  const combo = {
-    year: filters.year || DEFAULT_YEAR,
-    site: 'All',
-    region: filters.region || [],
-    timeframe: filters.timeframe || 'Week',
-  };
-  const key = comboKey(combo);
-  if (queuedKeys.has(key) || resolveMetricsBundle(combo)) return;
-  priorityQueue.unshift(combo);
-  queuedKeys.add(key);
-  status.queueLength = priorityQueue.length;
-  console.log(`[preload] prioritized ${key.slice(0, 80)}`);
-}
-
-async function refreshCombo(combo: Record<string, unknown>): Promise<void> {
-  if (getFreshMetricsBundle(combo)) {
-    status.combinationsSkipped++;
-    return;
-  }
-  await refreshMetricsBundle(combo, msg => {
-    if (status.combinationsDone % 5 === 0) {
-      console.log(`[preload] ${status.combinationsDone}/${status.combinationsTotal} — ${msg}`);
-    }
-  });
 }
 
 export async function runPreloadCycle(): Promise<void> {
@@ -157,29 +118,30 @@ export async function runPreloadCycle(): Promise<void> {
   status.combinationsSkipped = 0;
 
   try {
-    const baseCombos = await loadFilterCombinations();
-    const pending = [...priorityQueue, ...baseCombos.filter(c => !queuedKeys.has(comboKey(c)))];
-    priorityQueue.length = 0;
-    queuedKeys.clear();
-    status.queueLength = 0;
+    const combos = await loadFilterCombinations();
+    status.combinationsTotal = combos.length;
+    console.log(`[preload] starting cycle — ${combos.length} combinations, concurrency=${CONCURRENCY}`);
 
-    status.combinationsTotal = pending.length;
-    console.log(
-      `[preload] starting cycle — ${pending.length} network bundles (all sites fan-out), concurrency=${CONCURRENCY}`,
-    );
-
-    await runPool(pending, CONCURRENCY, async combo => {
+    await runPool(combos, CONCURRENCY, async combo => {
+      if (getFreshMetricsBundle(combo)) {
+        status.combinationsSkipped++;
+        status.combinationsDone++;
+        return;
+      }
       try {
-        await refreshCombo(combo);
+        await refreshMetricsBundle(combo, msg => {
+          if (status.combinationsDone % 10 === 0) {
+            console.log(`[preload] ${status.combinationsDone}/${status.combinationsTotal} — ${msg}`);
+          }
+        });
       } catch (e) {
-        console.warn('[preload] combo failed:', comboKey(combo).slice(0, 80), (e as Error).message);
+        console.warn('[preload] combo failed:', JSON.stringify(combo).slice(0, 80), (e as Error).message);
       }
       status.combinationsDone++;
     });
 
     status.memoryCacheEntries = getMemoryCacheStats().entries;
     status.lastRunFinishedAt = Date.now();
-    status.ready = status.combinationsDone > 0;
     const elapsed = ((status.lastRunFinishedAt - status.lastRunStartedAt!) / 1000).toFixed(0);
     console.log(
       `[preload] cycle complete — ${status.combinationsDone}/${status.combinationsTotal} ` +
@@ -222,7 +184,5 @@ export function getPreloadStatus(): PreloadStatus {
     interval_minutes: INTERVAL_MS / 60000,
     concurrency: CONCURRENCY,
     memoryCacheEntries: getMemoryCacheStats().entries,
-    queueLength: priorityQueue.length,
-    ready: status.ready || getMemoryCacheStats().entries > 0,
   };
 }

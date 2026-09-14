@@ -1,6 +1,5 @@
 -- dashboard_dt_dow_by_shift.obo.sql
 SELECT
-  UPPER({{site_col}}) AS site,
   DATE_FORMAT({{date_col}}, 'EEEE') AS day_name,
   {{week_expr}} AS week_label,
   {{shift_expr}} AS shift_label,
@@ -11,5 +10,5 @@ WHERE {{dt_type_filter}}
   AND {{year_filter}}
   AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
   AND {{region_filter}}
-GROUP BY UPPER({{site_col}}), DATE_FORMAT({{date_col}}, 'EEEE'), {{week_expr}}, {{shift_expr}}
-ORDER BY site, week_label, day_name, shift_label
+GROUP BY DATE_FORMAT({{date_col}}, 'EEEE'), {{week_expr}}, {{shift_expr}}
+ORDER BY week_label, day_name, shift_label

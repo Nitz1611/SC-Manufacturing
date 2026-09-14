@@ -371,36 +371,8 @@ export function applySiteFilter(metrics: MetricsPayload, site: string | null): M
   }
 
   if (out.meta?.source === 'sql') {
-    if (out.site_kpis?.[siteKey]) {
-      out.kpis = out.site_kpis[siteKey];
-    } else {
-      out.kpis = deriveKpisFromSitePeriods(out, siteKey);
-    }
-    if (out.site_category_by_period?.[siteKey]) {
-      out.category_by_period = out.site_category_by_period[siteKey];
-    }
-    if (out.site_category_by_period_hrs?.[siteKey]) {
-      out.category_by_period_hrs = out.site_category_by_period_hrs[siteKey];
-    }
-    if (out.site_line_by_period?.[siteKey]) {
-      out.line_by_period = out.site_line_by_period[siteKey];
-    }
-    if (out.site_line_by_period_hrs?.[siteKey]) {
-      out.line_by_period_hrs = out.site_line_by_period_hrs[siteKey];
-    }
-    if (out.site_reasons?.[siteKey]) out.reasons = out.site_reasons[siteKey];
-    if (out.site_dow_by_day_week?.[siteKey]) out.dow_by_day_week = out.site_dow_by_day_week[siteKey];
-    if (out.site_dow_by_day_week_hrs?.[siteKey]) out.dow_by_day_week_hrs = out.site_dow_by_day_week_hrs[siteKey];
-    if (out.site_dow_by_shift?.[siteKey]) out.dow_by_shift = out.site_dow_by_shift[siteKey];
-    if (out.site_dow_by_shift_hrs?.[siteKey]) out.dow_by_shift_hrs = out.site_dow_by_shift_hrs[siteKey];
-    if (out.site_shift_comparison?.[siteKey]) out.shift_comparison = out.site_shift_comparison[siteKey];
-    if (out.site_top_lines?.[siteKey]) out.top_lines = out.site_top_lines[siteKey];
-    if (out.site_top_lines_hrs?.[siteKey]) out.top_lines_hrs = out.site_top_lines_hrs[siteKey];
     if (out.site_by_period[siteKey]?.length) {
       out.period_trend = [...out.site_by_period[siteKey]];
-    }
-    if (out.site_by_period_hrs?.[siteKey]?.length) {
-      out.period_trend_hrs = [...out.site_by_period_hrs[siteKey]];
     }
     out.meta.filtered_site = siteKey;
     out.tab_insights = buildTabInsights(out);
@@ -593,278 +565,6 @@ function buildDowByShift(
   return out;
 }
 
-function rowToKpis(row: Record<string, unknown>): MetricsPayload['kpis'] {
-  const dtPct = Number(row.downtime_pct ?? 0);
-  const dtHrs = Number(row.downtime_hrs ?? 0);
-  const stops = Number(row.stops ?? 0);
-  return {
-    downtime_pct: {
-      value: `${dtPct.toFixed(2)}%`,
-      delta: 'vs prior period',
-      direction: dtPct > 5 ? 'bad' as const : 'good' as const,
-    },
-    downtime_hrs: {
-      value: `${Math.round(dtHrs).toLocaleString()} h`,
-      delta: '',
-      direction: 'warn' as const,
-    },
-    stops: {
-      value: String(Math.round(stops)),
-      delta: '',
-      direction: 'warn' as const,
-    },
-    oee: { value: 'N/A', delta: 'Not in metric view', direction: 'warn' as const },
-  };
-}
-
-function buildKpisFromSiteRows(rows: Record<string, unknown>[]): {
-  network: MetricsPayload['kpis'];
-  bySite: Record<string, MetricsPayload['kpis']>;
-} {
-  const bySite: Record<string, MetricsPayload['kpis']> = {};
-  let totalHrs = 0;
-  let totalStops = 0;
-  let pctSum = 0;
-  let pctCount = 0;
-
-  for (const row of rows) {
-    const site = String(row.site || '').toUpperCase();
-    if (!site) continue;
-    bySite[site] = rowToKpis(row);
-    totalHrs += Number(row.downtime_hrs ?? 0);
-    totalStops += Number(row.stops ?? 0);
-    pctSum += Number(row.downtime_pct ?? 0);
-    pctCount++;
-  }
-
-  if (!pctCount && rows.length === 1 && !rows[0].site) {
-    return { network: rowToKpis(rows[0]), bySite };
-  }
-
-  const avgPct = pctCount ? pctSum / pctCount : 0;
-  return {
-    network: {
-      downtime_pct: {
-        value: `${avgPct.toFixed(2)}%`,
-        delta: 'vs prior period',
-        direction: avgPct > 5 ? 'bad' as const : 'good' as const,
-      },
-      downtime_hrs: {
-        value: `${Math.round(totalHrs).toLocaleString()} h`,
-        delta: '',
-        direction: 'warn' as const,
-      },
-      stops: {
-        value: String(Math.round(totalStops)),
-        delta: '',
-        direction: 'warn' as const,
-      },
-      oee: { value: 'N/A', delta: 'Not in metric view', direction: 'warn' as const },
-    },
-    bySite,
-  };
-}
-
-function buildSiteReasonMaps(rows: Record<string, unknown>[], limit = 25): {
-  network: MetricsPayload['reasons'];
-  bySite: Record<string, MetricsPayload['reasons']>;
-} {
-  const bySite: Record<string, MetricsPayload['reasons']> = {};
-  const networkAgg = new Map<string, { hours: number; pct: number; count: number }>();
-
-  for (const row of rows) {
-    const site = String(row.site || '').toUpperCase();
-    const reason = String(row.reason || 'Unknown');
-    const hours = +Number(row.hours || 0).toFixed(2);
-    const pct = +Number(row.pct || 0).toFixed(2);
-    if (site) {
-      if (!bySite[site]) bySite[site] = [];
-      bySite[site].push({ reason, hours, pct });
-    }
-    const prev = networkAgg.get(reason) || { hours: 0, pct: 0, count: 0 };
-    networkAgg.set(reason, { hours: prev.hours + hours, pct: prev.pct + pct, count: prev.count + 1 });
-  }
-
-  for (const site of Object.keys(bySite)) {
-    bySite[site] = bySite[site].sort((a, b) => b.hours - a.hours).slice(0, limit);
-  }
-
-  const network = [...networkAgg.entries()]
-    .map(([reason, v]) => ({
-      reason,
-      hours: +v.hours.toFixed(2),
-      pct: +(v.pct / Math.max(v.count, 1)).toFixed(2),
-    }))
-    .sort((a, b) => b.hours - a.hours)
-    .slice(0, limit);
-
-  return { network, bySite };
-}
-
-function buildSiteDowMaps(rows: Record<string, unknown>[]): {
-  networkPct: Record<string, Record<string, number>>;
-  networkHrs: Record<string, Record<string, number>>;
-  bySitePct: Record<string, Record<string, Record<string, number>>>;
-  bySiteHrs: Record<string, Record<string, Record<string, number>>>;
-  weeks: string[];
-} {
-  const bySitePct: Record<string, Record<string, Record<string, number>>> = {};
-  const bySiteHrs: Record<string, Record<string, Record<string, number>>> = {};
-  const networkPctAgg: Record<string, Record<string, { sum: number; count: number }>> = {};
-  const networkHrsAgg: Record<string, Record<string, number>> = {};
-  const weekSet = new Set<string>();
-
-  for (const row of rows) {
-    const site = String(row.site || '').toUpperCase();
-    const day = String(row.day_name || '');
-    const week = String(row.week_label || '');
-    const pct = Number(row.dt_pct ?? 0);
-    const hrs = Number(row.dt_hours ?? 0);
-    if (!day || !week) continue;
-    weekSet.add(week);
-
-    if (site) {
-      if (!bySitePct[site]) bySitePct[site] = {};
-      if (!bySiteHrs[site]) bySiteHrs[site] = {};
-      if (!bySitePct[site][day]) bySitePct[site][day] = {};
-      if (!bySiteHrs[site][day]) bySiteHrs[site][day] = {};
-      bySitePct[site][day][week] = +pct.toFixed(2);
-      bySiteHrs[site][day][week] = +hrs.toFixed(2);
-    }
-
-    if (!networkPctAgg[day]) networkPctAgg[day] = {};
-    if (!networkPctAgg[day][week]) networkPctAgg[day][week] = { sum: 0, count: 0 };
-    networkPctAgg[day][week].sum += pct;
-    networkPctAgg[day][week].count += 1;
-    if (!networkHrsAgg[day]) networkHrsAgg[day] = {};
-    networkHrsAgg[day][week] = (networkHrsAgg[day][week] || 0) + hrs;
-  }
-
-  const networkPct: Record<string, Record<string, number>> = {};
-  for (const [day, weeks] of Object.entries(networkPctAgg)) {
-    networkPct[day] = {};
-    for (const [week, cell] of Object.entries(weeks)) {
-      networkPct[day][week] = +(cell.sum / Math.max(cell.count, 1)).toFixed(2);
-    }
-  }
-
-  const networkHrs: Record<string, Record<string, number>> = {};
-  for (const [day, weeks] of Object.entries(networkHrsAgg)) {
-    networkHrs[day] = {};
-    for (const [week, hrs] of Object.entries(weeks)) {
-      networkHrs[day][week] = +hrs.toFixed(2);
-    }
-  }
-
-  return {
-    networkPct,
-    networkHrs,
-    bySitePct,
-    bySiteHrs,
-    weeks: sortPeriods([...weekSet]),
-  };
-}
-
-function buildSiteDowByShiftMaps(rows: Record<string, unknown>[]): {
-  bySitePct: Record<string, Record<string, Record<string, Record<string, number>>>>;
-  bySiteHrs: Record<string, Record<string, Record<string, Record<string, number>>>>;
-  networkPct: Record<string, Record<string, Record<string, number>>>;
-  networkHrs: Record<string, Record<string, Record<string, number>>>;
-} {
-  const grouped: Record<string, Record<string, unknown>[]> = {};
-  for (const row of rows) {
-    const site = String(row.site || '').toUpperCase();
-    if (!site) continue;
-    if (!grouped[site]) grouped[site] = [];
-    grouped[site].push(row);
-  }
-  const bySitePct: Record<string, Record<string, Record<string, Record<string, number>>>> = {};
-  const bySiteHrs: Record<string, Record<string, Record<string, Record<string, number>>>> = {};
-  for (const [site, siteRows] of Object.entries(grouped)) {
-    bySitePct[site] = buildDowByShift(siteRows, 'dt_pct');
-    bySiteHrs[site] = buildDowByShift(siteRows, 'dt_hours');
-  }
-  return {
-    bySitePct,
-    bySiteHrs,
-    networkPct: buildDowByShift(rows, 'dt_pct'),
-    networkHrs: buildDowByShift(rows, 'dt_hours'),
-  };
-}
-
-function buildSiteShiftMaps(rows: Record<string, unknown>[]): {
-  network: MetricsPayload['shift_comparison'];
-  bySite: Record<string, MetricsPayload['shift_comparison']>;
-} {
-  const bySite: Record<string, MetricsPayload['shift_comparison']> = {};
-  const networkAgg = new Map<string, number>();
-
-  for (const row of rows) {
-    const site = String(row.site || '').toUpperCase();
-    const shift = String(row.shift || 'Shift');
-    const hours = +Number(row.hours || 0).toFixed(2);
-    if (site) {
-      if (!bySite[site]) bySite[site] = [];
-      bySite[site].push({ shift, hours });
-    }
-    networkAgg.set(shift, (networkAgg.get(shift) || 0) + hours);
-  }
-
-  for (const site of Object.keys(bySite)) {
-    bySite[site] = bySite[site].sort((a, b) => b.hours - a.hours);
-  }
-
-  const network = [...networkAgg.entries()]
-    .map(([shift, hours]) => ({ shift, hours: +hours.toFixed(2) }))
-    .sort((a, b) => b.hours - a.hours);
-
-  return { network, bySite };
-}
-
-function buildSiteTopLineMaps(rows: Record<string, unknown>[], limit = 15): {
-  networkPct: Record<string, number>;
-  networkHrs: Record<string, number>;
-  bySitePct: Record<string, Record<string, number>>;
-  bySiteHrs: Record<string, Record<string, number>>;
-} {
-  const bySitePct: Record<string, Record<string, number>> = {};
-  const bySiteHrs: Record<string, Record<string, number>> = {};
-  const networkPct: Record<string, number> = {};
-  const networkHrs: Record<string, number> = {};
-
-  for (const row of rows) {
-    const site = String(row.site || '').toUpperCase();
-    const line = String(row.line || '').toUpperCase();
-    if (!line) continue;
-    const pct = +Number(row.dt_pct || 0).toFixed(2);
-    const hrs = +Number(row.dt_hours || 0).toFixed(2);
-    if (site) {
-      if (!bySitePct[site]) bySitePct[site] = {};
-      if (!bySiteHrs[site]) bySiteHrs[site] = {};
-      bySitePct[site][line] = pct;
-      bySiteHrs[site][line] = hrs;
-    }
-    if (!networkHrs[line] || hrs > networkHrs[line]) {
-      networkPct[line] = pct;
-      networkHrs[line] = hrs;
-    }
-  }
-
-  for (const site of Object.keys(bySitePct)) {
-    const entries = Object.entries(bySiteHrs[site]).sort((a, b) => b[1] - a[1]).slice(0, limit);
-    bySitePct[site] = Object.fromEntries(entries.map(([line]) => [line, bySitePct[site][line]]));
-    bySiteHrs[site] = Object.fromEntries(entries);
-  }
-
-  const topNetwork = Object.entries(networkHrs).sort((a, b) => b[1] - a[1]).slice(0, limit);
-  return {
-    networkPct: Object.fromEntries(topNetwork.map(([line]) => [line, networkPct[line]])),
-    networkHrs: Object.fromEntries(topNetwork),
-    bySitePct,
-    bySiteHrs,
-  };
-}
-
 export interface SqlQueryResults {
   kpis: Record<string, unknown>[];
   periodTrend: Record<string, unknown>[];
@@ -896,9 +596,29 @@ export function buildMetricsFromSql(
     return row ? +Number(row.dt_hours || 0).toFixed(2) : 0;
   });
 
-  const kpiMaps = buildKpisFromSiteRows(results.kpis);
-  const kpis = kpiMaps.network;
-  const site_kpis = kpiMaps.bySite;
+  const k = results.kpis[0] || {};
+  const dtPct = Number(k.downtime_pct ?? 0);
+  const dtHrs = Number(k.downtime_hrs ?? 0);
+  const stops = Number(k.stops ?? 0);
+
+  const kpis = {
+    downtime_pct: {
+      value: `${dtPct.toFixed(2)}%`,
+      delta: 'vs prior period',
+      direction: dtPct > 5 ? 'bad' as const : 'good' as const,
+    },
+    downtime_hrs: {
+      value: `${Math.round(dtHrs).toLocaleString()} h`,
+      delta: '',
+      direction: 'warn' as const,
+    },
+    stops: {
+      value: String(Math.round(stops)),
+      delta: '',
+      direction: 'warn' as const,
+    },
+    oee: { value: 'N/A', delta: 'Not in metric view', direction: 'warn' as const },
+  };
 
   const site_by_period = pivotMetricRows(results.siteByPeriod, 'site', periods, 'dt_pct');
   const site_by_period_hrs = pivotMetricRows(results.siteByPeriod, 'site', periods, 'dt_hours');
@@ -915,32 +635,45 @@ export function buildMetricsFromSql(
   const line_by_period = lineAgg.pct;
   const line_by_period_hrs = lineAgg.hrs;
 
-  const topLineMaps = buildSiteTopLineMaps(results.topLines);
-  const top_lines = topLineMaps.networkPct;
-  const top_lines_hrs = topLineMaps.networkHrs;
-  const site_top_lines = topLineMaps.bySitePct;
-  const site_top_lines_hrs = topLineMaps.bySiteHrs;
+  const top_lines: Record<string, number> = {};
+  const top_lines_hrs: Record<string, number> = {};
+  for (const row of results.topLines) {
+    const line = String(row.line || '').toUpperCase();
+    if (line) {
+      top_lines[line] = +Number(row.dt_pct || 0).toFixed(2);
+      top_lines_hrs[line] = +Number(row.dt_hours || 0).toFixed(2);
+    }
+  }
 
-  const dowMaps = buildSiteDowMaps(results.dow);
-  const dowWeeks = dowMaps.weeks.length ? dowMaps.weeks : WEEKS;
-  const dow_by_day_week = dowMaps.networkPct;
-  const dow_by_day_week_hrs = dowMaps.networkHrs;
-  const site_dow_by_day_week = dowMaps.bySitePct;
-  const site_dow_by_day_week_hrs = dowMaps.bySiteHrs;
+  const weeks = sortPeriods(
+    results.dow.map(r => String(r.week_label || '')).filter(Boolean),
+  );
+  const dowWeeks = weeks.length ? weeks : WEEKS;
 
-  const reasonMaps = buildSiteReasonMaps(results.reasons);
-  const reasons = reasonMaps.network;
-  const site_reasons = reasonMaps.bySite;
+  const dow_by_day_week: Record<string, Record<string, number>> = {};
+  const dow_by_day_week_hrs: Record<string, Record<string, number>> = {};
+  for (const row of results.dow) {
+    const day = String(row.day_name || '');
+    const week = String(row.week_label || '');
+    const pct = Number(row.dt_pct ?? 0);
+    const hrs = Number(row.dt_hours ?? 0);
+    if (!day || !week) continue;
+    if (!dow_by_day_week[day]) dow_by_day_week[day] = {};
+    if (!dow_by_day_week_hrs[day]) dow_by_day_week_hrs[day] = {};
+    dow_by_day_week[day][week] = +pct.toFixed(2);
+    dow_by_day_week_hrs[day][week] = +hrs.toFixed(2);
+  }
 
-  const shiftMaps = buildSiteShiftMaps(results.shiftComparison);
-  const shift_comparison = shiftMaps.network;
-  const site_shift_comparison = shiftMaps.bySite;
+  const reasons = results.reasons.map(r => ({
+    reason: String(r.reason || 'Unknown'),
+    hours: +Number(r.hours || 0).toFixed(2),
+    pct: +Number(r.pct || 0).toFixed(2),
+  }));
 
-  const dowShiftMaps = buildSiteDowByShiftMaps(results.dowByShift);
-  const dow_by_shift = dowShiftMaps.networkPct;
-  const dow_by_shift_hrs = dowShiftMaps.networkHrs;
-  const site_dow_by_shift = dowShiftMaps.bySitePct;
-  const site_dow_by_shift_hrs = dowShiftMaps.bySiteHrs;
+  const shift_comparison = results.shiftComparison.map(r => ({
+    shift: String(r.shift || 'Shift'),
+    hours: +Number(r.hours || 0).toFixed(2),
+  }));
 
   const top_sites_trend: Record<string, number[]> = {};
   const top_sites_trend_hrs: Record<string, number[]> = {};
@@ -953,6 +686,8 @@ export function buildMetricsFromSql(
     top_sites_trend_hrs[site] = site_by_period_hrs[site];
   }
 
+  const dow_by_shift = buildDowByShift(results.dowByShift, 'dt_pct');
+  const dow_by_shift_hrs = buildDowByShift(results.dowByShift, 'dt_hours');
   const filter_options = buildFilterOptions(results.filterOptions);
   if (!filter_options.sites.length) {
     filter_options.sites = Object.keys(site_by_period).sort();
@@ -1002,15 +737,6 @@ export function buildMetricsFromSql(
     top_sites_trend,
     top_sites_trend_hrs,
     shift_comparison,
-    site_kpis,
-    site_reasons,
-    site_dow_by_day_week,
-    site_dow_by_day_week_hrs,
-    site_dow_by_shift,
-    site_dow_by_shift_hrs,
-    site_shift_comparison,
-    site_top_lines,
-    site_top_lines_hrs,
   };
   m.tab_insights = buildTabInsights(m);
   return m;
