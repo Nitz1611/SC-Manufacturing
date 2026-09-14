@@ -3,7 +3,7 @@ import { getJob, loadStatus } from '../lib/jobs.js';
 
 export const jobsRouter = Router();
 
-/** VR Dashboard — poll background Supervisor job status. */
+/** Poll background Supervisor job status. */
 jobsRouter.get('/job/:id', (req, res) => {
   const job = getJob(req.params.id);
   if (!job) {
@@ -27,7 +27,7 @@ jobsRouter.get('/job/:id', (req, res) => {
   return res.json({ status: 'done', result: job.result, elapsed });
 });
 
-/** VR Dashboard loader steps — connecting / querying / synthesising. */
+/** Loader steps — connecting / querying / synthesising. */
 jobsRouter.get('/load-status', (_req, res) => {
   res.json(loadStatus());
 });

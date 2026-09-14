@@ -1,7 +1,26 @@
+// @ts-nocheck
 /**
- * Manufacturing Console — Production-grade UI
+ * Manufacturing Console — dashboard engine (imperative UI; mounted by React shell).
  */
-(function () {
+import Chart from 'chart.js/auto';
+
+declare global {
+  interface Window {
+    ManufacturingConsole?: {
+      state: unknown;
+      switchPage: (id: string, silent?: boolean) => void;
+      switchKpiTab: (id: string, silent?: boolean) => void;
+    };
+  }
+}
+
+let engineStarted = false;
+
+export function initManufacturingConsole(): () => void {
+  if (engineStarted) {
+    return () => {};
+  }
+  engineStarted = true;
   'use strict';
 
   const SLICERS = {
@@ -1647,7 +1666,7 @@
     });
   }
 
-  document.addEventListener('DOMContentLoaded', () => {
+  function bootstrapConsole() {
     setBootStatus('Preparing Manufacturing Console');
     buildTopNav();
     initFilters();
@@ -1662,7 +1681,7 @@
     loadConsoleData(false);
     setTimeout(dismissBootSplash, 120000);
     document.addEventListener('click', closeSlicersOnOutsideClick);
-  });
+  }
 
   const FOCUS_CANVAS_ID = 'focus-mode-canvas';
 
@@ -4454,4 +4473,11 @@
   }
 
   window.ManufacturingConsole = { state, switchPage, switchKpiTab };
-})();
+  bootstrapConsole();
+
+  return () => {
+    engineStarted = false;
+    document.removeEventListener('click', closeSlicersOnOutsideClick);
+    Object.values(state.charts).forEach((chart: { destroy?: () => void }) => chart?.destroy?.());
+  };
+}

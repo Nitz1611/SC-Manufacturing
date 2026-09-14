@@ -1,5 +1,5 @@
 /**
- * Shared types — mirrors VR Dashboard shared/appkit-types pattern.
+ * Shared types for dashboard metrics and API contracts.
  */
 export interface KpiValue {
   value: string;

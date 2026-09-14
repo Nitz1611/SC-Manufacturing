@@ -88,7 +88,7 @@ function storeBatchSummaries(
 
 export const summariesRouter = Router();
 
-/** VR pattern — Supervisor Agent → Genie for tab narrative. */
+/** Supervisor Agent → Genie for tab narrative. */
 summariesRouter.post('/summaries', async (req, res) => {
   const parsed = summarySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -138,7 +138,7 @@ summariesRouter.post('/summaries', async (req, res) => {
 });
 
 /**
- * VR Dashboard pattern — background Supervisor job + browser polling.
+ * Background Supervisor job + browser polling for AI summaries.
  * Returns cached summaries immediately, or `_job_id` for async Genie queries.
  */
 summariesRouter.post('/summaries/batch', async (req, res) => {

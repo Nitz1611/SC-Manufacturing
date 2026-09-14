@@ -13,7 +13,7 @@ interface SummaryResult {
 
 const summaryClientCache = new Map<string, string>();
 
-/** VR Dashboard /api/summaries pattern — AI narrative separate from chart SQL */
+/** POST /api/summaries — AI narrative separate from chart SQL */
 export function useSummary(entityType: SummaryEntity, params: AnalyticsParams): SummaryResult {
   const paramsStable = useMemo(() => JSON.stringify(params), [params]);
   const [narrative, setNarrative] = useState('');

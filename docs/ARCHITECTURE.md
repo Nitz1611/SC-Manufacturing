@@ -2,14 +2,28 @@
 
 ## Overview
 
-The SC Manufacturing Console is a React + Node.js application for unplanned downtime analytics. Chart data is loaded via **named SQL queries** against `pgt_plnt_prodtn_metric_view`. AI tab summaries are generated separately via the **Supervisor Agent** (VR Dashboard pattern).
+The SC Manufacturing Console is a **React 18 + Node.js** application for unplanned downtime analytics. Chart data is loaded via **named SQL queries** against `pgt_plnt_prodtn_metric_view`. AI tab summaries are generated separately via the **Supervisor Agent**.
+
+## Frontend stack
+
+| Technology | Purpose |
+|------------|---------|
+| React 18 | UI framework |
+| Vite | Dev server and production build |
+| TypeScript | Type-safe client and server |
+| Tailwind CSS v4 | Utility styling (alongside console theme CSS) |
+| shadcn/ui (Radix) | Accessible UI primitives (`Button`, etc.) |
+| React Router | URL routes for main sections and KPI tabs |
+| ECharts (lazy) | `LazyEChart` component for new chart surfaces |
+| Chart.js (engine) | Existing dashboard charts during incremental ECharts migration |
 
 ## Folder layout
 
 | Path | Purpose |
 |------|---------|
-| `client/` | React 18 + Vite SPA — Manufacturing Console UI |
-| `client/public/legacy/console.js` | KPI tabs, Focus Mode, slicers (preserved UI) |
+| `client/src/` | React app entry, layout, hooks |
+| `client/src/lib/console/engine.ts` | Dashboard engine (metrics, filters, tables, charts) |
+| `client/src/components/` | Layout shell, shadcn UI, lazy ECharts |
 | `client/src/hooks/` | `useAnalyticsQuery`, `useSummary` |
 | `server/` | Express API — analytics, summaries, jobs |
 | `config/queries/` | One `.obo.sql` file per dashboard query |
@@ -18,9 +32,8 @@ The SC Manufacturing Console is a React + Node.js application for unplanned down
 ## Data flow
 
 ```
-Browser (Manufacturing Console UI)
-    → POST /api/analytics/query/:queryKey
-        → SQL Warehouse (live) OR cache.json (dev fallback)
+Browser (React Manufacturing Console)
+    → POST /api/console-data (metrics bundle + preload cache)
     → POST /api/summaries/batch
         → Background Supervisor job (_job_id)
         → GET /api/job/:id (poll until done)
@@ -30,7 +43,7 @@ Browser (Manufacturing Console UI)
 
 Charts use **direct SQL**. AI summaries use **Supervisor → Genie** (not pre-loaded metrics JSON).
 
-## AI summaries (VR pattern)
+## AI summaries
 
 | Step | What happens |
 |------|----------------|
@@ -63,6 +76,7 @@ Without Databricks credentials, the server reads `cache.json` (auto-created on f
 
 ## Future work
 
-- Port KPI tab components from legacy JS to React
-- Add Ask Pep floating chat panel (Supervisor → Genie, section 10.3 VR spec)
+- Migrate dashboard charts from Chart.js engine to lazy-loaded ECharts components
+- Convert imperative engine tables to declarative React components
+- Add Ask Pep floating chat panel (Supervisor → Genie)
 - Auth (OBO) and Databricks App deployment

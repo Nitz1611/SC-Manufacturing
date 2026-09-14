@@ -42,7 +42,7 @@ export async function fetchAnalyticsQuery<T = Record<string, unknown>>(
   return out;
 }
 
-/** VR Dashboard pattern — mirrors useAnalyticsQuery from AppKit UI */
+/** Named analytics query helper. */
 export function useAnalyticsQuery<T = Record<string, unknown>>(
   queryKey: QueryKey,
   params: AnalyticsParams,

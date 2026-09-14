@@ -3,7 +3,7 @@ import type { AnalyticsParams, QueryKey } from '@shared/types/dashboard';
 import { fetchAnalyticsQuery, type AnalyticsQueryResult } from '../lib/analytics';
 
 /**
- * VR Dashboard standard hook — one named SQL query per call.
+ * Standard hook — one named SQL query per call.
  * Params must be memoized at call site to avoid refetch loops.
  */
 export function useAnalyticsQuery<T = Record<string, unknown>>(

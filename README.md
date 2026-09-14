@@ -35,6 +35,20 @@ npm run dev
 | Manufacturing Console UI | http://localhost:5173 |
 | API server | http://localhost:8000 |
 
+## Frontend stack
+
+| Technology | Role |
+|------------|------|
+| React 18 | UI framework |
+| Vite | Build tool |
+| TypeScript | Client typing |
+| Tailwind CSS v4 | Utility CSS |
+| shadcn/ui | Radix-based components |
+| React Router | Section / KPI tab routes |
+| ECharts | Lazy-loaded chart component (`LazyEChart`) |
+
+The dashboard mounts via `client/src/components/layout/AppLayout.tsx` and `client/src/lib/console/engine.ts`.
+
 ## Environment variables (optional)
 
 Create a `.env` file in the repo root for live Databricks SQL:
@@ -50,13 +64,13 @@ DATABRICKS_SCHEMA=your_schema
 ```
 
 When configured, the server queries **`pgt_plnt_prodtn_metric_view` directly** for charts and KPIs.  
-AI tab summaries use the **Supervisor Agent** (VR architecture) — Supervisor orchestrates Genie to query the metric view live:
+AI tab summaries use the **Supervisor Agent** — Supervisor orchestrates Genie to query the metric view live:
 
 ```
 SUPERVISOR_ENDPOINT_NAME=your-supervisor-endpoint-name
 ```
 
-Summaries run as **background jobs**; the UI polls `/api/job/{id}` while Supervisor queries Genie (same pattern as VR Dashboard).  
+Summaries run as **background jobs**; the UI polls `/api/job/{id}` while Supervisor queries Genie.
 If Supervisor is not configured, summaries fall back to template text from SQL metrics.
 
 Check `/api/status` — `sql_ok` should be `true`, `summaries` should be `supervisor-agent`.
@@ -72,7 +86,7 @@ The view has no `Year` column — year filtering uses `YEAR(\`Production Date\`)
 | `POST /api/analytics/query/:queryKey` | Chart/KPI data (direct SQL) |
 | `POST /api/summaries` | Tab-specific AI narrative (Supervisor Agent → Genie) |
 | `POST /api/summaries/batch` | All KPI tab summaries — returns `_job_id`, poll `/api/job/:id` |
-| `GET /api/job/:id` | Poll background Supervisor job (VR pattern) |
+| `GET /api/job/:id` | Poll background Supervisor job |
 | `POST /api/console-data` | Legacy UI data bundle |
 | `GET /api/warmup` | Warehouse pre-warm |
 

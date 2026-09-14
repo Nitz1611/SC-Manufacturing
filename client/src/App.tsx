@@ -1,10 +1,12 @@
-import { WarehouseWarmup } from './components/WarehouseWarmup';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { AppLayout } from './components/layout/AppLayout';
 
-/**
- * SC Manufacturing Console — application entry.
- * Data: useAnalyticsQuery / useSummary (see src/hooks/).
- * UI: legacy/console.js loaded from index.html.
- */
 export default function App() {
-  return <WarehouseWarmup />;
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="*" element={<AppLayout />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }

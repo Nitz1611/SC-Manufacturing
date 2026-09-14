@@ -1,5 +1,5 @@
 /**
- * VR-style AI summaries — DEPRECATED: SC Manufacturing uses Supervisor Agent → Genie.
+ * DEPRECATED: SC Manufacturing uses Supervisor Agent → Genie.
  * Kept for reference only; not wired into summary routes.
  */
 import type { MetricsPayload } from '../../shared/types/dashboard.js';
@@ -25,7 +25,7 @@ function token(): string {
   return process.env.DATABRICKS_PAT_TOKEN || process.env.DATABRICKS_TOKEN || '';
 }
 
-/** Databricks Model Serving endpoint name (VR uses databricks-claude-opus-4-6). */
+/** Default Databricks Claude serving endpoint name. */
 export function claudeEndpoint(): string {
   return (
     process.env.CLAUDE_SERVING_ENDPOINT

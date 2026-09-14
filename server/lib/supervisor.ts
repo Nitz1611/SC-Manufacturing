@@ -1,5 +1,5 @@
 /**
- * Databricks Supervisor Agent — VR Dashboard pattern.
+ * Databricks Supervisor Agent — background job + Genie for tab summaries.
  * Chart data from SQL cache; AI tab summaries via Supervisor → Genie (MAS endpoint).
  */
 import type { MetricsPayload } from '../../shared/types/dashboard.js';
@@ -443,7 +443,7 @@ export async function getSupervisorSummary(
   return { narrative, source: 'supervisor' };
 }
 
-/** VR parallel mode — one Supervisor call per tab, all run simultaneously. */
+/** Parallel mode — one Supervisor call per tab, all run simultaneously. */
 export async function getAllSupervisorSummaries(
   filters: Record<string, unknown>,
   metrics?: MetricsPayload | null,

@@ -1,5 +1,5 @@
 /**
- * VR Dashboard pattern — background jobs for long Supervisor calls.
+ * Background jobs for long-running Supervisor calls.
  * Browser polls GET /api/job/:id until status is done|error.
  */
 
