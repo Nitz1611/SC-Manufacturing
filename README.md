@@ -51,29 +51,34 @@ The dashboard mounts via `client/src/components/layout/AppLayout.tsx` and `clien
 
 ## Environment variables (optional)
 
-Create a `.env` file in the repo root for live Databricks SQL:
+Create a `.env` file in the repo root for live Databricks SQL and Claude AI summaries:
 
 ```
-DATABRICKS_WAREHOUSE_ID=your-warehouse-id
-DATABRICKS_HOST=your-workspace.cloud.databricks.com
-DATABRICKS_PAT_TOKEN=your-pat-token
+DATABRICKS_WAREHOUSE_ID=
+DATABRICKS_HOST=adb-1234567890123456.7.azuredatabricks.net
+DATABRICKS_PAT_TOKEN=
 DATABRICKS_CATALOG=your_catalog
 DATABRICKS_SCHEMA=your_schema
-# If TABLE_OR_VIEW_NOT_FOUND, set the exact path from Databricks (overrides catalog + schema):
-# DATABRICKS_METRIC_VIEW=uc_prod_cgf_mdip_01.your_schema.pgt_plnt_prodtn_metric_view
+
+# AI summaries — Claude Opus 4.6 (default when Databricks credentials are set)
+SUMMARY_PROVIDER=claude
+CLAUDE_SERVING_ENDPOINT=databricks-claude-opus-4-6
 ```
+
+**Important:** Replace `DATABRICKS_HOST` with your real workspace hostname from the Databricks URL bar — it looks like `adb-1234567890123456.7.azuredatabricks.net`, **not** `your-workspace.cloud.databricks.com` (that placeholder will cause `ENOTFOUND`).
 
 When configured, the server queries **`pgt_plnt_prodtn_metric_view` directly** for charts and KPIs.  
-AI tab summaries use the **Supervisor Agent** — Supervisor orchestrates Genie to query the metric view live:
+AI tab summaries use **Claude Opus 4.6** via Databricks Model Serving (`SUMMARY_PROVIDER=claude`).
+
+Optional — Supervisor Agent instead of Claude:
 
 ```
+SUMMARY_PROVIDER=supervisor
 SUPERVISOR_ENDPOINT_NAME=your-supervisor-endpoint-name
 ```
 
-Summaries run as **background jobs**; the UI polls `/api/job/{id}` while Supervisor queries Genie.
-If Supervisor is not configured, summaries fall back to template text from SQL metrics.
-
-Check `/api/status` — `sql_ok` should be `true`, `summaries` should be `supervisor-agent`.
+Check `/api/status` — `provider` should be `claude`, `sql_ok` should be `true`.  
+Check `/api/summaries/status` — `connectivity.ok` should be `true`.
 
 If `mode` is `sql-error`, open `/api/status` and read `sql_test.error` — update `DATABRICKS_METRIC_VIEW` in `.env` with the exact catalog.schema.view from Databricks.
 
