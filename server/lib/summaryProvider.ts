@@ -30,3 +30,45 @@ export function summaryProviderLabel(provider: SummaryProvider): string {
       return 'template-fallback';
   }
 }
+
+export function isFallbackSummarySource(source: string | undefined): boolean {
+  return source === 'template' || source === 'template-fallback';
+}
+
+export function allowTemplateFallback(): boolean {
+  return String(process.env.SUMMARY_ALLOW_TEMPLATE_FALLBACK || '').toLowerCase() === 'true';
+}
+
+export function describeSummaryProvider(): {
+  provider: SummaryProvider;
+  label: string;
+  claude_configured: boolean;
+  supervisor_configured: boolean;
+  allow_template_fallback: boolean;
+  reason: string;
+} {
+  const explicit = String(process.env.SUMMARY_PROVIDER || '').toLowerCase();
+  const provider = resolveSummaryProvider();
+  let reason = 'Claude is configured and selected.';
+
+  if (explicit === 'template') {
+    reason = 'SUMMARY_PROVIDER=template';
+  } else if (explicit === 'supervisor' && provider !== 'supervisor') {
+    reason = 'SUMMARY_PROVIDER=supervisor but SUPERVISOR_ENDPOINT_NAME is not set';
+  } else if (explicit === 'claude' && provider !== 'claude') {
+    reason = 'SUMMARY_PROVIDER=claude but DATABRICKS_HOST + DATABRICKS_PAT_TOKEN + CLAUDE_SERVING_ENDPOINT are required';
+  } else if (provider === 'template') {
+    reason = 'No Claude or Supervisor credentials found in .env';
+  } else if (provider === 'supervisor') {
+    reason = 'Supervisor selected (Claude not configured)';
+  }
+
+  return {
+    provider,
+    label: summaryProviderLabel(provider),
+    claude_configured: claudeConfigured(),
+    supervisor_configured: supervisorConfigured(),
+    allow_template_fallback: allowTemplateFallback(),
+    reason,
+  };
+}

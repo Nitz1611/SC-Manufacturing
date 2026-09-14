@@ -47,6 +47,26 @@ export function claudeConfigured(): boolean {
   return Boolean(host() && token() && claudeEndpoint());
 }
 
+function claudeApiMode(): 'invocations' | 'anthropic' | 'auto' {
+  const mode = String(process.env.CLAUDE_API_MODE || 'auto').toLowerCase();
+  if (mode === 'anthropic' || mode === 'messages') return 'anthropic';
+  if (mode === 'invocations' || mode === 'chat') return 'invocations';
+  return 'auto';
+}
+
+export function isRoboticTemplateSummary(text: string): boolean {
+  return /^Unplanned DT % is \d/.test(String(text || '').trim());
+}
+
+export function claudeStatus(): Record<string, unknown> {
+  return {
+    configured: claudeConfigured(),
+    host: host() || 'NOT SET',
+    endpoint: claudeEndpoint(),
+    api_mode: claudeApiMode(),
+  };
+}
+
 function topEntries(obj: Record<string, number[] | number>, n = 5): Record<string, unknown> {
   if (!obj) return {};
   const entries = Object.entries(obj);
@@ -162,7 +182,7 @@ function parseBatchNarratives(raw: string): Partial<Record<SummaryEntity, string
   return {};
 }
 
-export async function invokeClaude(messages: ChatMessage[]): Promise<string> {
+async function invokeClaudeInvocations(messages: ChatMessage[]): Promise<string> {
   const h = host();
   const url = `https://${h}/serving-endpoints/${claudeEndpoint()}/invocations`;
   const body = {
@@ -171,7 +191,7 @@ export async function invokeClaude(messages: ChatMessage[]): Promise<string> {
     temperature: Number(process.env.CLAUDE_TEMPERATURE || 0.2),
   };
 
-  console.log(`[claude] invoking ${claudeEndpoint()} (${messages.length} messages)…`);
+  console.log(`[claude] invocations → ${claudeEndpoint()} (${messages.length} messages)…`);
   const started = Date.now();
 
   const resp = await fetch(url, {
@@ -185,14 +205,68 @@ export async function invokeClaude(messages: ChatMessage[]): Promise<string> {
 
   if (!resp.ok) {
     const errText = await resp.text();
-    throw new Error(`Claude serving HTTP ${resp.status}: ${errText.slice(0, 400)}`);
+    throw new Error(`Claude invocations HTTP ${resp.status}: ${errText.slice(0, 400)}`);
   }
 
   const data = (await resp.json()) as Record<string, unknown>;
   const text = extractText(data);
-  if (!text) throw new Error('Claude serving returned empty content');
-  console.log(`[claude] ✓ ${text.length} chars in ${Date.now() - started}ms`);
+  if (!text) throw new Error('Claude invocations returned empty content');
+  console.log(`[claude] ✓ invocations ${text.length} chars in ${Date.now() - started}ms`);
   return text;
+}
+
+async function invokeClaudeAnthropic(messages: ChatMessage[]): Promise<string> {
+  const h = host();
+  const url = `https://${h}/serving-endpoints/anthropic/v1/messages`;
+  const system = messages.find(m => m.role === 'system')?.content;
+  const chatMessages = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({ role: m.role, content: m.content }));
+
+  const body: Record<string, unknown> = {
+    model: claudeEndpoint(),
+    max_tokens: Number(process.env.CLAUDE_MAX_TOKENS || 800),
+    temperature: Number(process.env.CLAUDE_TEMPERATURE || 0.2),
+    messages: chatMessages.length ? chatMessages : [{ role: 'user', content: messages[messages.length - 1]?.content || '' }],
+  };
+  if (system) body.system = system;
+
+  console.log(`[claude] anthropic/messages → ${claudeEndpoint()}…`);
+  const started = Date.now();
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Claude anthropic HTTP ${resp.status}: ${errText.slice(0, 400)}`);
+  }
+
+  const data = (await resp.json()) as Record<string, unknown>;
+  const blocks = data.content as Array<{ type?: string; text?: string }> | undefined;
+  const text = blocks?.map(b => b.text || '').join('').trim() || extractText(data);
+  if (!text) throw new Error('Claude anthropic returned empty content');
+  console.log(`[claude] ✓ anthropic ${text.length} chars in ${Date.now() - started}ms`);
+  return text;
+}
+
+export async function invokeClaude(messages: ChatMessage[]): Promise<string> {
+  const mode = claudeApiMode();
+  if (mode === 'anthropic') return invokeClaudeAnthropic(messages);
+  if (mode === 'invocations') return invokeClaudeInvocations(messages);
+
+  try {
+    return await invokeClaudeInvocations(messages);
+  } catch (first) {
+    console.warn(`[claude] invocations failed (${(first as Error).message.slice(0, 120)}) — trying anthropic/messages`);
+    return invokeClaudeAnthropic(messages);
+  }
 }
 
 export async function getClaudeTabSummary(

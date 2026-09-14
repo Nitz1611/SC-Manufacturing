@@ -9,7 +9,7 @@ import {
   resolveMetricView,
   warmupWarehouse,
 } from '../lib/analytics.js';
-import { getClaudeBatchSummaries, getClaudeTabSummary } from '../lib/claudeSummary.js';
+import { claudeStatus, getClaudeBatchSummaries, getClaudeTabSummary } from '../lib/claudeSummary.js';
 import { coarseCacheKey, consoleDemoMode, normalizeParams } from '../lib/config.js';
 import { buildTabInsights } from '../lib/metricsTransform.js';
 import { sqlConfigured } from '../lib/databricksSql.js';
@@ -21,7 +21,7 @@ import {
   updateJobMessage,
 } from '../lib/jobs.js';
 import { getPreloadStatus, preloadEnabled } from '../lib/preload.js';
-import { resolveSummaryProvider, summaryProviderLabel } from '../lib/summaryProvider.js';
+import { resolveSummaryProvider, summaryProviderLabel, isFallbackSummarySource, allowTemplateFallback, describeSummaryProvider } from '../lib/summaryProvider.js';
 import { getAllSupervisorSummaries, getSupervisorSummary } from '../lib/supervisor.js';
 import type { SummaryEntity } from '../lib/summaryPrompts.js';
 
@@ -69,7 +69,10 @@ async function metricsForSummaries(params: Record<string, unknown>) {
   return getCachedMetricsBundle(params) || await getMetricsBundle(params);
 }
 
-function cachedBatchSummaries(params: Record<string, unknown>): Record<string, string> | null {
+function cachedBatchSummaries(
+  params: Record<string, unknown>,
+  provider: ReturnType<typeof resolveSummaryProvider>,
+): Record<string, string> | null {
   const summaries = Object.fromEntries(
     SUMMARY_TABS.map(tab => {
       const hit = summaryCache.get(summaryCacheKey(tab, params));
@@ -77,7 +80,15 @@ function cachedBatchSummaries(params: Record<string, unknown>): Record<string, s
     }),
   );
   const allPresent = SUMMARY_TABS.every(tab => summaries[tab]);
-  return allPresent ? summaries : null;
+  if (!allPresent) return null;
+
+  const firstHit = summaryCache.get(summaryCacheKey(SUMMARY_TABS[0], params));
+  if (firstHit && isFallbackSummarySource(firstHit.source) && provider !== 'template') {
+    for (const tab of SUMMARY_TABS) summaryCache.delete(summaryCacheKey(tab, params));
+    return null;
+  }
+
+  return summaries;
 }
 
 function storeBatchSummaries(
@@ -85,6 +96,7 @@ function storeBatchSummaries(
   summaries: Record<string, string>,
   source: string,
 ): void {
+  if (isFallbackSummarySource(source)) return;
   for (const [tab, narrative] of Object.entries(summaries)) {
     if (narrative) {
       summaryCache.set(summaryCacheKey(tab, params), { narrative, source, ts: Date.now() });
@@ -111,6 +123,14 @@ async function generateBatchSummaries(
 
 export const summariesRouter = Router();
 
+summariesRouter.get('/summaries/status', (_req, res) => {
+  res.json({
+    ok: true,
+    ...describeSummaryProvider(),
+    claude: claudeStatus(),
+  });
+});
+
 /** Tab narrative — Claude Opus by default, or Supervisor when configured. */
 summariesRouter.post('/summaries', async (req, res) => {
   const parsed = summarySchema.safeParse(req.body);
@@ -124,12 +144,15 @@ summariesRouter.post('/summaries', async (req, res) => {
   if (!forceRefresh) {
     const hit = summaryCache.get(cacheKey);
     if (hit && Date.now() - hit.ts < SUMMARY_TTL_MS) {
-      return res.json({
-        narrative: hit.narrative,
-        cached: true,
-        entityType,
-        source: hit.source,
-      });
+      if (!(isFallbackSummarySource(hit.source) && provider !== 'template')) {
+        return res.json({
+          narrative: hit.narrative,
+          cached: true,
+          entityType,
+          source: hit.source,
+          provider,
+        });
+      }
     }
   }
 
@@ -148,9 +171,19 @@ summariesRouter.post('/summaries', async (req, res) => {
       source = 'template';
     }
 
-    summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
-    return res.json({ narrative, cached: false, entityType, source });
+    if (!isFallbackSummarySource(source)) {
+      summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
+    }
+    return res.json({ narrative, cached: false, entityType, source, provider });
   } catch (e) {
+    if ((provider === 'claude' || provider === 'supervisor') && !allowTemplateFallback()) {
+      return res.status(502).json({
+        error: (e as Error).message,
+        entityType,
+        provider,
+        source: 'error',
+      });
+    }
     try {
       const narrative = await fallbackNarrative(entityType, params);
       return res.json({
@@ -158,6 +191,7 @@ summariesRouter.post('/summaries', async (req, res) => {
         cached: false,
         entityType,
         source: 'template-fallback',
+        provider,
         warning: (e as Error).message,
       });
     } catch (inner) {
@@ -177,13 +211,14 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
   const provider = resolveSummaryProvider();
 
   if (!forceRefresh) {
-    const cached = cachedBatchSummaries(params);
+    const cached = cachedBatchSummaries(params, provider);
     if (cached) {
       const firstHit = summaryCache.get(summaryCacheKey(SUMMARY_TABS[0], params))!;
       return res.json({
         summaries: cached,
         cached: true,
         source: firstHit.source,
+        provider,
         _job_id: null,
       });
     }
@@ -193,7 +228,14 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
     try {
       const metrics = await getMetricsBundle(params);
       const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
-      return res.json({ summaries: templateInsights, cached: false, source: 'template', _job_id: null });
+      return res.json({
+        summaries: templateInsights,
+        cached: false,
+        source: 'template',
+        provider,
+        warning: describeSummaryProvider().reason,
+        _job_id: null,
+      });
     } catch (e) {
       return res.status(500).json({ error: (e as Error).message });
     }
@@ -211,15 +253,20 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
       finishJob(jobId, { summaries, source });
       console.log(`[job ${jobId.slice(0, 8)}] Done — ${Object.values(summaries).filter(Boolean).length} tabs`);
     } catch (e) {
+      const message = (e as Error).message;
+      if (!allowTemplateFallback()) {
+        failJob(jobId, message);
+        console.error(`[job ${jobId.slice(0, 8)}] ${provider} failed:`, message);
+        return;
+      }
       try {
         const metrics = await metricsForSummaries(params);
         const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
-        storeBatchSummaries(params, templateInsights, 'template-fallback');
-        finishJob(jobId, { summaries: templateInsights, source: 'template-fallback' });
-        console.warn(`[job ${jobId.slice(0, 8)}] ${provider} failed — template fallback:`, (e as Error).message);
+        finishJob(jobId, { summaries: templateInsights, source: 'template-fallback', warning: message });
+        console.warn(`[job ${jobId.slice(0, 8)}] ${provider} failed — template fallback:`, message);
       } catch (inner) {
-        failJob(jobId, (e as Error).message);
-        console.error(`[job ${jobId.slice(0, 8)}] Failed:`, (e as Error).message);
+        failJob(jobId, message);
+        console.error(`[job ${jobId.slice(0, 8)}] Failed:`, message);
       }
     }
   })();
@@ -228,6 +275,7 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
     _job_id: jobId,
     _cached: false,
     status: 'running',
+    provider,
     source: summaryProviderLabel(provider),
   });
 });

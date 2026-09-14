@@ -247,6 +247,7 @@ export function initManufacturingConsole(): () => void {
     summariesLoaded: false,
     aiSummaries: {},
     summarySource: null,
+    summaryForceAttempted: false,
     summaryReloadTimer: null,
     metricSites: [],
     metricRegions: [],
@@ -927,6 +928,7 @@ export function initManufacturingConsole(): () => void {
       state.summariesLoaded = false;
       state.summaryFilterKey = null;
       state.aiSummaries = {};
+      state.summaryForceAttempted = false;
       setAiSummaryLoading();
       loadAiSummaries(false);
       return true;
@@ -942,6 +944,7 @@ export function initManufacturingConsole(): () => void {
         state.summariesLoaded = false;
         state.summaryFilterKey = null;
         state.aiSummaries = {};
+        state.summaryForceAttempted = false;
         setAiSummaryLoading();
         loadAiSummaries(false);
         loadConsoleData(false, { background: true });
@@ -1254,24 +1257,44 @@ export function initManufacturingConsole(): () => void {
       if (tryApplyInstantFilters(fromFilterId)) return;
       state.summariesLoaded = false;
       state.summaryFilterKey = null;
+      state.aiSummaries = {};
+      state.summaryForceAttempted = false;
       setAiSummaryLoading();
       loadConsoleData(false);
     }, 80);
   }
 
-  function applySummaryTexts(summaries, source) {
+  function isFallbackSummarySource(source) {
+    return source === 'template' || source === 'template-fallback';
+  }
+
+  function isRoboticTemplateSummary(text) {
+    return /^Unplanned DT % is \d/.test(String(text || '').trim());
+  }
+
+  function showSummaryError(message) {
+    ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
+      document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+        el.textContent = `AI summary unavailable — ${message}`;
+        el.dataset.summarySource = 'error';
+      });
+    });
+  }
+
+  function applySummaryTexts(summaries, source, warning) {
     const looksLikeStreamGarbage = (text) => {
       const t = String(text || '');
       return t.includes('response.output_text.delta') || /^data:\s*\{/.test(t.trim());
     };
-    const looksLikeTemplate = (text) => {
-      const t = String(text || '');
-      return /^Unplanned DT % is \d/.test(t.trim());
-    };
+    if (isFallbackSummarySource(source)) {
+      const overview = summaries?.overview || '';
+      if (isRoboticTemplateSummary(overview)) {
+        throw new Error(warning || 'Server returned template text instead of Claude. Check /api/summaries/status and server logs.');
+      }
+    }
     ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
       const text = summaries?.[tab];
       if (!text || looksLikeStreamGarbage(text)) return;
-      if (source && source !== 'template-fallback' && source !== 'template' && looksLikeTemplate(text)) return;
       state.aiSummaries[tab] = text;
       document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
         el.textContent = text;
@@ -1310,10 +1333,7 @@ export function initManufacturingConsole(): () => void {
             ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
               merged[tab] = summaries[tab] || '';
             });
-            applySummaryTexts(merged, job.result?.source);
-            if (job.result?.source === 'template-fallback' || job.result?.source === 'template') {
-              console.warn('[summaries] Using template fallback — configure Claude in .env (see SUMMARY_PROVIDER=claude)');
-            }
+            applySummaryTexts(merged, job.result?.source, job.result?.warning);
             resolve(job.result);
           }
         } catch (e) {
@@ -1341,43 +1361,35 @@ export function initManufacturingConsole(): () => void {
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || `Summaries ${res.status}`);
+          throw new Error(err.error || err.warning || `Summaries ${res.status}`);
         }
         const data = await res.json();
 
         if (data.summaries && (data.cached || !data._job_id)) {
-          applySummaryTexts(data.summaries, data.source);
+          if (isFallbackSummarySource(data.source) && !force && !state.summaryForceAttempted) {
+            state.summaryForceAttempted = true;
+            return loadAiSummaries(true);
+          }
+          applySummaryTexts(data.summaries, data.source, data.warning);
           state.summaryFilterKey = key;
           state.summariesLoaded = true;
-          if (data.source === 'template-fallback' || data.source === 'template') {
-            console.warn('[summaries] Using template fallback — configure Claude in .env (see SUMMARY_PROVIDER=claude)');
-          }
+          state.summaryForceAttempted = false;
           return;
         }
 
         const jobId = data._job_id;
-        if (!jobId) throw new Error('No job_id from server');
+        if (!jobId) throw new Error(data.warning || data.error || 'No job_id from server');
 
         const tabs = ['overview', 'category', 'line', 'dow', 'reason'];
         await pollSummaryJob(jobId, tabs);
         state.summaryFilterKey = key;
         state.summariesLoaded = true;
+        state.summaryForceAttempted = false;
       } catch (err) {
         console.warn('[summaries]', err.message);
-        const fallback = templateSummaries();
-        if (Object.keys(fallback).length) {
-          applySummaryTexts(fallback, 'template-fallback');
-          state.summaryFilterKey = key;
-          state.summariesLoaded = true;
-        } else {
-          ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
-            document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-              if (String(el.textContent).includes('Loading') || String(el.textContent).includes('Generating AI')) {
-                el.textContent = `AI summary unavailable — ${err.message}`;
-              }
-            });
-          });
-        }
+        state.summariesLoaded = false;
+        state.summaryForceAttempted = false;
+        showSummaryError(err.message);
       }
     }, 200);
   }
