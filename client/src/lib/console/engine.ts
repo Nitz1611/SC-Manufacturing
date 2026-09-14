@@ -279,11 +279,13 @@ export function initManufacturingConsole(): () => void {
 
   /** DT% values are sometimes stored in the hours field — detect and convert. */
   function dowHoursLooksLikePct(hours, pct) {
-    if (hours == null || pct == null || Number.isNaN(Number(hours)) || Number.isNaN(Number(pct))) return false;
+    if (hours == null || Number.isNaN(Number(hours))) return false;
     const h = Number(hours);
-    const p = Number(pct);
-    if (h <= 0 || p <= 0) return false;
-    return h <= 100 && Math.abs(h - p) < 4;
+    if (h <= 0 || h > 100) return false;
+    if (pct != null && !Number.isNaN(Number(pct)) && Number(pct) > 0) {
+      return Math.abs(h - Number(pct)) < 4;
+    }
+    return true;
   }
 
   function resolveDowWeekHours(day, weekIdx, weekCount) {
@@ -297,11 +299,11 @@ export function initManufacturingConsole(): () => void {
     if (hrs != null && Number(hrs) > 0 && !dowHoursLooksLikePct(hrs, pct)) {
       return +Number(hrs).toFixed(2);
     }
-    if (pct != null && !Number.isNaN(Number(pct)) && Number(pct) > 0) {
-      return +pctToHours(pct).toFixed(2);
-    }
-    if (hrs != null && Number(hrs) > 0) {
-      return +pctToHours(hrs).toFixed(2);
+    const pctVal = pct != null && Number(pct) > 0
+      ? Number(pct)
+      : (hrs != null && Number(hrs) > 0 ? Number(hrs) : null);
+    if (pctVal != null && !Number.isNaN(pctVal)) {
+      return +pctToHours(pctVal).toFixed(2);
     }
     return null;
   }
@@ -831,10 +833,10 @@ export function initManufacturingConsole(): () => void {
     const dataMin = Math.min(...trimmed);
     const dataMax = Math.max(...trimmed);
     const span = dataMax - dataMin;
-    const floor = stepFloor(axis);
+    const floor = stepFloor(dataMax);
 
     if (span <= 0) {
-      const pad = Math.max(dataMax * 0.15, floor);
+      const pad = Math.max(dataMax * 0.18, floor);
       const yMax = dataMax + pad;
       const yMin = Math.max(0, dataMax - pad);
       return {
@@ -863,15 +865,20 @@ export function initManufacturingConsole(): () => void {
     };
   }
 
-  function stepFloor(axis) {
-    if (showInMode() === 'millions') return 0.0005;
+  function stepFloor(dataMax = 0) {
+    if (showInMode() === 'millions') {
+      if (dataMax > 0 && dataMax < 0.001) return Math.max(dataMax * 0.08, 1e-7);
+      return 0.0005;
+    }
     if (showInMode() === 'thousands') return 0.05;
     return 0.5;
   }
 
   function proYAxisScale(scaleCfg) {
     const { axis, yMax, yMin, stepSize } = scaleCfg;
-    const tickDecimals = stepSize != null && stepSize < 0.001 ? 4 : axis.decimals;
+    const tickDecimals = stepSize != null && stepSize < 0.0001 ? 5
+      : stepSize != null && stepSize < 0.001 ? 4
+        : axis.decimals;
     return {
       beginAtZero: yMin == null || yMin <= 0,
       ...(yMin != null && yMin > 0 ? { min: yMin } : {}),
