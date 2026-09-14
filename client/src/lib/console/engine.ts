@@ -2822,6 +2822,7 @@ export function initManufacturingConsole(): () => void {
   function initFilters() {
     const bar = document.getElementById('filter-bar');
     if (!bar) return;
+    bar.replaceChildren();
     Object.values(SLICERS).forEach(cfg => {
       state.filters[cfg.id] = cfg.multi ? [...cfg.default] : cfg.default;
       const group = document.createElement('div');
@@ -3743,7 +3744,24 @@ export function initManufacturingConsole(): () => void {
   const HORIZONTAL_X_TICKS = { maxRotation: 0, minRotation: 0, autoSkip: false, font: { size: 11 } };
 
   function destroyChart(id) {
-    if (state.charts[id]) { state.charts[id].destroy(); delete state.charts[id]; }
+    if (state.charts[id]) {
+      state.charts[id].destroy();
+      delete state.charts[id];
+    }
+    const canvas = document.getElementById(id);
+    if (canvas && typeof Chart !== 'undefined' && Chart.getChart) {
+      const existing = Chart.getChart(canvas);
+      if (existing) existing.destroy();
+    }
+  }
+
+  function destroyAllCharts() {
+    Object.keys(state.charts).forEach(id => destroyChart(id));
+    document.querySelectorAll('canvas[id^="chart-"]').forEach(el => {
+      if (typeof Chart !== 'undefined' && Chart.getChart) {
+        Chart.getChart(el)?.destroy();
+      }
+    });
   }
 
   function makeGroupedBarChart(canvasId, labels, matrix, yMaxHint, onCategoryClick) {
@@ -4478,6 +4496,12 @@ export function initManufacturingConsole(): () => void {
   return () => {
     engineStarted = false;
     document.removeEventListener('click', closeSlicersOnOutsideClick);
-    Object.values(state.charts).forEach((chart: { destroy?: () => void }) => chart?.destroy?.());
+    if (state.dataPollTimer) clearInterval(state.dataPollTimer);
+    if (state.dataReloadTimer) clearTimeout(state.dataReloadTimer);
+    if (state.summaryReloadTimer) clearTimeout(state.summaryReloadTimer);
+    destroyAllCharts();
+    document.getElementById('filter-bar')?.replaceChildren();
+    document.getElementById('data-status-bar')?.remove();
+    document.getElementById('filter-context-bar')?.remove();
   };
 }

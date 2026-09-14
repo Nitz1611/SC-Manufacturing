@@ -27,6 +27,10 @@ export function AppLayout() {
     initRef.current = true;
 
     const teardown = initManufacturingConsole();
+    if (!window.ManufacturingConsole) {
+      initRef.current = false;
+      return undefined;
+    }
     const mc = window.ManufacturingConsole;
     if (mc) {
       const origPage = mc.switchPage.bind(mc);
