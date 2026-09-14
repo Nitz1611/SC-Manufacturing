@@ -816,8 +816,17 @@ export function initManufacturingConsole(): () => void {
     return { axis, yMax, stepSize };
   }
 
-  /** Zoom Y-axis into the data band so multi-series line charts stay readable. */
-  function lineYScaleFromValues(chartValues) {
+  /** Target fraction of Y-axis range occupied by the data band on line charts. */
+  const LINE_CHART_FILL_RATIO = 0.7;
+
+  function percentileOf(sorted, p) {
+    if (!sorted.length) return 0;
+    const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * p)));
+    return sorted[idx];
+  }
+
+  /** Zoom Y-axis so line series fill at least ~70% of plot height (Millions/Thousands). */
+  function lineYScaleFromValues(chartValues, minFillRatio = LINE_CHART_FILL_RATIO) {
     const axis = chartYAxisConfig();
     const positive = chartValues
       .filter(v => Number.isFinite(Number(v)) && Number(v) > 0)
@@ -825,43 +834,34 @@ export function initManufacturingConsole(): () => void {
     if (positive.length < 1) return yScaleFromValues(chartValues);
 
     const sorted = [...positive].sort((a, b) => a - b);
-    const trimIdx = positive.length >= 6
-      ? Math.min(sorted.length - 1, Math.floor(sorted.length * 0.92))
-      : sorted.length - 1;
-    const robustMax = sorted[trimIdx];
-    const trimmed = positive.filter(v => v <= robustMax * 1.04);
-    const dataMin = Math.min(...trimmed);
-    const dataMax = Math.max(...trimmed);
-    const span = dataMax - dataMin;
-    const floor = stepFloor(dataMax);
+    const dataMin = positive.length >= 4 ? percentileOf(sorted, 0.05) : sorted[0];
+    const dataMax = positive.length >= 4 ? percentileOf(sorted, 0.95) : sorted[sorted.length - 1];
+    let span = dataMax - dataMin;
 
-    if (span <= 0) {
-      const pad = Math.max(dataMax * 0.18, floor);
-      const yMax = dataMax + pad;
-      const yMin = Math.max(0, dataMax - pad);
-      return {
-        axis,
-        yMin: yMin > 0 && yMin / yMax > 0.08 ? yMin : undefined,
-        yMax,
-        stepSize: niceStepSize((yMax - (yMin > 0 ? yMin : 0)) / 4),
-      };
+    if (span <= 0 || span / Math.max(dataMax, 1e-12) < 1e-6) {
+      const center = dataMax || sorted[0];
+      span = Math.max(center * 0.2, stepFloor(center), 1e-8);
     }
 
-    const pad = Math.max(span * 0.14, dataMax * 0.06, floor);
-    const yMin = Math.max(0, dataMin - pad);
-    const yMax = dataMax + pad;
-    const fullScale = yScaleFromValues(chartValues);
+    const targetRange = span / minFillRatio;
+    const pad = (targetRange - span) / 2;
+    let yMin = dataMin - pad;
+    let yMax = dataMax + pad;
 
-    // Keep a zero baseline when the series already spans most of the chart.
-    if (dataMin / fullScale.yMax < 0.12 && span / fullScale.yMax > 0.35) {
-      return fullScale;
+    if (yMin < 0) {
+      yMin = 0;
+      yMax = Math.max(dataMax + pad, targetRange);
     }
+
+    const stepSize = niceStepSize(targetRange / 4);
 
     return {
       axis,
-      yMin: yMin > 0 && yMin / yMax > 0.05 ? yMin : undefined,
+      yMin: yMin > 0 ? yMin : undefined,
       yMax,
-      stepSize: niceStepSize((yMax - (yMin > 0 ? yMin : 0)) / 4),
+      stepSize,
+      beginAtZero: !(yMin > 0),
+      grace: '0%',
     };
   }
 
@@ -875,14 +875,15 @@ export function initManufacturingConsole(): () => void {
   }
 
   function proYAxisScale(scaleCfg) {
-    const { axis, yMax, yMin, stepSize } = scaleCfg;
+    const { axis, yMax, yMin, stepSize, beginAtZero, grace } = scaleCfg;
     const tickDecimals = stepSize != null && stepSize < 0.0001 ? 5
       : stepSize != null && stepSize < 0.001 ? 4
         : axis.decimals;
     return {
-      beginAtZero: yMin == null || yMin <= 0,
+      beginAtZero: beginAtZero ?? (yMin == null || yMin <= 0),
       ...(yMin != null && yMin > 0 ? { min: yMin } : {}),
       max: yMax,
+      ...(grace != null ? { grace } : {}),
       ...PRO_AXIS,
       title: proAxisTitle(axis.title),
       ticks: {
