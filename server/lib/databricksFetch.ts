@@ -1,9 +1,6 @@
 /**
  * Shared HTTPS fetch for Databricks APIs — proxy support + actionable network errors.
  */
-import { fetch as undiciFetch, ProxyAgent } from 'undici';
-
-type FetchInit = Parameters<typeof undiciFetch>[1];
 
 let proxyLogged = false;
 
@@ -19,16 +16,6 @@ export function databricksToken(): string {
 
 function proxyUrl(): string | undefined {
   return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || undefined;
-}
-
-function proxyDispatcher() {
-  const proxy = proxyUrl();
-  if (!proxy) return undefined;
-  if (!proxyLogged) {
-    console.log(`[databricks] using HTTPS proxy ${proxy}`);
-    proxyLogged = true;
-  }
-  return new ProxyAgent(proxy);
 }
 
 function errorCode(err: unknown): string | undefined {
@@ -80,11 +67,37 @@ export function formatFetchError(err: unknown, url: string): string {
   return parts.join(' — ');
 }
 
-export async function databricksFetch(url: string, init: FetchInit = {}): Promise<Response> {
-  const dispatcher = proxyDispatcher();
+async function fetchWithOptionalProxy(url: string, init: RequestInit = {}): Promise<Response> {
+  const proxy = proxyUrl();
+  if (!proxy) {
+    return fetch(url, init);
+  }
+
+  if (!proxyLogged) {
+    console.log(`[databricks] using HTTPS proxy ${proxy}`);
+    proxyLogged = true;
+  }
+
   try {
-    return await undiciFetch(url, dispatcher ? { ...init, dispatcher } : init);
+    const { fetch: undiciFetch, ProxyAgent } = await import('undici');
+    const dispatcher = new ProxyAgent(proxy);
+    return undiciFetch(url, { ...init, dispatcher });
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Cannot find package') || msg.includes('ERR_MODULE_NOT_FOUND')) {
+      throw new Error(
+        `HTTPS_PROXY is set but the "undici" package is missing. Run "npm install" from the repo root, or unset HTTPS_PROXY.`,
+      );
+    }
+    throw err;
+  }
+}
+
+export async function databricksFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await fetchWithOptionalProxy(url, init);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('HTTPS_PROXY is set')) throw err;
     throw new Error(formatFetchError(err, url));
   }
 }
