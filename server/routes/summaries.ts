@@ -112,7 +112,8 @@ summariesRouter.post('/summaries', async (req, res) => {
   try {
     if (supervisorConfigured()) {
       const filters = filtersFromParams(params);
-      const { narrative, source } = await getSupervisorSummary(entityType, filters);
+      const metrics = getCachedMetricsBundle(params);
+      const { narrative, source } = await getSupervisorSummary(entityType, filters, metrics);
       summaryCache.set(cacheKey, { narrative, source, ts: Date.now() });
       return res.json({ narrative, cached: false, entityType, source });
     }
@@ -177,7 +178,8 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
   void (async () => {
     try {
       console.log(`[job ${jobId.slice(0, 8)}] Starting Supervisor batch…`);
-      const summaries = await getAllSupervisorSummaries(filters);
+      const metrics = getCachedMetricsBundle(params);
+      const summaries = await getAllSupervisorSummaries(filters, metrics);
       storeBatchSummaries(params, summaries, 'supervisor');
       finishJob(jobId, { summaries, source: 'supervisor' });
       console.log(`[job ${jobId.slice(0, 8)}] Done — ${Object.values(summaries).filter(Boolean).length} tabs`);

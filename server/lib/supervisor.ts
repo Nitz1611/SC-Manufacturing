@@ -1,12 +1,17 @@
 /**
  * Databricks Supervisor Agent — VR Dashboard pattern.
- * Chart data from SQL; AI tab summaries via Supervisor → Genie (MAS endpoint).
+ * Chart data from SQL cache; AI tab summaries via Supervisor → Genie (MAS endpoint).
  */
+import type { MetricsPayload } from '../../shared/types/dashboard.js';
+import { buildTabInsights } from './metricsTransform.js';
 import { buildSupervisorPrompt, type SummaryEntity } from './summaryPrompts.js';
 
 type Message = { role: string; content: string };
+type SupervisorInput = Message | Record<string, unknown>;
 
 const DEBUG = (process.env.SUPERVISOR_DEBUG || 'false').toLowerCase() === 'true';
+const MAX_CONTINUATIONS = Math.max(1, Number(process.env.SUPERVISOR_MAX_CONTINUATIONS || 12));
+const LONG_TASK = String(process.env.SUPERVISOR_LONG_TASK ?? 'true').toLowerCase() !== 'false';
 
 function host(): string {
   return (process.env.DATABRICKS_HOST || process.env.DATABRICKS_SERVER_HOSTNAME || '')
@@ -26,12 +31,25 @@ export function supervisorConfigured(): boolean {
   return Boolean(host() && token() && endpoint());
 }
 
+function supervisorDatabricksOptions(): Record<string, unknown> {
+  const opts: Record<string, unknown> = {};
+  if (LONG_TASK) opts.long_task = true;
+  return opts;
+}
+
 function isTimeoutResponse(text: string): boolean {
   const lower = text.toLowerCase();
   return (
     (lower.includes('time out') || lower.includes('time limit') || lower.includes('timed out')) &&
     (lower.includes('continue') || lower.includes('would you like') || lower.includes('shall i'))
   );
+}
+
+function findTaskContinueCheckpoint(raw: string): { id: string; step?: number } | null {
+  const idMatch = raw.match(/"type"\s*:\s*"task_continue_request"[\s\S]*?"id"\s*:\s*"(continue_[^"]+)"/);
+  if (!idMatch) return null;
+  const stepMatch = raw.match(/"type"\s*:\s*"task_continue_request"[\s\S]*?"step"\s*:\s*(\d+)/);
+  return { id: idMatch[1], step: stepMatch ? Number(stepMatch[1]) : undefined };
 }
 
 function parseJsonBlock(raw: string): Record<string, unknown> {
@@ -155,10 +173,21 @@ async function readResponseBody(resp: Response): Promise<string> {
   return chunks.join('');
 }
 
-async function postOnce(messages: Message[]): Promise<string> {
+async function postOnce(input: SupervisorInput[]): Promise<string> {
   const h = host();
   const url = `https://${h}/serving-endpoints/${endpoint()}/invocations`;
-  console.log(`[supervisor] -> ${endpoint()} | stream=true`);
+  const databricksOptions = supervisorDatabricksOptions();
+  console.log(
+    `[supervisor] -> ${endpoint()} | stream=true long_task=${Boolean(databricksOptions.long_task)}`,
+  );
+
+  const body: Record<string, unknown> = {
+    input,
+    stream: true,
+  };
+  if (Object.keys(databricksOptions).length) {
+    body.databricks_options = databricksOptions;
+  }
 
   const resp = await fetch(url, {
     method: 'POST',
@@ -166,7 +195,7 @@ async function postOnce(messages: Message[]): Promise<string> {
       Authorization: `Bearer ${token()}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ input: messages }),
+    body: JSON.stringify(body),
   });
 
   console.log(`[supervisor] <- HTTP ${resp.status}`);
@@ -178,17 +207,33 @@ async function postOnce(messages: Message[]): Promise<string> {
   return readResponseBody(resp);
 }
 
-async function callSupervisor(messages: Message[]): Promise<string> {
+async function callSupervisor(messages: Message[], metrics?: MetricsPayload | null): Promise<string> {
   if (!supervisorConfigured()) {
     throw new Error('Supervisor not configured — set SUPERVISOR_ENDPOINT_NAME in .env');
   }
 
-  const conversation = [...messages];
+  const conversation: SupervisorInput[] = [...messages];
+  let raw = '';
 
-  for (let attempt = 0; attempt < 6; attempt++) {
-    console.log(`[supervisor] attempt ${attempt + 1}…`);
-    const raw = await postOnce(conversation);
+  for (let attempt = 0; attempt < MAX_CONTINUATIONS; attempt++) {
+    console.log(`[supervisor] attempt ${attempt + 1}/${MAX_CONTINUATIONS}…`);
+    raw = await postOnce(conversation);
     if (DEBUG) console.log(`[supervisor] response ${raw.length} chars: ${raw.slice(0, 300)}`);
+
+    const taskContinue = LONG_TASK ? findTaskContinueCheckpoint(raw) : null;
+    if (taskContinue) {
+      console.log(`[supervisor] task_continue checkpoint step=${taskContinue.step ?? '?'} — resuming…`);
+      conversation.push({
+        type: 'task_continue_request',
+        id: taskContinue.id,
+        ...(taskContinue.step != null ? { step: taskContinue.step } : {}),
+      });
+      conversation.push({
+        type: 'task_continue_response',
+        continue_request_id: taskContinue.id,
+      });
+      continue;
+    }
 
     const parsed = parseJsonBlock(raw);
     const text = String(parsed.narrative || raw);
@@ -204,7 +249,7 @@ async function callSupervisor(messages: Message[]): Promise<string> {
       parsed.narrative &&
       Object.keys(parsed).length === 1 &&
       !text.includes('{') &&
-      attempt < 5 &&
+      attempt < MAX_CONTINUATIONS - 1 &&
       text.length > 20
     ) {
       console.log('[supervisor] plain text — requesting JSON narrative…');
@@ -251,14 +296,43 @@ function extractNarrative(raw: string): string {
   return '';
 }
 
+function narrativeUsesOnlyDashboardPeriods(narrative: string, periods: string[]): boolean {
+  if (!periods.length) return true;
+  const allowed = new Set(periods.map(p => p.toUpperCase()));
+  const mentioned = narrative.match(/\bP\d{1,2}\b/gi) || [];
+  return mentioned.every(m => allowed.has(m.toUpperCase()));
+}
+
+function metricsInsightFallback(
+  entityType: SummaryEntity,
+  metrics: MetricsPayload,
+): string {
+  return metrics.tab_insights?.[entityType] || buildTabInsights(metrics)[entityType] || '';
+}
+
 export async function getSupervisorSummary(
   entityType: SummaryEntity,
   filters: Record<string, unknown>,
+  metrics?: MetricsPayload | null,
 ): Promise<{ narrative: string; source: 'supervisor' }> {
-  const prompt = buildSupervisorPrompt(entityType, filters);
+  const prompt = buildSupervisorPrompt(entityType, filters, metrics);
   console.log(`[supervisor] summary tab=${entityType} filters=${JSON.stringify(filters).slice(0, 120)}`);
-  const raw = await callSupervisor([{ role: 'user', content: prompt }]);
-  const narrative = extractNarrative(raw);
+  const raw = await callSupervisor([{ role: 'user', content: prompt }], metrics);
+  let narrative = extractNarrative(raw);
+
+  if (
+    metrics?.periods?.length &&
+    narrative &&
+    !narrativeUsesOnlyDashboardPeriods(narrative, metrics.periods)
+  ) {
+    const fallback = metricsInsightFallback(entityType, metrics);
+    if (fallback) {
+      console.warn(
+        `[supervisor] ${entityType} cited periods outside dashboard (${metrics.periods.join(', ')}) — using metrics insight`,
+      );
+      narrative = fallback;
+    }
+  }
 
   if (!narrative) {
     throw new Error('Supervisor returned empty narrative — retry shortly');
@@ -270,14 +344,15 @@ export async function getSupervisorSummary(
 /** VR parallel mode — one Supervisor call per tab, all run simultaneously. */
 export async function getAllSupervisorSummaries(
   filters: Record<string, unknown>,
+  metrics?: MetricsPayload | null,
 ): Promise<Record<SummaryEntity, string>> {
   const tabs: SummaryEntity[] = ['overview', 'category', 'line', 'dow', 'reason'];
-  console.log(`[supervisor] PARALLEL mode — ${tabs.length} tab summaries`);
+  console.log(`[supervisor] PARALLEL mode — ${tabs.length} tab summaries (long_task=${LONG_TASK})`);
 
   const entries = await Promise.all(
     tabs.map(async tab => {
       try {
-        const { narrative } = await getSupervisorSummary(tab, filters);
+        const { narrative } = await getSupervisorSummary(tab, filters, metrics);
         return [tab, narrative] as const;
       } catch (e) {
         console.warn(`[supervisor] ${tab} failed:`, (e as Error).message);
