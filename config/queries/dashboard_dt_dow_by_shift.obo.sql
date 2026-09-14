@@ -3,7 +3,8 @@ SELECT
   DATE_FORMAT({{date_col}}, 'EEEE') AS day_name,
   {{week_expr}} AS week_label,
   {{shift_expr}} AS shift_label,
-  ROUND({{dt_pct_m}} * 100, 2) AS dt_pct
+  ROUND({{dt_pct_m}} * 100, 2) AS dt_pct,
+  ROUND({{dt_hours_m}}, 2) AS dt_hours
 FROM {{catalog}}.pgt_plnt_prodtn_metric_view
 WHERE {{dt_type_filter}}
   AND {{year_filter}}

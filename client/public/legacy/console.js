@@ -233,9 +233,11 @@
 
   let REASONS_DATA_MUTABLE = null;
   let TREND_DATA_MUTABLE = null;
+  let TREND_DATA_HRS_MUTABLE = null;
   let PERIODS_MUTABLE = null;
   let DOW_WEEKS_MUTABLE = null;
   let DOW_DAY_TRENDS_MUTABLE = null;
+  let DOW_DAY_TRENDS_HRS_MUTABLE = null;
 
   function activePeriods() {
     return PERIODS_MUTABLE?.length ? PERIODS_MUTABLE : PERIODS;
@@ -247,6 +249,9 @@
   }
 
   function activeDayTrendSeries(day) {
+    if (isHoursDisplayMode() && DOW_DAY_TRENDS_HRS_MUTABLE?.[day]?.length) {
+      return DOW_DAY_TRENDS_HRS_MUTABLE[day].slice(-activeWeeks().length);
+    }
     const full = (DOW_DAY_TRENDS_MUTABLE || DOW_DAY_TRENDS)[day] || [];
     return full.slice(-activeWeeks().length);
   }
@@ -424,6 +429,26 @@
     return alignPeriodValues(weights.map(w => +(total * w / wSum * 0.42).toFixed(2)));
   }
 
+  function resolveSitePeriodHours(site, metrics) {
+    if (isLiveSql(metrics)) {
+      const live = metrics?.site_by_period_hrs?.[site];
+      return live?.length ? alignPeriodValues(live) : alignPeriodValues([]);
+    }
+    return resolveSitePeriodTotals(site, metrics).map(v => (v == null ? null : pctToHours(v)));
+  }
+
+  function sitePeriodPct(site) {
+    return resolveSitePeriodTotals(site, state.liveMetrics);
+  }
+
+  function sitePeriodHours(site) {
+    return resolveSitePeriodHours(site, state.liveMetrics);
+  }
+
+  function sitePeriodTotals(site) {
+    return isHoursDisplayMode() ? sitePeriodHours(site) : sitePeriodPct(site);
+  }
+
   function filterContextParts() {
     const parts = [];
     const showIn = state.filters.showIn || 'Millions';
@@ -498,34 +523,51 @@
     });
   }
 
-  function childPeriodTotals(site, children, getValues) {
+  function childPeriodTotals(site, children, getDisplayValues) {
     return activePeriods().map((_, i) => {
-      let sum = 0;
-      let has = false;
-      children.forEach(child => {
-        const v = getValues(site, child)[i];
-        if (v != null && Number.isFinite(Number(v))) {
-          sum += Number(v);
-          has = true;
-        }
-      });
-      return has ? +sum.toFixed(2) : null;
+      const vals = children
+        .map(child => getDisplayValues(site, child)[i])
+        .filter(v => v != null && Number.isFinite(Number(v)));
+      if (!vals.length) return null;
+      if (isHoursDisplayMode()) return +vals.reduce((a, b) => a + Number(b), 0).toFixed(2);
+      return +avgOf(vals).toFixed(2);
+    });
+  }
+
+  function childPeriodPctTotals(site, children, getPctValues) {
+    return activePeriods().map((_, i) => {
+      const vals = children
+        .map(child => getPctValues(site, child)[i])
+        .filter(v => v != null && Number.isFinite(Number(v)));
+      if (!vals.length) return null;
+      return +avgOf(vals).toFixed(2);
     });
   }
 
   function networkWeekTrend() {
     const weeks = activeWeeks();
+    const useHours = isHoursDisplayMode();
     const site = state.filters.site;
     if (site && site !== 'All') {
       const siteKey = String(site).toUpperCase();
-      const periods = alignPeriodValues(state.liveMetrics?.site_by_period?.[siteKey]);
+      const periods = alignPeriodValues(
+        useHours
+          ? state.liveMetrics?.site_by_period_hrs?.[siteKey]
+          : state.liveMetrics?.site_by_period?.[siteKey],
+      );
       if (periods.some(v => v != null)) {
         const slice = periods.slice(-weeks.length);
         while (slice.length < weeks.length) slice.unshift(null);
         return slice;
       }
     }
-    const dow = state.liveMetrics?.dow_by_day_week;
+    if (useHours && state.liveMetrics?.period_trend_hrs?.length) {
+      return alignPeriodValues(state.liveMetrics.period_trend_hrs).slice(-weeks.length);
+    }
+    if (!useHours && state.liveMetrics?.period_trend?.length) {
+      return alignPeriodValues(state.liveMetrics.period_trend).slice(-weeks.length);
+    }
+    const dow = useHours ? state.liveMetrics?.dow_by_day_week_hrs : state.liveMetrics?.dow_by_day_week;
     if (dow && Object.keys(dow).length) {
       return weeks.map(week => {
         const vals = [];
@@ -544,9 +586,11 @@
     });
   }
 
-  function matrixForActiveSite(entityList, valueFn) {
+  function matrixForActiveSite(entityList, pctValueFn, hrsValueFn) {
     const sites = activeHeatmapSites();
     const matrix = {};
+    const useHours = isHoursDisplayMode();
+    const valueFn = useHours ? hrsValueFn : pctValueFn;
     entityList.forEach(entity => {
       matrix[entity] = alignPeriodValues(
         activePeriods().map((_, i) => {
@@ -559,7 +603,8 @@
               count += 1;
             }
           });
-          return count ? +(sum / count).toFixed(2) : null;
+          if (!count) return null;
+          return useHours ? +sum.toFixed(2) : +(sum / count).toFixed(2);
         }),
       );
     });
@@ -567,11 +612,11 @@
   }
 
   function categoryMatrixFiltered() {
-    return matrixForActiveSite(CATEGORIES, categoryValuesForSiteHeatmap);
+    return matrixForActiveSite(activeCategories(), categoryPctForSiteHeatmap, categoryHoursForSiteHeatmap);
   }
 
   function lineMatrixFiltered() {
-    return matrixForActiveSite(LINES, lineValuesForSite);
+    return matrixForActiveSite(activeLines(), linePctForSite, lineHoursForSite);
   }
 
   function templateSummaries() {
@@ -618,10 +663,9 @@
     return 0;
   }
 
-  function chartValueFromPct(pct) {
-    if (pct == null || Number.isNaN(Number(pct))) return 0;
-    if (showInMode() === 'percentage') return Number(pct);
-    return pctToHours(pct);
+  function chartValueFromMetric(value) {
+    if (value == null || Number.isNaN(Number(value))) return 0;
+    return Number(value);
   }
 
   function chartYAxisConfig(yMaxHint) {
@@ -656,10 +700,11 @@
   function pctMatrixToChartMatrix(matrix) {
     const out = {};
     Object.entries(matrix || {}).forEach(([key, vals]) => {
-      out[key] = (vals || []).map(v => chartValueFromPct(v));
+      out[key] = (vals || []).map(v => chartValueFromMetric(v));
     });
     return out;
   }
+
   function pctToHours(pct) {
     const avg = yearAvgDtPct();
     const total = totalDtHours();
@@ -668,14 +713,11 @@
     return (Number(pct) / avg) * (total / n);
   }
 
-  function cellDisplayValue(value, fromPct = true) {
+  function cellDisplayValue(value) {
     if (value == null || Number.isNaN(Number(value))) return '—';
-    if (showInMode() === 'percentage') {
-      return Number(value).toFixed(2) + '%';
-    }
-    const hours = fromPct ? pctToHours(value) : Number(value);
-    if (showInMode() === 'millions') return (hours / 1e6).toFixed(3) + ' MM';
-    return (hours / 1e3).toFixed(2) + ' M';
+    if (showInMode() === 'percentage') return Number(value).toFixed(2) + '%';
+    if (showInMode() === 'millions') return (Number(value) / 1e6).toFixed(3) + ' MM';
+    return (Number(value) / 1e3).toFixed(2) + ' M';
   }
 
   function tableSummaryHeader() {
@@ -686,14 +728,14 @@
     const numeric = vals.filter(v => v != null && Number.isFinite(Number(v)));
     if (!numeric.length) return null;
     if (isHoursDisplayMode()) {
-      return numeric.reduce((a, v) => a + pctToHours(v), 0);
+      return numeric.reduce((a, v) => a + Number(v), 0);
     }
     return avgOf(numeric);
   }
 
-  function formatTableSummary(val, fromPct = true) {
+  function formatTableSummary(val) {
     if (val == null) return '—';
-    return cellDisplayValue(val, fromPct);
+    return cellDisplayValue(val);
   }
 
   function tableMetricLabel() {
@@ -1311,6 +1353,7 @@
     if (m.periods?.length) PERIODS_MUTABLE = m.periods.map(String);
     if (m.weeks?.length) DOW_WEEKS_MUTABLE = m.weeks.map(String);
     if (m.period_trend?.length) TREND_DATA_MUTABLE = m.period_trend.map(v => +Number(v).toFixed(2));
+    if (m.period_trend_hrs?.length) TREND_DATA_HRS_MUTABLE = m.period_trend_hrs.map(v => +Number(v).toFixed(2));
     if (m.reasons?.length) {
       REASONS_DATA_MUTABLE = m.reasons.map(r => ({
         reason: r.reason || r.RSN || 'Unknown',
@@ -1321,9 +1364,12 @@
 
     if (m.dow_by_day_week && Object.keys(m.dow_by_day_week).length) {
       DOW_DAY_TRENDS_MUTABLE = {};
+      DOW_DAY_TRENDS_HRS_MUTABLE = {};
       DAY_LABELS.forEach(day => {
         const weekMap = m.dow_by_day_week[day] || {};
+        const weekMapHrs = m.dow_by_day_week_hrs?.[day] || {};
         DOW_DAY_TRENDS_MUTABLE[day] = activeWeeks().map(w => +(weekMap[w] ?? 0).toFixed(2));
+        DOW_DAY_TRENDS_HRS_MUTABLE[day] = activeWeeks().map(w => +(weekMapHrs[w] ?? 0).toFixed(2));
       });
     }
 
@@ -1443,17 +1489,13 @@
     return activePeriods().map((_, i) => activeCategories().reduce((a, c) => a + (CATEGORY_BASE[c]?.[i] || 0), 0));
   }
 
-  function sitePeriodTotals(site) {
-    return resolveSitePeriodTotals(site, state.liveMetrics);
-  }
-
-  function categoryValuesForSiteHeatmap(site, category) {
+  function categoryPctForSiteHeatmap(site, category) {
     const siteKey = String(site).toUpperCase();
     const liveSiteCat = state.liveMetrics?.site_category_by_period?.[siteKey]?.[category];
     if (liveSiteCat?.length) return alignPeriodValues(liveSiteCat);
     if (isLiveSql()) return alignPeriodValues([]);
 
-    const sitePeriods = sitePeriodTotals(site);
+    const sitePeriods = sitePeriodPct(site);
     const base = CATEGORY_BASE[category] || [];
     const baseSum = periodBaseTotals();
     const liveCat = state.liveMetrics?.category_by_period?.[category];
@@ -1467,6 +1509,20 @@
       const ratio = (base[i] || 0) / (baseSum[i] || 1);
       return +(sitePeriods[i] * ratio).toFixed(2);
     });
+  }
+
+  function categoryHoursForSiteHeatmap(site, category) {
+    const siteKey = String(site).toUpperCase();
+    const liveSiteHrs = state.liveMetrics?.site_category_by_period_hrs?.[siteKey]?.[category];
+    if (liveSiteHrs?.length) return alignPeriodValues(liveSiteHrs);
+    if (isLiveSql()) return alignPeriodValues([]);
+    return categoryPctForSiteHeatmap(site, category).map(v => (v == null ? null : pctToHours(v)));
+  }
+
+  function categoryValuesForSiteHeatmap(site, category) {
+    return isHoursDisplayMode()
+      ? categoryHoursForSiteHeatmap(site, category)
+      : categoryPctForSiteHeatmap(site, category);
   }
 
   function avgOf(arr) {
@@ -1542,7 +1598,9 @@
 
   function shiftValuesForDay(day, shift) {
     const weeks = activeWeeks();
-    const shiftMap = state.liveMetrics?.dow_by_shift?.[day];
+    const useHours = isHoursDisplayMode();
+    const shiftRoot = useHours ? state.liveMetrics?.dow_by_shift_hrs : state.liveMetrics?.dow_by_shift;
+    const shiftMap = shiftRoot?.[day];
     if (isLiveSql() && shiftMap) {
       const shiftKey = Object.keys(shiftMap).find(k =>
         k === String(shift) || k.endsWith(String(shift)) || k.includes(` ${shift}`),
@@ -1620,21 +1678,23 @@
     return { bg: `rgb(${r},${g},${b})`, color: '#1a2b4a' };
   }
 
-  function heatTd(value, max = 8, extraClass = '') {
-    if (value == null || value === '-') return `<td class="heat-cell heat-empty ${extraClass}">-</td>`;
+  function heatTd(displayValue, max = 8, extraClass = '', colorValue = null) {
+    if (displayValue == null || displayValue === '-') return `<td class="heat-cell heat-empty ${extraClass}">-</td>`;
     const isTotalCol = extraClass.includes('col-total');
-    const style = heatStyle(value, max, isTotalCol);
-    return `<td class="heat-cell ${extraClass}" style="background:${style.bg};color:${style.color}">${cellDisplayValue(value, true)}</td>`;
+    const color = colorValue != null ? colorValue : displayValue;
+    const style = heatStyle(color, max, isTotalCol);
+    return `<td class="heat-cell ${extraClass}" style="background:${style.bg};color:${style.color}">${cellDisplayValue(displayValue)}</td>`;
   }
 
-  function summaryTd(vals, max = 8) {
-    const summary = tableSummaryValue(vals);
+  function summaryTd(displayVals, max = 8, pctVals = null) {
+    const summary = tableSummaryValue(displayVals);
     if (summary == null) return `<td class="heat-cell heat-empty col-total">-</td>`;
-    const numeric = vals.filter(v => v != null && Number.isFinite(Number(v)));
+    const colorSource = pctVals || displayVals;
+    const numeric = colorSource.filter(v => v != null && Number.isFinite(Number(v)));
     const avgPct = numeric.length ? avgOf(numeric) : null;
     if (isHoursDisplayMode()) {
       const style = heatStyle(avgPct, max, true);
-      return `<td class="heat-cell col-total" style="background:${style.bg};color:${style.color}">${formatTableSummary(summary, false)}</td>`;
+      return `<td class="heat-cell col-total" style="background:${style.bg};color:${style.color}">${formatTableSummary(summary)}</td>`;
     }
     return heatTd(summary, max, 'col-total');
   }
@@ -2307,7 +2367,7 @@
     const peakIdx = numeric.length ? vals.findIndex(v => Number(v) === peak) : 0;
     const metricLabel = tableMetricLabel();
     const summaryLabel = isHoursDisplayMode() ? 'Total' : 'Average DT %';
-    const summaryDisplay = summary != null ? formatTableSummary(summary, !isHoursDisplayMode()) : '—';
+    const summaryDisplay = summary != null ? formatTableSummary(summary) : '—';
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2645,7 +2705,7 @@
     </div></div>`;
   }
 
-  function lineValuesForSite(site, line) {
+  function linePctForSite(site, line) {
     const siteKey = String(site).toUpperCase();
     const lineKey = String(line).toUpperCase();
     const liveSiteLine = state.liveMetrics?.site_line_by_period?.[siteKey]?.[lineKey]
@@ -2663,12 +2723,30 @@
     return alignPeriodValues((LINE_BASE[line] || []).map(v => +(v * mult * 0.95).toFixed(2)));
   }
 
+  function lineHoursForSite(site, line) {
+    const siteKey = String(site).toUpperCase();
+    const lineKey = String(line).toUpperCase();
+    const liveSiteLine = state.liveMetrics?.site_line_by_period_hrs?.[siteKey]?.[lineKey]
+      || state.liveMetrics?.site_line_by_period_hrs?.[siteKey]?.[line];
+    if (liveSiteLine?.length) return alignPeriodValues(liveSiteLine);
+    if (isLiveSql()) return alignPeriodValues([]);
+    return linePctForSite(site, line).map(v => (v == null ? null : pctToHours(v)));
+  }
+
+  function lineValuesForSite(site, line) {
+    return isHoursDisplayMode() ? lineHoursForSite(site, line) : linePctForSite(site, line);
+  }
+
   function linePeriodTotalsForSite(site) {
     if (isLiveSql()) return sitePeriodTotals(site);
     return alignPeriodValues(
       activePeriods().map((_, i) => {
-        const sum = activeLines().reduce((a, l) => a + (lineValuesForSite(site, l)[i] || 0), 0);
-        return +sum.toFixed(2);
+        const vals = activeLines()
+          .map(l => lineValuesForSite(site, l)[i])
+          .filter(v => v != null && Number.isFinite(Number(v)));
+        if (!vals.length) return null;
+        if (isHoursDisplayMode()) return +vals.reduce((a, b) => a + Number(b), 0).toFixed(2);
+        return +avgOf(vals).toFixed(2);
       }),
     );
   }
@@ -2684,6 +2762,7 @@
     activeHeatmapSites().forEach(site => {
       const expanded = !!state.expandedLineSites[site];
       const sitePeriods = linePeriodTotalsForSite(site);
+      const sitePeriodsPct = sitePeriodPct(site);
       const chevron = expanded ? '▼' : '▶';
 
       rows += `<tr class="site-row${expanded ? ' expanded' : ''}" data-site="${site}">
@@ -2692,28 +2771,30 @@
           <span>${site}</span>
         </td>
         <td class="cat-label-cell"></td>
-        ${sitePeriods.map(v => heatTd(v, 35)).join('')}
-        ${summaryTd(sitePeriods, 35)}
+        ${sitePeriods.map((v, i) => heatTd(v, 35, '', sitePeriodsPct[i])).join('')}
+        ${summaryTd(sitePeriods, 35, sitePeriodsPct)}
       </tr>`;
 
       if (expanded) {
         activeLines().forEach(line => {
           const vals = lineValuesForSite(site, line);
+          const pctVals = linePctForSite(site, line);
           const activeCompare = state.compareLine === line ? ' compare-active' : '';
           rows += `<tr class="line-detail-row${compareReady}${activeCompare}" data-line="${line}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${line}</td>
-            ${vals.map(v => heatTd(v, 14)).join('')}
-            ${summaryTd(vals, 14)}
+            ${vals.map((v, i) => heatTd(v, 14, '', pctVals[i])).join('')}
+            ${summaryTd(vals, 14, pctVals)}
           </tr>`;
         });
 
         const childTotals = childPeriodTotals(site, activeLines(), lineValuesForSite);
+        const childPctTotals = childPeriodPctTotals(site, activeLines(), linePctForSite);
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Site Total</td>
-          ${childTotals.map(v => heatTd(v, 35)).join('')}
-          ${summaryTd(childTotals, 35)}
+          ${childTotals.map((v, i) => heatTd(v, 35, '', childPctTotals[i])).join('')}
+          ${summaryTd(childTotals, 35, childPctTotals)}
         </tr>`;
       }
     });
@@ -2947,6 +3028,7 @@
     activeHeatmapSites().forEach(site => {
       const expanded = !!state.expandedHeatmapSites[site];
       const sitePeriods = sitePeriodTotals(site);
+      const sitePeriodsPct = sitePeriodPct(site);
       const chevron = expanded ? '▼' : '▶';
 
       rows += `<tr class="site-row${expanded ? ' expanded' : ''}" data-site="${site}">
@@ -2955,29 +3037,31 @@
           <span>${site}</span>
         </td>
         <td class="cat-label-cell"></td>
-        ${sitePeriods.map(v => heatTd(v, 35)).join('')}
-        ${summaryTd(sitePeriods, 35)}
+        ${sitePeriods.map((v, i) => heatTd(v, 35, '', sitePeriodsPct[i])).join('')}
+        ${summaryTd(sitePeriods, 35, sitePeriodsPct)}
       </tr>`;
 
       if (expanded) {
         activeCategories().forEach(cat => {
           const vals = categoryValuesForSiteHeatmap(site, cat);
+          const pctVals = categoryPctForSiteHeatmap(site, cat);
           const activeCompare = state.compareCategory === cat ? ' compare-active' : '';
           const activeDetail = state.detailCategory === cat ? ' detail-active' : '';
           rows += `<tr class="cat-row heat-cat-row${compareReady}${activeCompare}${activeDetail}" data-category="${cat}" data-site="${site}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${cat}</td>
-            ${vals.map(v => heatTd(v, 8)).join('')}
-            ${summaryTd(vals, 12)}
+            ${vals.map((v, i) => heatTd(v, 8, '', pctVals[i])).join('')}
+            ${summaryTd(vals, 12, pctVals)}
           </tr>`;
         });
 
         const childTotals = childPeriodTotals(site, activeCategories(), categoryValuesForSiteHeatmap);
+        const childPctTotals = childPeriodPctTotals(site, activeCategories(), categoryPctForSiteHeatmap);
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Total</td>
-          ${childTotals.map(v => heatTd(v, 35)).join('')}
-          ${summaryTd(childTotals, 35)}
+          ${childTotals.map((v, i) => heatTd(v, 35, '', childPctTotals[i])).join('')}
+          ${summaryTd(childTotals, 35, childPctTotals)}
         </tr>`;
       }
     });
@@ -3594,20 +3678,23 @@
     const weeks = activeWeeks();
     const year = String(state.filters.year || state.liveMetrics?.meta?.year || '2026');
     const labels = weeks.map(w => w.replace(year, ''));
-    const data = networkWeekTrend().map(v => (v == null ? 0 : v));
+    const useHours = isHoursDisplayMode();
+    const axis = chartYAxisConfig();
+    const raw = networkWeekTrend().map(v => (v == null ? 0 : Number(v)));
+    const data = useHours ? raw.map(v => axis.scale(v)) : raw;
     const lineColor = PERIOD_COLORS[2];
     const grad = ctx.createLinearGradient(0, 0, 0, 320);
     grad.addColorStop(0, lineColor + '35');
     grad.addColorStop(1, lineColor + '00');
     const peak = Math.max(...data, 0);
-    const minY = Math.max(0, Math.floor((Math.min(...data.filter(v => v > 0), peak) || peak) * 10) / 10 - 0.5);
-    const maxY = Math.ceil((peak + 0.5) * 10) / 10;
+    const minY = useHours ? 0 : Math.max(0, Math.floor((Math.min(...data.filter(v => v > 0), peak) || peak) * 10) / 10 - 0.5);
+    const maxY = useHours ? null : Math.ceil((peak + 0.5) * 10) / 10;
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
         labels,
         datasets: [{
-          label: 'Unplanned DT %',
+          label: useHours ? axis.title : 'Unplanned DT %',
           data,
           borderColor: lineColor,
           backgroundColor: grad,
@@ -3627,11 +3714,16 @@
         interaction: { intersect: false, mode: 'index' },
         scales: {
           y: {
-            min: minY,
-            max: maxY,
+            beginAtZero: true,
+            ...(maxY != null ? { min: minY, max: maxY } : {}),
             ...PRO_AXIS,
-            title: proAxisTitle('Unplanned DT %'),
-            ticks: { ...PRO_AXIS.ticks, callback: v => v.toFixed(1) + '%' },
+            title: proAxisTitle(useHours ? axis.title : 'Unplanned DT %'),
+            ticks: {
+              ...PRO_AXIS.ticks,
+              callback: v => useHours
+                ? axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix
+                : v.toFixed(1) + '%',
+            },
           },
           x: {
             ...PRO_AXIS,
@@ -3640,7 +3732,9 @@
           },
         },
       },
-      plugins: [linePointLabelPlugin(v => Number(v).toFixed(2) + '%')],
+      plugins: [linePointLabelPlugin(v => useHours
+        ? axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix
+        : Number(v).toFixed(2) + '%')],
     });
   }
 
@@ -3686,8 +3780,10 @@
     const allowed = activeHeatmapSites();
     const sitePool = allowed.length ? allowed : TOP_SITES;
     const sites = sitePool.slice(0, count);
+    const useHours = isHoursDisplayMode();
     const ctx = canvas.getContext('2d');
     const periods = activePeriods();
+    const axis = chartYAxisConfig();
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -3697,10 +3793,14 @@
           const grad = ctx.createLinearGradient(0, 0, 0, 320);
           grad.addColorStop(0, color + '35');
           grad.addColorStop(1, color + '00');
-          const trend = alignPeriodValues(state.liveMetrics?.site_by_period?.[site] || TOP_SITES_TRENDS[site] || periods.map(() => 0));
+          const trend = alignPeriodValues(
+            useHours
+              ? state.liveMetrics?.site_by_period_hrs?.[site]
+              : state.liveMetrics?.site_by_period?.[site] || TOP_SITES_TRENDS[site] || periods.map(() => 0),
+          );
           return {
             label: site,
-            data: trend,
+            data: useHours ? trend.map(v => (v == null ? 0 : axis.scale(v))) : trend,
             borderColor: color,
             backgroundColor: grad,
             fill: true,
@@ -3722,8 +3822,11 @@
           y: {
             beginAtZero: true,
             ...PRO_AXIS,
-            title: proAxisTitle('DT %'),
-            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' },
+            title: proAxisTitle(axis.title),
+            ticks: {
+              ...PRO_AXIS.ticks,
+              callback: v => axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix,
+            },
           },
           x: {
             ...PRO_AXIS,

@@ -1,7 +1,8 @@
 -- dashboard_dt_period_trend.obo.sql
 SELECT
   {{period_expr}} AS period_label,
-  ROUND({{dt_pct_m}} * 100, 2) AS dt_pct
+  ROUND({{dt_pct_m}} * 100, 2) AS dt_pct,
+  ROUND({{dt_hours_m}}, 2) AS dt_hours
 FROM {{catalog}}.pgt_plnt_prodtn_metric_view
 WHERE {{dt_type_filter}}
   AND {{year_filter}}
