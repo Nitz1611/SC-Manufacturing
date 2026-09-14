@@ -1652,11 +1652,95 @@
     });
   }
 
-  function heatStyle(value, max = 8, isTotalCol = false) {
-    if (value == null || Number.isNaN(value)) return { bg: '#ffffff', color: '#9ca3af' };
-    if (value <= 0.05) return { bg: '#ffffff', color: '#1a2b4a' };
-    const t = Math.min(1, Math.max(0, value / max));
-    const intensity = isTotalCol ? Math.min(1, t * 1.08) : t;
+  function isEmptyHeatCell(value) {
+    if (value == null || value === '-') return true;
+    const n = Number(value);
+    return !Number.isFinite(n) || n <= 0;
+  }
+
+  function normalizeHeatScale(scaleOrMax) {
+    if (scaleOrMax && typeof scaleOrMax === 'object' && 'max' in scaleOrMax) {
+      return { min: Number(scaleOrMax.min) || 0, max: Number(scaleOrMax.max) || 1 };
+    }
+    const max = Number(scaleOrMax) || 8;
+    return { min: 0, max };
+  }
+
+  function createHeatmapScale() {
+    const values = [];
+    return {
+      add(value) {
+        if (!isEmptyHeatCell(value)) values.push(Number(value));
+      },
+      addValues(arr) {
+        (arr || []).forEach(v => this.add(v));
+      },
+      range() {
+        if (!values.length) return { min: 0, max: 1 };
+        return { min: Math.min(...values), max: Math.max(...values) };
+      },
+    };
+  }
+
+  function collectCategoryHeatmapScale() {
+    const scale = createHeatmapScale();
+    activeHeatmapSites().forEach(site => {
+      scale.addValues(sitePeriodTotals(site));
+      if (state.expandedHeatmapSites[site]) {
+        activeCategories().forEach(cat => {
+          scale.addValues(categoryValuesForSiteHeatmap(site, cat));
+        });
+        scale.addValues(childPeriodTotals(site, activeCategories(), categoryValuesForSiteHeatmap));
+      }
+    });
+    return scale.range();
+  }
+
+  function collectLineHeatmapScale() {
+    const scale = createHeatmapScale();
+    activeHeatmapSites().forEach(site => {
+      scale.addValues(linePeriodTotalsForSite(site));
+      if (state.expandedLineSites[site]) {
+        activeLines().forEach(line => {
+          scale.addValues(lineValuesForSite(site, line));
+        });
+        scale.addValues(childPeriodTotals(site, activeLines(), lineValuesForSite));
+      }
+    });
+    return scale.range();
+  }
+
+  function collectDowHeatmapScale() {
+    const scale = createHeatmapScale();
+    DAY_LABELS.forEach(day => {
+      scale.addValues(dayWeekTotals(day));
+      if (state.expandedDowDays[day]) {
+        DOW_SHIFTS.forEach(shift => {
+          scale.addValues(shiftValuesForDay(day, shift));
+        });
+      }
+    });
+    return scale.range();
+  }
+
+  function collectValuesHeatmapScale(valueLists) {
+    const scale = createHeatmapScale();
+    (valueLists || []).forEach(vals => scale.addValues(vals));
+    return scale.range();
+  }
+
+  function heatStyle(value, scaleMin, scaleMax, isTotalCol = false) {
+    if (isEmptyHeatCell(value)) return { bg: '#ffffff', color: '#9ca3af' };
+    const min = scaleMin ?? 0;
+    const max = scaleMax ?? 1;
+    let t;
+    if (max <= min) {
+      t = 0.5;
+    } else {
+      t = (Number(value) - min) / (max - min);
+    }
+    t = Math.min(1, Math.max(0, t));
+    const intensity = isTotalCol ? Math.min(1, t * 1.05) : t;
 
     const stops = [
       [255, 255, 255],
@@ -1678,33 +1762,32 @@
     return { bg: `rgb(${r},${g},${b})`, color: '#1a2b4a' };
   }
 
-  function heatTd(displayValue, max = 8, extraClass = '', colorValue = null) {
-    if (displayValue == null || displayValue === '-') return `<td class="heat-cell heat-empty ${extraClass}">-</td>`;
+  function heatTd(displayValue, scale, extraClass = '') {
+    if (isEmptyHeatCell(displayValue)) {
+      return `<td class="heat-cell heat-empty ${extraClass}">-</td>`;
+    }
+    const { min, max } = normalizeHeatScale(scale);
     const isTotalCol = extraClass.includes('col-total');
-    const color = colorValue != null ? colorValue : displayValue;
-    const style = heatStyle(color, max, isTotalCol);
+    const style = heatStyle(displayValue, min, max, isTotalCol);
     return `<td class="heat-cell ${extraClass}" style="background:${style.bg};color:${style.color}">${cellDisplayValue(displayValue)}</td>`;
   }
 
-  function summaryTd(displayVals, max = 8, pctVals = null) {
+  function summaryTd(displayVals, scale) {
     const summary = tableSummaryValue(displayVals);
-    if (summary == null) return `<td class="heat-cell heat-empty col-total">-</td>`;
-    const colorSource = pctVals || displayVals;
-    const numeric = colorSource.filter(v => v != null && Number.isFinite(Number(v)));
-    const avgPct = numeric.length ? avgOf(numeric) : null;
-    if (isHoursDisplayMode()) {
-      const style = heatStyle(avgPct, max, true);
-      return `<td class="heat-cell col-total" style="background:${style.bg};color:${style.color}">${formatTableSummary(summary)}</td>`;
+    if (summary == null || isEmptyHeatCell(summary)) {
+      return `<td class="heat-cell heat-empty col-total">-</td>`;
     }
-    return heatTd(summary, max, 'col-total');
+    const { min, max } = normalizeHeatScale(scale);
+    const style = heatStyle(summary, min, max, true);
+    return `<td class="heat-cell col-total" style="background:${style.bg};color:${style.color}">${formatTableSummary(summary)}</td>`;
   }
 
   function heatmapLegendHTML(compact = false) {
-    const suffix = isHoursDisplayMode() ? ' (color = DT % intensity)' : '';
+    const metric = isHoursDisplayMode() ? 'hours' : 'DT %';
     return `<div class="heatmap-legend${compact ? ' compact' : ''}">
-      <span class="legend-label">Lower DT %${suffix}</span>
+      <span class="legend-label">Lower ${metric} (lowest in table)</span>
       <div class="legend-bar"></div>
-      <span class="legend-label">Higher DT %${suffix}</span>
+      <span class="legend-label">Higher ${metric} (highest in table)</span>
     </div>`;
   }
 
@@ -2114,6 +2197,7 @@
     });
     const best = rows.reduce((a, b) => (a.total < b.total ? a : b));
     const worst = rows.reduce((a, b) => (a.total > b.total ? a : b));
+    const compareScale = collectValuesHeatmapScale(rows.map(r => r.vals));
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2140,8 +2224,8 @@
                 const cls = r.site === best.site ? 'site-best' : r.site === worst.site ? 'site-worst' : '';
                 return `<tr class="${cls}${r.isCurrent ? ' selected' : ''}">
                   <td>${r.site}${r.isCurrent ? ' ★' : ''}</td>
-                  ${r.vals.map(v => heatTd(v, 8).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
-                  ${summaryTd(r.vals, 12)}
+                  ${r.vals.map(v => heatTd(v, compareScale).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
+                  ${summaryTd(r.vals, compareScale)}
                 </tr>`;
               }).join('')}
             </tbody>
@@ -2166,7 +2250,7 @@
           labels: compareSites,
           datasets: periods.map((p, i) => ({
             label: p,
-            data: rows.map(r => chartValueFromPct(r.vals[i])),
+            data: rows.map(r => chartValueFromMetric(r.vals[i])),
             backgroundColor: PERIOD_COLORS[i],
             borderRadius: { topLeft: 3, topRight: 3 },
             borderSkipped: false,
@@ -2203,6 +2287,7 @@
     });
     const best = rows.reduce((a, b) => (a.total < b.total ? a : b));
     const worst = rows.reduce((a, b) => (a.total > b.total ? a : b));
+    const compareScale = collectValuesHeatmapScale(rows.map(r => r.vals));
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2229,8 +2314,8 @@
                 const cls = r.site === best.site ? 'site-best' : r.site === worst.site ? 'site-worst' : '';
                 return `<tr class="${cls}${r.isCurrent ? ' selected' : ''}">
                   <td>${r.site}${r.isCurrent ? ' ★' : ''}</td>
-                  ${r.vals.map(v => heatTd(v, 14).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
-                  ${heatTd(r.total, 14, 'col-total compare-cell')}
+                  ${r.vals.map(v => heatTd(v, compareScale).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
+                  ${heatTd(r.total, compareScale, 'col-total compare-cell')}
                 </tr>`;
               }).join('')}
             </tbody>
@@ -2284,6 +2369,7 @@
     });
     const best = rows.reduce((a, b) => (a.total < b.total ? a : b));
     const worst = rows.reduce((a, b) => (a.total > b.total ? a : b));
+    const compareScale = collectValuesHeatmapScale(rows.map(r => r.vals));
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2310,8 +2396,8 @@
                 const cls = r.day === best.day ? 'site-best' : r.day === worst.day ? 'site-worst' : '';
                 return `<tr class="${cls}">
                   <td>${r.day}</td>
-                  ${r.vals.map(v => heatTd(v, 16).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
-                  ${heatTd(r.total, 16, 'col-total compare-cell')}
+                  ${r.vals.map(v => heatTd(v, compareScale).replace('class="heat-cell"', 'class="heat-cell compare-cell"')).join('')}
+                  ${heatTd(r.total, compareScale, 'col-total compare-cell')}
                 </tr>`;
               }).join('')}
             </tbody>
@@ -2368,6 +2454,7 @@
     const metricLabel = tableMetricLabel();
     const summaryLabel = isHoursDisplayMode() ? 'Total' : 'Average DT %';
     const summaryDisplay = summary != null ? formatTableSummary(summary) : '—';
+    const detailScale = collectValuesHeatmapScale([vals]);
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2394,8 +2481,8 @@
             <thead><tr><th>Metric</th>${periods.map(p => `<th>2026 ${p}</th>`).join('')}<th>${tableSummaryHeader()}</th></tr></thead>
             <tbody><tr>
               <td>${metricLabel}</td>
-              ${vals.map(v => heatTd(v, 8)).join('')}
-              ${summaryTd(vals, 12)}
+              ${vals.map(v => heatTd(v, detailScale)).join('')}
+              ${summaryTd(vals, detailScale)}
             </tr></tbody>
           </table>
         </div>
@@ -2408,14 +2495,14 @@
       destroyChart('detail-chart');
       const canvas = document.getElementById('detail-chart');
       if (!canvas || typeof Chart === 'undefined') return;
-      const axis = chartYAxisConfig(Math.max(...vals.map(v => chartValueFromPct(v)), 0));
+      const axis = chartYAxisConfig(Math.max(...vals.map(v => chartValueFromMetric(v)), 0));
       state.charts['detail-chart'] = new Chart(canvas, {
         type: 'bar',
         data: {
           labels: periods,
           datasets: [{
             label: category,
-            data: vals.map(v => chartValueFromPct(v)),
+            data: vals.map(v => chartValueFromMetric(v)),
             backgroundColor: PERIOD_COLORS,
             borderRadius: { topLeft: 4, topRight: 4 },
             borderSkipped: false,
@@ -2447,9 +2534,11 @@
 
     const site = activeSite();
     const vals = lineValuesForSite(site, line);
-    const avg = avgOf(vals);
-    const peak = Math.max(...vals);
-    const peakIdx = vals.indexOf(peak);
+    const numeric = vals.filter(v => v != null && Number.isFinite(Number(v)));
+    const avg = numeric.length ? avgOf(numeric) : 0;
+    const peak = numeric.length ? Math.max(...numeric.map(Number)) : 0;
+    const peakIdx = numeric.length ? vals.findIndex(v => Number(v) === peak) : 0;
+    const detailScale = collectValuesHeatmapScale([vals]);
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2476,8 +2565,8 @@
             <thead><tr><th>Metric</th>${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}<th>Avg</th></tr></thead>
             <tbody><tr>
               <td>Unplanned DT %</td>
-              ${vals.map(v => heatTd(v, 14)).join('')}
-              ${summaryTd(vals, 14)}
+              ${vals.map(v => heatTd(v, detailScale)).join('')}
+              ${summaryTd(vals, detailScale)}
             </tr></tbody>
           </table>
         </div>
@@ -2757,12 +2846,12 @@
     const periods = activePeriods();
     const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
     const summaryHdr = tableSummaryHeader();
+    const scale = collectLineHeatmapScale();
     let rows = '';
 
     activeHeatmapSites().forEach(site => {
       const expanded = !!state.expandedLineSites[site];
       const sitePeriods = linePeriodTotalsForSite(site);
-      const sitePeriodsPct = sitePeriodPct(site);
       const chevron = expanded ? '▼' : '▶';
 
       rows += `<tr class="site-row${expanded ? ' expanded' : ''}" data-site="${site}">
@@ -2771,30 +2860,28 @@
           <span>${site}</span>
         </td>
         <td class="cat-label-cell"></td>
-        ${sitePeriods.map((v, i) => heatTd(v, 35, '', sitePeriodsPct[i])).join('')}
-        ${summaryTd(sitePeriods, 35, sitePeriodsPct)}
+        ${sitePeriods.map(v => heatTd(v, scale)).join('')}
+        ${summaryTd(sitePeriods, scale)}
       </tr>`;
 
       if (expanded) {
         activeLines().forEach(line => {
           const vals = lineValuesForSite(site, line);
-          const pctVals = linePctForSite(site, line);
           const activeCompare = state.compareLine === line ? ' compare-active' : '';
           rows += `<tr class="line-detail-row${compareReady}${activeCompare}" data-line="${line}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${line}</td>
-            ${vals.map((v, i) => heatTd(v, 14, '', pctVals[i])).join('')}
-            ${summaryTd(vals, 14, pctVals)}
+            ${vals.map(v => heatTd(v, scale)).join('')}
+            ${summaryTd(vals, scale)}
           </tr>`;
         });
 
         const childTotals = childPeriodTotals(site, activeLines(), lineValuesForSite);
-        const childPctTotals = childPeriodPctTotals(site, activeLines(), linePctForSite);
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Site Total</td>
-          ${childTotals.map((v, i) => heatTd(v, 35, '', childPctTotals[i])).join('')}
-          ${summaryTd(childTotals, 35, childPctTotals)}
+          ${childTotals.map(v => heatTd(v, scale)).join('')}
+          ${summaryTd(childTotals, scale)}
         </tr>`;
       }
     });
@@ -2923,6 +3010,7 @@
     const weeks = activeWeeks();
     const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
     const summaryHdr = tableSummaryHeader();
+    const scale = collectDowHeatmapScale();
     let rows = '';
 
     DAY_LABELS.forEach(day => {
@@ -2936,8 +3024,8 @@
           <span>${day}</span>
         </td>
         <td class="cat-label-cell"></td>
-        ${dayPeriods.map(v => heatTd(v, 16)).join('')}
-        ${summaryTd(dayPeriods, 16)}
+        ${dayPeriods.map(v => heatTd(v, scale)).join('')}
+        ${summaryTd(dayPeriods, scale)}
       </tr>`;
 
       if (expanded) {
@@ -2947,16 +3035,16 @@
           rows += `<tr class="line-detail-row dow-shift-row${compareReady}${activeCompare}" data-shift="${shift}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${shift}</td>
-            ${vals.map(v => heatTd(v, 16)).join('')}
-            ${summaryTd(vals, 16)}
+            ${vals.map(v => heatTd(v, scale)).join('')}
+            ${summaryTd(vals, scale)}
           </tr>`;
         });
 
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Total</td>
-          ${dayPeriods.map(v => heatTd(v, 16)).join('')}
-          ${summaryTd(dayPeriods, 16)}
+          ${dayPeriods.map(v => heatTd(v, scale)).join('')}
+          ${summaryTd(dayPeriods, scale)}
         </tr>`;
       }
     });
@@ -3023,12 +3111,12 @@
     const periods = activePeriods();
     const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
     const summaryHdr = tableSummaryHeader();
+    const scale = collectCategoryHeatmapScale();
     let rows = '';
 
     activeHeatmapSites().forEach(site => {
       const expanded = !!state.expandedHeatmapSites[site];
       const sitePeriods = sitePeriodTotals(site);
-      const sitePeriodsPct = sitePeriodPct(site);
       const chevron = expanded ? '▼' : '▶';
 
       rows += `<tr class="site-row${expanded ? ' expanded' : ''}" data-site="${site}">
@@ -3037,31 +3125,29 @@
           <span>${site}</span>
         </td>
         <td class="cat-label-cell"></td>
-        ${sitePeriods.map((v, i) => heatTd(v, 35, '', sitePeriodsPct[i])).join('')}
-        ${summaryTd(sitePeriods, 35, sitePeriodsPct)}
+        ${sitePeriods.map(v => heatTd(v, scale)).join('')}
+        ${summaryTd(sitePeriods, scale)}
       </tr>`;
 
       if (expanded) {
         activeCategories().forEach(cat => {
           const vals = categoryValuesForSiteHeatmap(site, cat);
-          const pctVals = categoryPctForSiteHeatmap(site, cat);
           const activeCompare = state.compareCategory === cat ? ' compare-active' : '';
           const activeDetail = state.detailCategory === cat ? ' detail-active' : '';
           rows += `<tr class="cat-row heat-cat-row${compareReady}${activeCompare}${activeDetail}" data-category="${cat}" data-site="${site}">
             <td class="site-name-cell indent"></td>
             <td class="cat-label-cell">${cat}</td>
-            ${vals.map((v, i) => heatTd(v, 8, '', pctVals[i])).join('')}
-            ${summaryTd(vals, 12, pctVals)}
+            ${vals.map(v => heatTd(v, scale)).join('')}
+            ${summaryTd(vals, scale)}
           </tr>`;
         });
 
         const childTotals = childPeriodTotals(site, activeCategories(), categoryValuesForSiteHeatmap);
-        const childPctTotals = childPeriodPctTotals(site, activeCategories(), categoryPctForSiteHeatmap);
         rows += `<tr class="row-total heat-site-total">
           <td class="site-name-cell indent"></td>
           <td class="cat-label-cell">Total</td>
-          ${childTotals.map((v, i) => heatTd(v, 35, '', childPctTotals[i])).join('')}
-          ${summaryTd(childTotals, 35, childPctTotals)}
+          ${childTotals.map(v => heatTd(v, scale)).join('')}
+          ${summaryTd(childTotals, scale)}
         </tr>`;
       }
     });
@@ -3721,7 +3807,7 @@
             ticks: {
               ...PRO_AXIS.ticks,
               callback: v => useHours
-                ? axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix
+                ? Number(v).toFixed(axis.decimals) + axis.tickSuffix
                 : v.toFixed(1) + '%',
             },
           },
@@ -3733,7 +3819,7 @@
         },
       },
       plugins: [linePointLabelPlugin(v => useHours
-        ? axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix
+        ? Number(v).toFixed(axis.decimals) + axis.tickSuffix
         : Number(v).toFixed(2) + '%')],
     });
   }
