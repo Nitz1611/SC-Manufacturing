@@ -2845,7 +2845,6 @@ export function initManufacturingConsole(): () => void {
         },
         options: {
           ...CHART_DEFAULTS,
-          layout: { padding: { left: 8, top: 12 } },
           plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
           scales: {
             y: proYAxisScale(yScale),
@@ -2929,7 +2928,6 @@ export function initManufacturingConsole(): () => void {
         },
         options: {
           ...CHART_DEFAULTS,
-          layout: { padding: { left: 8, top: 12 } },
           plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
           scales: {
             y: proYAxisScale(yScale),
@@ -3802,38 +3800,33 @@ export function initManufacturingConsole(): () => void {
     },
   };
 
+  const Y_AXIS_LABEL_GAP = 2;
+
   const PRO_AXIS = {
     grid: { color: 'rgba(0, 40, 85, 0.06)', drawTicks: false },
     border: { display: false },
-    ticks: { color: '#64748b', font: { family: 'Inter', size: 11 } },
+    ticks: { color: '#64748b', font: { family: 'Inter', size: 11 }, padding: Y_AXIS_LABEL_GAP },
   };
 
   function proAxisTitle(text) {
     return { display: true, text, color: '#64748b', font: { family: 'Inter', weight: '600', size: 11 } };
   }
 
-  function linePointLabelPlugin(formatFn, opts = {}) {
-    const edgePadding = opts.edgePadding ?? 40;
+  function linePointLabelPlugin(formatFn) {
     return {
       id: 'linePointLabels',
       afterDatasetsDraw(chart) {
-        const { ctx, chartArea } = chart;
+        const { ctx } = chart;
         chart.data.datasets.forEach((dataset, i) => {
           chart.getDatasetMeta(i).data.forEach((point, idx) => {
             const val = dataset.data[idx];
             if (val == null) return;
-            const label = formatFn(val);
             ctx.save();
             ctx.fillStyle = '#1e293b';
             ctx.font = '600 10px Inter, sans-serif';
+            ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
-            if (point.x < chartArea.left + edgePadding) {
-              ctx.textAlign = 'left';
-              ctx.fillText(label, point.x + 4, point.y - 10);
-            } else {
-              ctx.textAlign = 'center';
-              ctx.fillText(label, point.x, point.y - 10);
-            }
+            ctx.fillText(formatFn(val), point.x, point.y - 10);
             ctx.restore();
           });
         });
@@ -3976,7 +3969,6 @@ export function initManufacturingConsole(): () => void {
     const axis = chartYAxisConfig();
     const series = days.flatMap(day => activeDayTrendSeries(day).map(v => chartValueFromMetric(v)));
     const yScale = yScaleFromValues(series);
-    const labelFormat = v => Number(v).toFixed(axis.decimals) + axis.tickSuffix;
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -4004,7 +3996,6 @@ export function initManufacturingConsole(): () => void {
       },
       options: {
         ...CHART_DEFAULTS,
-        layout: { padding: { left: 12, top: 16, right: 8 } },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         interaction: { intersect: false, mode: 'index' },
         scales: {
@@ -4016,7 +4007,6 @@ export function initManufacturingConsole(): () => void {
           },
         },
       },
-      plugins: [linePointLabelPlugin(labelFormat)],
     });
   }
 
@@ -4174,7 +4164,6 @@ export function initManufacturingConsole(): () => void {
       },
       options: {
         ...CHART_DEFAULTS,
-        layout: { padding: { left: 16, top: 18, right: 8 } },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
         interaction: { intersect: false, mode: 'index' },
         scales: {
@@ -4201,7 +4190,7 @@ export function initManufacturingConsole(): () => void {
       },
       plugins: [linePointLabelPlugin(v => useHours
         ? Number(v).toFixed(axis.decimals) + axis.tickSuffix
-        : Number(v).toFixed(2) + '%', { edgePadding: 48 })],
+        : Number(v).toFixed(2) + '%')],
     });
   }
 
@@ -4267,7 +4256,7 @@ export function initManufacturingConsole(): () => void {
           );
           return {
             label: site,
-            data: useHours ? trend.map(v => (v == null ? 0 : axis.scale(v))) : trend,
+            data: useHours ? trend.map(v => chartValueFromMetric(v)) : trend,
             borderColor: color,
             backgroundColor: grad,
             fill: true,
@@ -4292,7 +4281,9 @@ export function initManufacturingConsole(): () => void {
             title: proAxisTitle(axis.title),
             ticks: {
               ...PRO_AXIS.ticks,
-              callback: v => axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix,
+              callback: v => useHours
+                ? Number(v).toFixed(axis.decimals) + axis.tickSuffix
+                : v.toFixed(1) + '%',
             },
           },
           x: {
