@@ -3,16 +3,25 @@
  * Default AI path for tab narratives; Supervisor Agent is optional via SUMMARY_PROVIDER=supervisor.
  */
 import type { MetricsPayload } from '../../shared/types/dashboard.js';
-import { buildFilterContext, type SummaryEntity } from './summaryPrompts.js';
+import { buildFilterContext, buildMetricsGroundingContext, type SummaryEntity } from './summaryPrompts.js';
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
-const TAB_INSTRUCTIONS: Record<SummaryEntity, string> = {
-  overview: 'Network KPI overview: DT %, hours, STOPS, period peak/low, one action.',
-  category: 'Top Downtime Categories by site and period.',
-  line: 'Top Line Desc contributors and worst site/line combos.',
-  dow: 'Day-of-week and Shift patterns across weeks.',
-  reason: 'Top Downtime Reasons by hours and period trend.',
+const PROFESSIONAL_VOICE = `You are a senior manufacturing operations analyst writing an executive briefing for plant leadership.
+Focus ONLY on unplanned downtime. Use ONLY numbers from the dashboard metrics block — never invent values.
+Write 2–4 polished sentences in professional business English (not a robotic data dump).
+Lead with the most important insight (performance vs prior period or benchmark).
+Name specific sites, periods, categories, lines, or reasons from the data when relevant.
+End with one clear, actionable recommendation for plant managers.
+Do not use bullet points, markdown, headers, or JSON in the narrative text.
+Vary sentence openings — avoid starting every summary with "Unplanned DT % is".`;
+
+const TAB_FOCUS: Record<SummaryEntity, string> = {
+  overview: 'Overall unplanned DT performance: KPI level, peak/low periods, STOPS, and one priority action.',
+  category: 'Top downtime categories by site and period — which category drives the most loss.',
+  line: 'Worst line-level contributors and site/line combinations to address first.',
+  dow: 'Day-of-week and shift patterns — when unplanned DT concentrates across weeks.',
+  reason: 'Top root-cause reasons by hours and period trend — what to fix first.',
 };
 
 function host(): string {
@@ -192,21 +201,18 @@ export async function getClaudeTabSummary(
   metrics: MetricsPayload,
 ): Promise<{ narrative: string; source: 'claude' }> {
   const filterCtx = buildFilterContext(filters);
-  const system = `You are the SC Manufacturing analytics assistant.
-Summarize UNPLANNED DOWNTIME ONLY for plant managers.
-Use ONLY numbers from the provided metrics JSON — do not invent values.
-Write exactly 2-4 plain-text sentences. No markdown, no bullet lists.`;
+  const grounding = buildMetricsGroundingContext(metrics, entityType);
 
-  const user = `Tab: ${entityType}
-Focus: ${TAB_INSTRUCTIONS[entityType]}
-Filters: ${filterCtx}
-Metrics JSON:
-${JSON.stringify(compactMetrics(metrics, entityType), null, 2)}
+  const user = `${PROFESSIONAL_VOICE}
 
-Return JSON: {"narrative":"your 2-4 sentence summary"}`;
+Tab focus: ${TAB_FOCUS[entityType]}
+Applied filters: ${filterCtx}
+
+${grounding}
+
+Return JSON only: {"narrative":"your 2-4 sentence executive summary"}`;
 
   const raw = await invokeClaude([
-    { role: 'system', content: system },
     { role: 'user', content: user },
   ]);
 
@@ -221,15 +227,19 @@ export async function getClaudeBatchSummaries(
   metrics: MetricsPayload,
 ): Promise<Record<SummaryEntity, string>> {
   const filterCtx = buildFilterContext(filters);
-  const system = `You are the SC Manufacturing analytics assistant.
-Summarize UNPLANNED DOWNTIME ONLY using the metrics JSON below.
-Use ONLY provided numbers. Each tab needs 2-4 plain-text sentences.`;
+  const grounding = buildMetricsGroundingContext(metrics, 'overview');
 
-  const user = `Filters: ${filterCtx}
-Metrics JSON:
+  const user = `${PROFESSIONAL_VOICE}
+
+Applied filters: ${filterCtx}
+
+${grounding}
+
+Additional metrics JSON (categories, lines, reasons, shifts):
 ${JSON.stringify(compactMetrics(metrics), null, 2)}
 
-Return ONLY valid JSON with these keys (each a string):
+Write a distinct executive summary for each KPI tab below.
+Return ONLY valid JSON with these keys (each value is a 2-4 sentence string):
 {
   "overview": "...",
   "category": "...",
@@ -239,7 +249,6 @@ Return ONLY valid JSON with these keys (each a string):
 }`;
 
   const raw = await invokeClaude([
-    { role: 'system', content: system },
     { role: 'user', content: user },
   ]);
 

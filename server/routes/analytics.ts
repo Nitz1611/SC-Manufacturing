@@ -100,9 +100,9 @@ analyticsRouter.get('/status', async (_req, res) => {
           ? 'demo-fallback'
           : 'production-no-demo',
     demo_mode: consoleDemoMode(),
+    claude: claudeConfigured() ? claudeEndpoint() : 'not configured',
     summary_provider: resolveSummaryProvider(),
     summaries: summaryProviderLabel(resolveSummaryProvider()),
-    claude: claudeConfigured() ? claudeEndpoint() : 'not configured',
     supervisor: supervisorConfigured() ? process.env.SUPERVISOR_ENDPOINT_NAME : 'not configured',
     active_supervisor_jobs: runningJobCount(),
     preload: getPreloadStatus(),

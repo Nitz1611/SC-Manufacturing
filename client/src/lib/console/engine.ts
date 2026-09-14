@@ -245,6 +245,8 @@ export function initManufacturingConsole(): () => void {
     metricsJobFilterKey: null,
     summaryFilterKey: null,
     summariesLoaded: false,
+    aiSummaries: {},
+    summarySource: null,
     summaryReloadTimer: null,
     metricSites: [],
     metricRegions: [],
@@ -922,6 +924,10 @@ export function initManufacturingConsole(): () => void {
       state.lastDataFilterKey = filterKey;
       applyConsoleData({ metrics: filterMetricsClient(cached), dashboard: {} });
       setDataStatus('cached', 'Cached metrics · filter changes apply instantly');
+      state.summariesLoaded = false;
+      state.summaryFilterKey = null;
+      state.aiSummaries = {};
+      setAiSummaryLoading();
       loadAiSummaries(false);
       return true;
     }
@@ -933,6 +939,10 @@ export function initManufacturingConsole(): () => void {
         state.lastDataFilterKey = filterKey;
         applyConsoleData({ metrics: filtered, dashboard: {} });
         setDataStatus('cached', 'Filtered instantly · refreshing details in background');
+        state.summariesLoaded = false;
+        state.summaryFilterKey = null;
+        state.aiSummaries = {};
+        setAiSummaryLoading();
         loadAiSummaries(false);
         loadConsoleData(false, { background: true });
         return true;
@@ -1249,18 +1259,26 @@ export function initManufacturingConsole(): () => void {
     }, 80);
   }
 
-  function applySummaryTexts(summaries) {
+  function applySummaryTexts(summaries, source) {
     const looksLikeStreamGarbage = (text) => {
       const t = String(text || '');
       return t.includes('response.output_text.delta') || /^data:\s*\{/.test(t.trim());
     };
+    const looksLikeTemplate = (text) => {
+      const t = String(text || '');
+      return /^Unplanned DT % is \d/.test(t.trim());
+    };
     ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
       const text = summaries?.[tab];
       if (!text || looksLikeStreamGarbage(text)) return;
+      if (source && source !== 'template-fallback' && source !== 'template' && looksLikeTemplate(text)) return;
+      state.aiSummaries[tab] = text;
       document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
         el.textContent = text;
+        if (source) el.dataset.summarySource = source;
       });
     });
+    if (source) state.summarySource = source;
   }
 
   async function pollSummaryJob(jobId, tabs) {
@@ -1292,7 +1310,10 @@ export function initManufacturingConsole(): () => void {
             ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
               merged[tab] = summaries[tab] || '';
             });
-            applySummaryTexts(merged);
+            applySummaryTexts(merged, job.result?.source);
+            if (job.result?.source === 'template-fallback' || job.result?.source === 'template') {
+              console.warn('[summaries] Using template fallback — configure Claude in .env (see SUMMARY_PROVIDER=claude)');
+            }
             resolve(job.result);
           }
         } catch (e) {
@@ -1325,9 +1346,12 @@ export function initManufacturingConsole(): () => void {
         const data = await res.json();
 
         if (data.summaries && (data.cached || !data._job_id)) {
-          applySummaryTexts(data.summaries);
+          applySummaryTexts(data.summaries, data.source);
           state.summaryFilterKey = key;
           state.summariesLoaded = true;
+          if (data.source === 'template-fallback' || data.source === 'template') {
+            console.warn('[summaries] Using template fallback — configure Claude in .env (see SUMMARY_PROVIDER=claude)');
+          }
           return;
         }
 
@@ -1340,13 +1364,20 @@ export function initManufacturingConsole(): () => void {
         state.summariesLoaded = true;
       } catch (err) {
         console.warn('[summaries]', err.message);
-        ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
-          document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-            if (String(el.textContent).includes('Loading') || String(el.textContent).includes('Generating AI')) {
-              el.textContent = `AI summary unavailable — ${err.message}`;
-            }
+        const fallback = templateSummaries();
+        if (Object.keys(fallback).length) {
+          applySummaryTexts(fallback, 'template-fallback');
+          state.summaryFilterKey = key;
+          state.summariesLoaded = true;
+        } else {
+          ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
+            document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+              if (String(el.textContent).includes('Loading') || String(el.textContent).includes('Generating AI')) {
+                el.textContent = `AI summary unavailable — ${err.message}`;
+              }
+            });
           });
-        });
+        }
       }
     }, 200);
   }
@@ -1534,7 +1565,7 @@ export function initManufacturingConsole(): () => void {
     state.dashboard = payload.dashboard || {};
     applyMetricsToState(metrics);
     updateMetricStripDOM(metrics.kpis);
-    updateAiSummariesDOM(metrics);
+    refreshAiSummariesForCurrentFilters();
     refreshDtAvgBadges();
     refreshAllTables();
     refreshChartsForTab(state.kpiTab);
@@ -1662,14 +1693,11 @@ export function initManufacturingConsole(): () => void {
     });
   }
 
-  function updateAiSummariesDOM(metrics) {
-    const tabs = metrics.tab_insights || {};
-    Object.entries(tabs).forEach(([tab, text]) => {
-      if (!text) return;
-      document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-        el.textContent = text;
-      });
-    });
+  function refreshAiSummariesForCurrentFilters() {
+    const key = JSON.stringify(apiFiltersFromState());
+    if (state.summariesLoaded && state.summaryFilterKey === key && Object.keys(state.aiSummaries).length) {
+      applySummaryTexts(state.aiSummaries, state.summarySource || undefined);
+    }
   }
 
   function bootstrapConsole() {
