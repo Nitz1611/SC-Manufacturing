@@ -9,7 +9,8 @@ import { loadEnv, repoRoot, sqlEnvStatus } from './lib/env.js';
 import { sqlConfigured } from './lib/databricksSql.js';
 import { verifyMetricViewAccess, warmupWarehouse } from './lib/analytics.js';
 import { startPreloadScheduler } from './lib/preload.js';
-import { resolveSummaryProvider, summaryProviderLabel } from './lib/summaryProvider.js';
+import { describeSummaryProvider, resolveSummaryProvider, summaryProviderLabel } from './lib/summaryProvider.js';
+import { testDatabricksReachability } from './lib/databricksFetch.js';
 
 loadEnv();
 const ROOT = repoRoot();
@@ -53,11 +54,14 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('╠══════════════════════════════════════════════════════╣');
   const mode = sqlConfigured() ? 'Live SQL (metric view)     ' : 'Demo fallback (no .env SQL)';
   console.log(`║  Mode       : ${mode.padEnd(38)}║`);
-  const provider = resolveSummaryProvider();
-  const sumMode = provider === 'template'
+  const summaryInfo = describeSummaryProvider();
+  const sumMode = summaryInfo.provider === 'template'
     ? 'Template summaries (no AI endpoint) '
-    : `${summaryProviderLabel(provider)} (AI summaries) `;
+    : `${summaryInfo.label} (AI summaries) `;
   console.log(`║  Summaries  : ${sumMode.padEnd(38)}║`);
+  if (summaryInfo.provider === 'template') {
+    console.log(`║  AI note    : ${summaryInfo.reason.slice(0, 38).padEnd(38)}║`);
+  }
   const env = sqlEnvStatus();
   if (env.env_file) {
     console.log(`║  .env       : ${env.env_file.slice(-38).padEnd(38)}║`);
@@ -76,6 +80,12 @@ app.listen(PORT, '0.0.0.0', () => {
   if (sqlConfigured()) {
     void (async () => {
       try {
+        const reach = await testDatabricksReachability();
+        if (!reach.ok) {
+          console.error(`[startup] ✗ Databricks unreachable: ${reach.error}`);
+          if (reach.proxy) console.error(`[startup]   proxy=${reach.proxy}`);
+          return;
+        }
         await warmupWarehouse();
         const test = await verifyMetricViewAccess();
         if (test.ok) {

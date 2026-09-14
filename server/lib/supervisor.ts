@@ -5,6 +5,7 @@
 import type { MetricsPayload } from '../../shared/types/dashboard.js';
 import { buildTabInsights } from './metricsTransform.js';
 import { buildSupervisorPrompt, type SummaryEntity } from './summaryPrompts.js';
+import { databricksFetch, databricksHost, databricksToken } from './databricksFetch.js';
 
 type Message = { role: string; content: string };
 type SupervisorInput = Message | Record<string, unknown>;
@@ -14,13 +15,11 @@ const MAX_CONTINUATIONS = Math.max(1, Number(process.env.SUPERVISOR_MAX_CONTINUA
 const LONG_TASK = String(process.env.SUPERVISOR_LONG_TASK ?? 'true').toLowerCase() !== 'false';
 
 function host(): string {
-  return (process.env.DATABRICKS_HOST || process.env.DATABRICKS_SERVER_HOSTNAME || '')
-    .replace(/^https?:\/\//, '')
-    .replace(/\/$/, '');
+  return databricksHost();
 }
 
 function token(): string {
-  return process.env.DATABRICKS_PAT_TOKEN || process.env.DATABRICKS_TOKEN || '';
+  return databricksToken();
 }
 
 function endpoint(): string {
@@ -274,7 +273,7 @@ async function postOnce(input: SupervisorInput[]): Promise<string> {
     body.databricks_options = databricksOptions;
   }
 
-  const resp = await fetch(url, {
+  const resp = await databricksFetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token()}`,

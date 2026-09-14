@@ -22,6 +22,7 @@ import {
 } from '../lib/jobs.js';
 import { getPreloadStatus, preloadEnabled } from '../lib/preload.js';
 import { resolveSummaryProvider, summaryProviderLabel, isFallbackSummarySource, allowTemplateFallback, describeSummaryProvider } from '../lib/summaryProvider.js';
+import { testDatabricksReachability } from '../lib/databricksFetch.js';
 import { getAllSupervisorSummaries, getSupervisorSummary } from '../lib/supervisor.js';
 import type { SummaryEntity } from '../lib/summaryPrompts.js';
 
@@ -123,11 +124,13 @@ async function generateBatchSummaries(
 
 export const summariesRouter = Router();
 
-summariesRouter.get('/summaries/status', (_req, res) => {
+summariesRouter.get('/summaries/status', async (_req, res) => {
+  const connectivity = await testDatabricksReachability();
   res.json({
     ok: true,
     ...describeSummaryProvider(),
     claude: claudeStatus(),
+    connectivity,
   });
 });
 

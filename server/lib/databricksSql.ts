@@ -1,14 +1,14 @@
 /**
  * Databricks SQL Statement Execution API — live queries against pgt_plnt_prodtn_metric_view.
  */
+import { databricksFetch, databricksHost, databricksToken } from './databricksFetch.js';
 
 function host(): string {
-  const h = process.env.DATABRICKS_HOST || process.env.DATABRICKS_SERVER_HOSTNAME || '';
-  return h.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  return databricksHost();
 }
 
 function token(): string {
-  return process.env.DATABRICKS_PAT_TOKEN || process.env.DATABRICKS_TOKEN || '';
+  return databricksToken();
 }
 
 export function sqlConfigured(): boolean {
@@ -44,7 +44,7 @@ async function pollStatement(statementId: string): Promise<Record<string, unknow
   const url = `https://${h}/api/2.0/sql/statements/${statementId}`;
 
   for (let attempt = 0; attempt < 90; attempt++) {
-    const resp = await fetch(url, {
+    const resp = await databricksFetch(url, {
       headers: { Authorization: `Bearer ${t}` },
     });
     if (!resp.ok) {
@@ -79,7 +79,7 @@ export async function executeStatement(sql: string): Promise<Record<string, unkn
   };
 
   console.log(`[databricks] executing SQL (${sql.length} chars)…`);
-  const resp = await fetch(url, {
+  const resp = await databricksFetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token()}`,

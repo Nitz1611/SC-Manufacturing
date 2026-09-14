@@ -4,6 +4,7 @@
  */
 import type { MetricsPayload } from '../../shared/types/dashboard.js';
 import { buildFilterContext, buildMetricsGroundingContext, type SummaryEntity } from './summaryPrompts.js';
+import { databricksFetch, databricksHost, databricksToken } from './databricksFetch.js';
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
@@ -25,13 +26,11 @@ const TAB_FOCUS: Record<SummaryEntity, string> = {
 };
 
 function host(): string {
-  return (process.env.DATABRICKS_HOST || process.env.DATABRICKS_SERVER_HOSTNAME || '')
-    .replace(/^https?:\/\//, '')
-    .replace(/\/$/, '');
+  return databricksHost();
 }
 
 function token(): string {
-  return process.env.DATABRICKS_PAT_TOKEN || process.env.DATABRICKS_TOKEN || '';
+  return databricksToken();
 }
 
 /** Default Databricks Claude serving endpoint name. */
@@ -194,7 +193,7 @@ async function invokeClaudeInvocations(messages: ChatMessage[]): Promise<string>
   console.log(`[claude] invocations → ${claudeEndpoint()} (${messages.length} messages)…`);
   const started = Date.now();
 
-  const resp = await fetch(url, {
+  const resp = await databricksFetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token()}`,
@@ -234,7 +233,7 @@ async function invokeClaudeAnthropic(messages: ChatMessage[]): Promise<string> {
   console.log(`[claude] anthropic/messages → ${claudeEndpoint()}…`);
   const started = Date.now();
 
-  const resp = await fetch(url, {
+  const resp = await databricksFetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token()}`,
