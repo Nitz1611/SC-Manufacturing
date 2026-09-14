@@ -3965,8 +3965,6 @@ export function initManufacturingConsole(): () => void {
     const ctx = canvas.getContext('2d');
     const days = filter === 'all' ? DAY_LABELS : [filter];
     const weeks = activeWeeks();
-    const useHours = isHoursDisplayMode();
-    const axis = chartYAxisConfig();
     const series = days.flatMap(day => activeDayTrendSeries(day).map(v => chartValueFromMetric(v)));
     const yScale = yScaleFromValues(series);
     state.charts[canvasId] = new Chart(canvas, {
