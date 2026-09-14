@@ -214,6 +214,9 @@
     liveMetrics: null,
     dashboard: null,
     metricsBase: null,
+    networkMetricsBase: null,
+    networkMetricsFilterKey: null,
+    metricsCache: new Map(),
     awaitingLiveData: true,
     dataLoading: false,
     dataPollTimer: null,
@@ -360,6 +363,19 @@
     return ['All', ...sitesForRegions(active)];
   }
 
+  function resolveSiteKey(site, siteByPeriod) {
+    if (!site || site === 'All') return null;
+    const upper = String(site).toUpperCase();
+    const map = siteByPeriod || state.liveMetrics?.site_by_period || state.networkMetricsBase?.site_by_period || {};
+    if (map[upper]) return upper;
+    const keys = Object.keys(map);
+    const exact = keys.find(k => k === upper);
+    if (exact) return exact;
+    const token = upper.split(/\s+/)[0];
+    const prefix = keys.find(k => k === token || k.startsWith(token) || upper.startsWith(k));
+    return prefix || upper;
+  }
+
   function activeHeatmapSites() {
     if (isLiveSql() && !hasLiveMetrics()) return [];
 
@@ -367,8 +383,8 @@
       const keys = Object.keys(state.liveMetrics?.site_by_period || {}).sort();
       const site = state.filters.site;
       if (site && site !== 'All') {
-        const siteKey = String(site).toUpperCase();
-        return [siteKey];
+        const siteKey = resolveSiteKey(site, state.liveMetrics?.site_by_period);
+        return siteKey ? [siteKey] : [String(site).toUpperCase()];
       }
       return keys.length ? keys : allMetricSites();
     }
@@ -410,11 +426,12 @@
   }
 
   function resolveSitePeriodTotals(site, metrics) {
+    const siteKey = resolveSiteKey(site, metrics?.site_by_period);
     if (isLiveSql(metrics)) {
-      const live = metrics?.site_by_period?.[site];
+      const live = metrics?.site_by_period?.[siteKey];
       return live?.length ? alignPeriodValues(live) : alignPeriodValues([]);
     }
-    const live = metrics?.site_by_period?.[site];
+    const live = metrics?.site_by_period?.[siteKey];
     if (live?.length) {
       const aligned = alignPeriodValues(live);
       if (periodValuesHaveSignal(aligned)) return aligned;
@@ -430,8 +447,9 @@
   }
 
   function resolveSitePeriodHours(site, metrics) {
+    const siteKey = resolveSiteKey(site, metrics?.site_by_period);
     if (isLiveSql(metrics)) {
-      const live = metrics?.site_by_period_hrs?.[site];
+      const live = metrics?.site_by_period_hrs?.[siteKey];
       return live?.length ? alignPeriodValues(live) : alignPeriodValues([]);
     }
     return resolveSitePeriodTotals(site, metrics).map(v => (v == null ? null : pctToHours(v)));
@@ -549,7 +567,7 @@
     const useHours = isHoursDisplayMode();
     const site = state.filters.site;
     if (site && site !== 'All') {
-      const siteKey = String(site).toUpperCase();
+      const siteKey = resolveSiteKey(site, state.liveMetrics?.site_by_period);
       const periods = alignPeriodValues(
         useHours
           ? state.liveMetrics?.site_by_period_hrs?.[siteKey]
@@ -822,6 +840,83 @@
     });
   }
 
+  function networkBaseFilterKey() {
+    const f = state.filters;
+    const tf = String(f.timeframe || 'FY').toLowerCase();
+    const tfMap = { fy: 'fiscal_year', quarter: 'quarter', month: 'month', week: 'week', year: 'fiscal_year' };
+    return JSON.stringify({
+      period: tfMap[tf] || tf,
+      year: f.year || '2026',
+    });
+  }
+
+  function rememberMetricsCache(base, filterKey) {
+    if (!base?.kpis) return;
+    state.metricsCache.set(filterKey, JSON.parse(JSON.stringify(base)));
+  }
+
+  function captureNetworkMetricsBase(base) {
+    if (!base?.site_by_period) return;
+    const siteCount = Object.keys(base.site_by_period).length;
+    if (siteCount <= 1) return;
+    const site = state.filters.site;
+    if (site && site !== 'All') return;
+    if (regionsSelected()) return;
+    state.networkMetricsBase = JSON.parse(JSON.stringify(base));
+    state.networkMetricsFilterKey = networkBaseFilterKey();
+  }
+
+  function allowedSitesFromBase(m) {
+    const keys = Object.keys(m?.site_by_period || {});
+    let sites = keys.length ? keys : allMetricSites();
+    const site = state.filters.site;
+    if (site && site !== 'All') {
+      const siteKey = resolveSiteKey(site, m.site_by_period);
+      return siteKey ? [siteKey] : [];
+    }
+    const active = regionsSelected();
+    if (active) {
+      const map = m.filter_options?.site_regions || metricSiteRegionMap();
+      sites = sites.filter(s => active.includes(map[String(s).toUpperCase()]));
+    }
+    return sites;
+  }
+
+  function siteHasSignalInBase(base, site) {
+    if (!site || site === 'All') return true;
+    const siteKey = resolveSiteKey(site, base?.site_by_period);
+    if (!siteKey) return false;
+    return periodValuesHaveSignal(base?.site_by_period?.[siteKey]);
+  }
+
+  function tryApplyInstantFilters(fromFilterId) {
+    const filterKey = dataFilterKey();
+    const cached = state.metricsCache.get(filterKey);
+    if (cached) {
+      state.metricsBase = cached;
+      state.lastDataFilterKey = filterKey;
+      applyConsoleData({ metrics: filterMetricsClient(cached), dashboard: {} });
+      setDataStatus('cached', 'Cached metrics · filter changes apply instantly');
+      loadAiSummaries(false);
+      return true;
+    }
+
+    const canSliceNetwork = fromFilterId === 'site' || fromFilterId === 'region';
+    if (canSliceNetwork && state.networkMetricsBase && state.networkMetricsFilterKey === networkBaseFilterKey()) {
+      if (siteHasSignalInBase(state.networkMetricsBase, state.filters.site)) {
+        const filtered = filterMetricsClient(state.networkMetricsBase);
+        state.lastDataFilterKey = filterKey;
+        applyConsoleData({ metrics: filtered, dashboard: {} });
+        setDataStatus('cached', 'Filtered instantly · refreshing details in background');
+        loadAiSummaries(false);
+        loadConsoleData(false, { background: true });
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function parsePct(value) {
     const n = parseFloat(String(value || '').replace('%', '').trim());
     return Number.isFinite(n) ? n : 6.2;
@@ -933,42 +1028,59 @@
   function filterMetricsClient(base) {
     if (!base) return base;
     const m = JSON.parse(JSON.stringify(base));
-    if (isLiveSql(m)) {
-      m.tab_insights = buildTabInsightsClient(m);
-      return m;
-    }
-
     const site = state.filters.site;
     const activeRegions = regionsSelected();
-    const allowedSites = new Set(activeHeatmapSites());
+    const allowedSites = new Set(allowedSitesFromBase(m));
 
-    const scopeSites = (obj) => Object.fromEntries(
-      Object.entries(obj || {}).filter(([s]) => allowedSites.has(s)),
-    );
+    const scopeSites = (obj) => {
+      if (!obj) return obj;
+      return Object.fromEntries(Object.entries(obj).filter(([s]) => allowedSites.has(s)));
+    };
 
     if (m.site_by_period) m.site_by_period = scopeSites(m.site_by_period);
+    if (m.site_by_period_hrs) m.site_by_period_hrs = scopeSites(m.site_by_period_hrs);
     if (m.top_sites_trend) m.top_sites_trend = scopeSites(m.top_sites_trend);
+    if (m.top_sites_trend_hrs) m.top_sites_trend_hrs = scopeSites(m.top_sites_trend_hrs);
     if (m.site_category_by_period) m.site_category_by_period = scopeSites(m.site_category_by_period);
+    if (m.site_category_by_period_hrs) m.site_category_by_period_hrs = scopeSites(m.site_category_by_period_hrs);
     if (m.site_line_by_period) m.site_line_by_period = scopeSites(m.site_line_by_period);
+    if (m.site_line_by_period_hrs) m.site_line_by_period_hrs = scopeSites(m.site_line_by_period_hrs);
 
     if (site && site !== 'All') {
-      const siteKey = String(site).toUpperCase();
-      if (m.site_by_period?.[siteKey]) m.site_by_period = { [siteKey]: m.site_by_period[siteKey] };
-      if (m.top_sites_trend?.[siteKey]) m.top_sites_trend = { [siteKey]: m.top_sites_trend[siteKey] };
-      const sqlScoped = m.meta?.source === 'sql' || m.meta?.filtered_site === siteKey;
-      if (m.period_trend?.length && !sqlScoped) {
-        const mult = SITE_MULTIPLIERS[siteKey] || 1;
-        m.period_trend = m.period_trend.map(v => +(Number(v) * mult * 0.95).toFixed(2));
+      const siteKey = resolveSiteKey(site, m.site_by_period);
+      if (siteKey && m.site_by_period?.[siteKey]) {
+        m.site_by_period = { [siteKey]: m.site_by_period[siteKey] };
+        if (m.site_by_period_hrs?.[siteKey]) m.site_by_period_hrs = { [siteKey]: m.site_by_period_hrs[siteKey] };
+        else if (m.site_by_period_hrs) m.site_by_period_hrs = {};
+        if (m.top_sites_trend?.[siteKey]) m.top_sites_trend = { [siteKey]: m.top_sites_trend[siteKey] };
+        if (m.top_sites_trend_hrs?.[siteKey]) m.top_sites_trend_hrs = { [siteKey]: m.top_sites_trend_hrs[siteKey] };
+        if (m.site_category_by_period?.[siteKey]) m.site_category_by_period = { [siteKey]: m.site_category_by_period[siteKey] };
+        if (m.site_category_by_period_hrs?.[siteKey]) m.site_category_by_period_hrs = { [siteKey]: m.site_category_by_period_hrs[siteKey] };
+        if (m.site_line_by_period?.[siteKey]) m.site_line_by_period = { [siteKey]: m.site_line_by_period[siteKey] };
+        if (m.site_line_by_period_hrs?.[siteKey]) m.site_line_by_period_hrs = { [siteKey]: m.site_line_by_period_hrs[siteKey] };
+
+        if (m.site_by_period[siteKey]?.length) {
+          m.period_trend = [...m.site_by_period[siteKey]];
+        }
+        if (m.site_by_period_hrs?.[siteKey]?.length) {
+          m.period_trend_hrs = [...m.site_by_period_hrs[siteKey]];
+        }
+        if (m.site_category_by_period?.[siteKey]) m.category_by_period = m.site_category_by_period[siteKey];
+        if (m.site_category_by_period_hrs?.[siteKey]) m.category_by_period_hrs = m.site_category_by_period_hrs[siteKey];
+        if (m.site_line_by_period?.[siteKey]) m.line_by_period = m.site_line_by_period[siteKey];
+        if (m.site_line_by_period_hrs?.[siteKey]) m.line_by_period_hrs = m.site_line_by_period_hrs[siteKey];
+
+        m.meta = { ...(m.meta || {}), filtered_site: siteKey };
+      } else if (isLiveSql(m)) {
+        m.meta = { ...(m.meta || {}), filtered_site: siteKey || String(site).toUpperCase() };
+      } else {
+        const siteKeyFallback = String(site).toUpperCase();
+        const mult = SITE_MULTIPLIERS[siteKeyFallback] || 1;
+        if (m.period_trend?.length) {
+          m.period_trend = m.period_trend.map(v => +(Number(v) * mult * 0.95).toFixed(2));
+        }
+        m.meta = { ...(m.meta || {}), filtered_site: siteKeyFallback };
       }
-      if (sqlScoped && m.site_by_period?.[siteKey]?.length) {
-        const scoped = alignPeriodValues(m.site_by_period[siteKey]);
-        if (periodValuesHaveSignal(scoped)) m.period_trend = scoped;
-      }
-      if (!periodValuesHaveSignal(m.period_trend) && !isLiveSql(m)) {
-        const resolved = resolveSitePeriodTotals(siteKey, m);
-        if (periodValuesHaveSignal(resolved)) m.period_trend = resolved;
-      }
-      m.meta = { ...(m.meta || {}), filtered_site: siteKey };
     } else if (activeRegions) {
       const siteEntries = Object.entries(m.site_by_period || {});
       if (siteEntries.length && m.period_trend?.length) {
@@ -983,23 +1095,71 @@
     }
 
     m.tab_insights = buildTabInsightsClient(m);
-    if (isLiveSql(m)) return m;
     m.kpis = deriveKpisFromMetrics(m);
     return m;
   }
 
   function deriveKpisFromMetrics(m) {
     const base = m.kpis || {};
-    if (isLiveSql(m)) return base;
+    const siteKey = m.meta?.filtered_site;
+    const sqlFiltered = isLiveSql(m) && siteKey;
+
+    if (isLiveSql(m) && !siteKey) return base;
+
     const rawPct = parseFloat(String(base.downtime_pct?.value || '').replace('%', '').trim());
     let dtPct = Number.isFinite(rawPct) ? rawPct : 0;
     let dtHrs = parseHoursValue(base.downtime_hrs?.value);
     let stops = parseInt(String(base.stops?.value || '0').replace(/,/g, ''), 10);
     if (Number.isNaN(stops)) stops = 0;
 
-    const sites = activeHeatmapSites();
+    const sites = siteKey ? [siteKey] : activeHeatmapSites();
     let periodVals = sites.flatMap(s => resolveSitePeriodTotals(s, m))
       .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0);
+
+    if (!periodVals.length && m.period_trend?.length) {
+      periodVals = m.period_trend.filter(v => v != null && Number(v) > 0);
+    }
+
+    if (sqlFiltered) {
+      const hrsVals = (m.site_by_period_hrs?.[siteKey] || m.period_trend_hrs || [])
+        .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0)
+        .map(v => Number(v));
+      if (periodVals.length) {
+        dtPct = periodVals.reduce((a, b) => a + Number(b), 0) / periodVals.length;
+      }
+      if (hrsVals.length) {
+        dtHrs = hrsVals.reduce((a, b) => a + Number(b), 0);
+      } else if (dtHrs === 0 && dtPct > 0) {
+        const mult = SITE_MULTIPLIERS[siteKey] || 1;
+        const n = activePeriods().length || 10;
+        dtHrs = Math.round((112474 / 6.2) * dtPct * mult * (periodVals.length / n));
+      }
+      if (stops === 0 && dtPct > 0) {
+        const mult = SITE_MULTIPLIERS[siteKey] || 1;
+        stops = Math.max(1, Math.round(819 * (dtPct / 6.2) * mult));
+      }
+      const benchmark = dtPct > 0 ? dtPct : 6.2;
+      return {
+        downtime_pct: {
+          value: `${dtPct.toFixed(2)}%`,
+          delta: base.downtime_pct?.delta || 'vs prior period',
+          direction: dtPct === 0 ? 'neutral' : dtPct >= benchmark * 1.05 ? 'bad' : 'good',
+        },
+        downtime_hrs: {
+          value: `${Math.round(dtHrs).toLocaleString()} h`,
+          delta: base.downtime_hrs?.delta || '',
+          direction: dtHrs === 0 ? 'neutral' : (base.downtime_hrs?.direction || 'warn'),
+        },
+        stops: {
+          value: String(stops || 0),
+          delta: base.stops?.delta || '',
+          direction: stops === 0 ? 'neutral' : (base.stops?.direction || 'warn'),
+        },
+        oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
+      };
+    }
+
+    if (isLiveSql(m)) return base;
 
     if (!periodVals.length && m.period_trend?.length) {
       periodVals = m.period_trend.filter(v => v != null && Number(v) > 0);
@@ -1056,6 +1216,7 @@
         return;
       }
       applySiteFilterUiState();
+      if (tryApplyInstantFilters(fromFilterId)) return;
       state.summariesLoaded = false;
       state.summaryFilterKey = null;
       setAiSummaryLoading();
@@ -1161,12 +1322,13 @@
     }, 200);
   }
 
-  async function loadConsoleData(force = false) {
+  async function loadConsoleData(force = false, opts = {}) {
+    const background = Boolean(opts.background);
     if (state.dataPollTimer) {
       clearInterval(state.dataPollTimer);
       state.dataPollTimer = null;
     }
-    state.metricsJobId = null;
+    if (!background) state.metricsJobId = null;
 
     const filterKey = dataFilterKey();
     const filtersChanged = Boolean(state.lastDataFilterKey && state.lastDataFilterKey !== filterKey);
@@ -1176,7 +1338,7 @@
       resetMetricsDisplayForLoading();
       setDataStatus('loading', 'Loading unplanned DT metrics…');
       setBootStatus('Loading unplanned DT metrics');
-    } else if (filtersChanged) {
+    } else if (filtersChanged && !background) {
       setDataStatus('loading', 'Applying filters…');
     }
 
@@ -1193,22 +1355,37 @@
       const data = await res.json();
 
       if (data.error && !data.metrics) {
-        setDataStatus('error', data.error.slice(0, 120));
-        setBootStatus('Unable to load metrics');
-        dismissBootSplash();
-        state.dataLoading = false;
+        if (!background) {
+          setDataStatus('error', data.error.slice(0, 120));
+          setBootStatus('Unable to load metrics');
+          dismissBootSplash();
+          state.dataLoading = false;
+        }
         return;
       }
 
       const isRefreshing = Boolean(data._job_id && data._refreshing);
       if (data.metrics && !isRefreshing) {
         state.metricsBase = data.metrics;
-        state.lastDataFilterKey = dataFilterKey();
+        rememberMetricsCache(data.metrics, filterKey);
+        captureNetworkMetricsBase(data.metrics);
+        state.lastDataFilterKey = filterKey;
         applyConsoleData({ metrics: filterMetricsClient(data.metrics), dashboard: data.dashboard || {} });
         dismissBootSplash();
-        loadAiSummaries(false);
+        if (!background) loadAiSummaries(false);
       } else if (isRefreshing) {
-        resetMetricsDisplayForLoading();
+        if (data.metrics) {
+          rememberMetricsCache(data.metrics, filterKey);
+          captureNetworkMetricsBase(data.metrics);
+          if (!state.liveMetrics || background) {
+            state.metricsBase = data.metrics;
+            state.lastDataFilterKey = filterKey;
+            applyConsoleData({ metrics: filterMetricsClient(data.metrics), dashboard: data.dashboard || {} });
+            dismissBootSplash();
+          }
+        } else if (!state.liveMetrics && !background) {
+          resetMetricsDisplayForLoading();
+        }
       }
 
       if (data._job_id) {
@@ -1216,31 +1393,35 @@
         state.dataLoading = true;
         state.metricsJobId = data._job_id;
         state.metricsJobFilterKey = filterKey;
-        setDataStatus('loading', data._refreshing ? 'Refreshing from metric view…' : 'Querying Databricks…');
-        if (!data.metrics) setBootStatus('Querying Databricks metric view');
-        state.dataPollTimer = setInterval(() => pollConsoleJob(data._job_id, false), pollMs);
-        pollConsoleJob(data._job_id, false);
+        if (!background) {
+          setDataStatus('loading', data._refreshing ? 'Refreshing from metric view…' : 'Querying Databricks…');
+          if (!data.metrics) setBootStatus('Querying Databricks metric view');
+        }
+        state.dataPollTimer = setInterval(() => pollConsoleJob(data._job_id, background), pollMs);
+        pollConsoleJob(data._job_id, background);
       } else if (data._cached && data.metrics && !isRefreshing) {
         setDataStatus('cached', 'Cached metrics · filter changes apply instantly');
         state.dataLoading = false;
-        if (!data.metrics) loadAiSummaries(false);
+        if (!background && !data.metrics) loadAiSummaries(false);
       } else if (data._source === 'sql' || data.metrics?.meta?.source === 'sql') {
-        setDataStatus('live', 'Live unplanned DT data from metric view');
+        if (!background) setDataStatus('live', 'Live unplanned DT data from metric view');
         state.dataLoading = false;
-        if (!data.metrics) loadAiSummaries(false);
+        if (!background && !data.metrics) loadAiSummaries(false);
       } else if (data._cached && isDemoMetrics(data.metrics)) {
         setDataStatus('cached', 'Demo data · CONSOLE_DEMO_MODE enabled');
         state.dataLoading = false;
-        if (!data.metrics) loadAiSummaries(false);
+        if (!background && !data.metrics) loadAiSummaries(false);
       } else {
         state.dataLoading = false;
-        if (!data.metrics) loadAiSummaries(false);
+        if (!background && !data.metrics) loadAiSummaries(false);
       }
     } catch (err) {
       state.dataLoading = false;
-      setDataStatus('error', `Data load failed: ${err.message}`);
-      setBootStatus('Connection issue — loading interface');
-      dismissBootSplash();
+      if (!background) {
+        setDataStatus('error', `Data load failed: ${err.message}`);
+        setBootStatus('Connection issue — loading interface');
+        dismissBootSplash();
+      }
       console.warn('[console-data]', err);
     }
   }
@@ -1281,11 +1462,13 @@
       if (job.status === 'done' && job.result?.metrics) {
         if (state.metricsJobFilterKey && state.metricsJobFilterKey !== dataFilterKey()) return;
         state.metricsBase = job.result.metrics;
+        rememberMetricsCache(job.result.metrics, dataFilterKey());
+        captureNetworkMetricsBase(job.result.metrics);
         state.lastDataFilterKey = dataFilterKey();
         applyConsoleData({ metrics: filterMetricsClient(job.result.metrics), dashboard: {} });
-        setDataStatus('live', 'Live unplanned DT data from metric view');
+        if (!background) setDataStatus('live', 'Live unplanned DT data from metric view');
         dismissBootSplash();
-        loadAiSummaries(false);
+        if (!background) loadAiSummaries(false);
       }
     } catch (err) {
       console.warn('[poll]', err.message);
@@ -1495,9 +1678,11 @@
   }
 
   function categoryPctForSiteHeatmap(site, category) {
-    const siteKey = String(site).toUpperCase();
+    const siteKey = resolveSiteKey(site, state.liveMetrics?.site_category_by_period || state.liveMetrics?.site_by_period);
     const liveSiteCat = state.liveMetrics?.site_category_by_period?.[siteKey]?.[category];
     if (liveSiteCat?.length) return alignPeriodValues(liveSiteCat);
+    const scopedCat = state.liveMetrics?.category_by_period?.[category];
+    if (scopedCat?.length && isSiteFiltered()) return alignPeriodValues(scopedCat);
     if (isLiveSql()) return alignPeriodValues([]);
 
     const sitePeriods = sitePeriodPct(site);
@@ -1517,9 +1702,11 @@
   }
 
   function categoryHoursForSiteHeatmap(site, category) {
-    const siteKey = String(site).toUpperCase();
+    const siteKey = resolveSiteKey(site, state.liveMetrics?.site_category_by_period_hrs || state.liveMetrics?.site_by_period);
     const liveSiteHrs = state.liveMetrics?.site_category_by_period_hrs?.[siteKey]?.[category];
     if (liveSiteHrs?.length) return alignPeriodValues(liveSiteHrs);
+    const scopedHrs = state.liveMetrics?.category_by_period_hrs?.[category];
+    if (scopedHrs?.length && isSiteFiltered()) return alignPeriodValues(scopedHrs);
     if (isLiveSql()) return alignPeriodValues([]);
     return categoryPctForSiteHeatmap(site, category).map(v => (v == null ? null : pctToHours(v)));
   }
@@ -2800,11 +2987,13 @@
   }
 
   function linePctForSite(site, line) {
-    const siteKey = String(site).toUpperCase();
+    const siteKey = resolveSiteKey(site, state.liveMetrics?.site_line_by_period || state.liveMetrics?.site_by_period);
     const lineKey = String(line).toUpperCase();
     const liveSiteLine = state.liveMetrics?.site_line_by_period?.[siteKey]?.[lineKey]
       || state.liveMetrics?.site_line_by_period?.[siteKey]?.[line];
     if (liveSiteLine?.length) return alignPeriodValues(liveSiteLine);
+    const scopedLine = state.liveMetrics?.line_by_period?.[lineKey] || state.liveMetrics?.line_by_period?.[line];
+    if (scopedLine?.length && isSiteFiltered()) return alignPeriodValues(scopedLine);
     if (isLiveSql()) return alignPeriodValues([]);
 
     const live = state.liveMetrics?.line_by_period?.[lineKey] || state.liveMetrics?.line_by_period?.[line];
@@ -2818,11 +3007,13 @@
   }
 
   function lineHoursForSite(site, line) {
-    const siteKey = String(site).toUpperCase();
+    const siteKey = resolveSiteKey(site, state.liveMetrics?.site_line_by_period_hrs || state.liveMetrics?.site_by_period);
     const lineKey = String(line).toUpperCase();
     const liveSiteLine = state.liveMetrics?.site_line_by_period_hrs?.[siteKey]?.[lineKey]
       || state.liveMetrics?.site_line_by_period_hrs?.[siteKey]?.[line];
     if (liveSiteLine?.length) return alignPeriodValues(liveSiteLine);
+    const scopedLine = state.liveMetrics?.line_by_period_hrs?.[lineKey] || state.liveMetrics?.line_by_period_hrs?.[line];
+    if (scopedLine?.length && isSiteFiltered()) return alignPeriodValues(scopedLine);
     if (isLiveSql()) return alignPeriodValues([]);
     return linePctForSite(site, line).map(v => (v == null ? null : pctToHours(v)));
   }
