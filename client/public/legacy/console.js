@@ -214,6 +214,7 @@
     liveMetrics: null,
     dashboard: null,
     metricsBase: null,
+    awaitingLiveData: true,
     dataLoading: false,
     dataPollTimer: null,
     dataReloadTimer: null,
@@ -255,7 +256,42 @@
     return m?.meta?.source === 'sql';
   }
 
+  function isDemoMetrics(metrics) {
+    const m = metrics || state.liveMetrics;
+    return m?.meta?.source === 'demo';
+  }
+
+  function hasLiveMetrics() {
+    if (state.awaitingLiveData) return false;
+    const m = state.liveMetrics;
+    if (!m?.kpis) return false;
+    return isLiveSql(m) || isDemoMetrics(m);
+  }
+
+  function metricsLoadingPlaceholder(message = 'Loading data from metric view…') {
+    return `<div class="metrics-loading-placeholder" role="status"><span class="metrics-loading-spinner" aria-hidden="true"></span><span>${message}</span></div>`;
+  }
+
+  function resetMetricsDisplayForLoading() {
+    state.awaitingLiveData = true;
+    document.querySelectorAll('.metric-strip-root').forEach(root => {
+      root.innerHTML = `
+        <div class="metric-card"><div class="metric-label">Unplanned DT %</div><div class="metric-value">—</div><div class="metric-delta neutral">Loading…</div></div>
+        <div class="metric-card"><div class="metric-label">Unplanned DT Hours</div><div class="metric-value">—</div><div class="metric-delta neutral"></div></div>
+        <div class="metric-card"><div class="metric-label">STOPS</div><div class="metric-value">—</div><div class="metric-delta neutral"></div></div>
+        <div class="metric-card"><div class="metric-label">OEE</div><div class="metric-value">—</div><div class="metric-delta neutral"></div></div>`;
+    });
+    setAiSummaryLoading();
+    refreshAllTables();
+  }
+
   function allMetricSites() {
+    if (!hasLiveMetrics()) {
+      if (state.metricSites?.length) return state.metricSites;
+      const fo = state.liveMetrics?.filter_options;
+      if (fo?.sites?.length) return fo.sites;
+      return [];
+    }
     if (state.metricSites?.length) return state.metricSites;
     const fo = state.liveMetrics?.filter_options;
     if (fo?.sites?.length) return fo.sites;
@@ -320,6 +356,8 @@
   }
 
   function activeHeatmapSites() {
+    if (isLiveSql() && !hasLiveMetrics()) return [];
+
     if (isLiveSql()) {
       const keys = Object.keys(state.liveMetrics?.site_by_period || {}).sort();
       const site = state.filters.site;
@@ -431,7 +469,7 @@
     updateFilterContext();
     refreshAllTables();
     refreshChartsForTab(state.kpiTab);
-    if (state.liveMetrics?.kpis) updateMetricStripDOM(state.liveMetrics.kpis);
+    if (hasLiveMetrics()) updateMetricStripDOM(state.liveMetrics.kpis);
     refreshDtAvgBadges();
   }
 
@@ -560,8 +598,10 @@
     const v = parseHoursValue(state.liveMetrics?.kpis?.downtime_hrs?.value);
     if (v > 0) return v;
     const avg = yearAvgDtPct();
-    if (avg > 0) return Math.round((112474 / 6.2) * avg);
-    return 112474;
+    if (avg > 0 && state.liveMetrics?.period_trend?.length) {
+      return Math.round((state.liveMetrics.period_trend.filter(v => v != null).reduce((a, b) => a + Number(b), 0) / avg) || 0);
+    }
+    return 0;
   }
 
   function yearAvgDtPct() {
@@ -575,7 +615,7 @@
 
     const kpi = parsePct(state.liveMetrics?.kpis?.downtime_pct?.value);
     if (kpi > 0) return kpi;
-    return 6.2;
+    return 0;
   }
 
   function chartValueFromPct(pct) {
@@ -968,7 +1008,7 @@
         refreshAllTables();
         refreshChartsForTab(state.kpiTab);
         refreshCardChartViews();
-        if (state.liveMetrics?.kpis) updateMetricStripDOM(state.liveMetrics.kpis);
+        if (hasLiveMetrics()) updateMetricStripDOM(state.liveMetrics.kpis);
         refreshDtAvgBadges();
         updateFilterContext();
         return;
@@ -982,9 +1022,8 @@
   }
 
   function applySummaryTexts(summaries) {
-    const fallback = templateSummaries();
     ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
-      const text = summaries?.[tab] || fallback[tab];
+      const text = summaries?.[tab];
       if (!text) return;
       document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
         el.textContent = text;
@@ -1002,7 +1041,7 @@
           if (job.status === 'running') {
             tabs.forEach(tab => {
               document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-                el.textContent = `✦ Supervisor querying Genie… ${job.elapsed || 0}s`;
+                el.textContent = '✦ Supervisor querying Genie…';
               });
             });
             return;
@@ -1019,7 +1058,7 @@
             const summaries = job.result?.summaries || {};
             const merged = {};
             ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
-              merged[tab] = summaries[tab] || templateSummaries()[tab] || '';
+              merged[tab] = summaries[tab] || '';
             });
             applySummaryTexts(merged);
             resolve(job.result);
@@ -1069,20 +1108,13 @@
         state.summariesLoaded = true;
       } catch (err) {
         console.warn('[summaries]', err.message);
-        const fallback = templateSummaries();
-        if (Object.keys(fallback).length) {
-          applySummaryTexts(fallback);
-          state.summaryFilterKey = key;
-          state.summariesLoaded = true;
-        } else {
-          ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
-            document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
-              if (String(el.textContent).includes('Loading') || String(el.textContent).includes('Supervisor')) {
-                el.textContent = `AI summary unavailable — ${err.message}`;
-              }
-            });
+        ['overview', 'category', 'line', 'dow', 'reason'].forEach(tab => {
+          document.querySelectorAll(`[data-ai-summary="${tab}"]`).forEach(el => {
+            if (String(el.textContent).includes('Loading') || String(el.textContent).includes('Supervisor')) {
+              el.textContent = `AI summary unavailable — ${err.message}`;
+            }
           });
-        }
+        });
       }
     }, 200);
   }
@@ -1100,8 +1132,8 @@
 
     const showLoading = !state.metricsBase || shouldForce;
     if (showLoading) {
+      resetMetricsDisplayForLoading();
       setDataStatus('loading', 'Loading unplanned DT metrics…');
-      setAiSummaryLoading();
       setBootStatus('Loading unplanned DT metrics');
     }
 
@@ -1119,18 +1151,21 @@
 
       if (data.error && !data.metrics) {
         setDataStatus('error', data.error.slice(0, 120));
-        setBootStatus('Unable to load metrics — showing cached layout');
+        setBootStatus('Unable to load metrics');
         dismissBootSplash();
         state.dataLoading = false;
         return;
       }
 
-      if (data.metrics) {
+      const isRefreshing = Boolean(data._job_id && data._refreshing);
+      if (data.metrics && !isRefreshing) {
         state.metricsBase = data.metrics;
         state.lastDataFilterKey = dataFilterKey();
         applyConsoleData({ metrics: filterMetricsClient(data.metrics), dashboard: data.dashboard || {} });
         dismissBootSplash();
         loadAiSummaries(false);
+      } else if (isRefreshing) {
+        resetMetricsDisplayForLoading();
       }
 
       if (data._job_id) {
@@ -1146,8 +1181,8 @@
         setDataStatus('live', 'Live unplanned DT data from metric view');
         state.dataLoading = false;
         if (!data.metrics) loadAiSummaries(false);
-      } else if (data._cached) {
-        setDataStatus('cached', 'Cached/demo data · check .env SQL settings');
+      } else if (data._cached && isDemoMetrics(data.metrics)) {
+        setDataStatus('cached', 'Demo data · CONSOLE_DEMO_MODE enabled');
         state.dataLoading = false;
         if (!data.metrics) loadAiSummaries(false);
       } else {
@@ -1170,7 +1205,7 @@
       const job = await res.json();
 
       if (job.status === 'running') {
-        const msg = job.message || `Querying metric view… ${job.elapsed || 0}s`;
+        const msg = job.message || 'Querying metric view…';
         if (!background) {
           setDataStatus('loading', msg);
           setBootStatus(msg);
@@ -1189,8 +1224,8 @@
         if (!state.metricsBase) {
           setDataStatus('error', (job.error || 'Refresh failed').slice(0, 120));
           dismissBootSplash();
-        } else {
-          setDataStatus('cached', 'Showing cached data · refresh failed');
+        } else if (state.metricsBase) {
+          setDataStatus('error', 'Refresh failed · showing last loaded data');
         }
         loadAiSummaries(false);
         return;
@@ -1235,6 +1270,7 @@
 
   function applyConsoleData(payload) {
     const metrics = payload.metrics || payload;
+    state.awaitingLiveData = false;
     state.liveMetrics = metrics;
     state.dashboard = payload.dashboard || {};
     applyMetricsToState(metrics);
@@ -1336,7 +1372,7 @@
   }
 
   function updateMetricStripDOM(kpis) {
-    if (!kpis) return;
+    if (!kpis || !hasLiveMetrics()) return;
     const resolved = deriveKpisFromMetrics({ kpis, site_by_period: state.liveMetrics?.site_by_period, period_trend: state.liveMetrics?.period_trend });
     const dt = resolved.downtime_pct || {};
     const dtHrs = resolved.downtime_hrs || {};
@@ -1780,6 +1816,15 @@
   }
 
   function refreshAllTables() {
+    if (!hasLiveMetrics()) {
+      ['view-category-table', 'view-heatmap-table', 'view-line-table', 'view-line-tab-table', 'view-dow-table'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = metricsLoadingPlaceholder();
+      });
+      const reasonBody = document.querySelector('.reason-table-body');
+      if (reasonBody) reasonBody.innerHTML = metricsLoadingPlaceholder();
+      return;
+    }
     const metricLabel = tableMetricLabel();
     document.querySelectorAll('.data-card-title').forEach(el => {
       const t = el.textContent || '';
@@ -2559,11 +2604,12 @@
     });
     state.kpiTab = tabId;
     updateTopNavUI();
-    if (state.liveMetrics?.kpis) updateMetricStripDOM(state.liveMetrics.kpis);
+    if (hasLiveMetrics()) updateMetricStripDOM(state.liveMetrics.kpis);
     requestAnimationFrame(() => refreshChartsForTab(tabId));
   }
 
   function refreshChartsForTab(tabId) {
+    if (!hasLiveMetrics()) return;
     if (tabId === 'overview') initOverviewCharts();
     else initTabCharts(tabId);
   }
@@ -2581,21 +2627,21 @@
   function aiSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text" data-ai-summary="overview">Overall unplanned downtime shows variation across sites, lines, categories, days, and periods. Equipment and Changeover categories drive the largest share at Aberdeen, with BCP1 and SUN1 lines contributing disproportionately. Latest periods (P8–P10) show an upward trend — prioritize Mechanical failure root causes and Shift B handover gaps.</p>
+      <p class="ai-summary-text" data-ai-summary="overview">✦ AI Summary Loading…</p>
     </div></div>`;
   }
 
   function categoryTabSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text" data-ai-summary="category">Unplanned downtime is primarily driven by a few key categories and sites. Equipment and Operation categories contribute the largest share across the network, while Bridgeview and Brookhollow lead site-level totals. Periods P8–P10 show elevated Equipment downtime — prioritize mechanical failure root causes and cross-site benchmarking for Changeover and Sanitation categories.</p>
+      <p class="ai-summary-text" data-ai-summary="category">✦ AI Summary Loading…</p>
     </div></div>`;
   }
 
   function lineTabSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text" data-ai-summary="line">Line-level downtime is concentrated in a few high-impact line/category combinations. TCS1 and SUN1 at Aberdeen drive disproportionate share, while Bridgeview site totals remain elevated across periods. Prioritize mechanical failures on top lines and standardize changeover procedures across HP17T1 and FLK17T1 performers.</p>
+      <p class="ai-summary-text" data-ai-summary="line">✦ AI Summary Loading…</p>
     </div></div>`;
   }
 
@@ -2628,6 +2674,7 @@
   }
 
   function buildLineHeatmapTable(showLegend = true) {
+    if (!hasLiveMetrics()) return metricsLoadingPlaceholder();
     const compareReady = state.compareMode && state.compareContext === 'line' ? ' compare-ready' : '';
     const periods = activePeriods();
     const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
@@ -2706,7 +2753,7 @@
         </div>
       </div>
       <div class="data-card-body">
-        <div id="view-line-tab-table" class="panel-overlay-host">${buildLineHeatmapTable(false)}</div>
+        <div id="view-line-tab-table" class="panel-overlay-host">${metricsLoadingPlaceholder()}</div>
       </div>
     </div>`;
   }
@@ -2734,18 +2781,19 @@
   function dowTabSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text" data-ai-summary="dow">Unplanned downtime varies meaningfully by day of week and shift. Thursday and Tuesday show the highest DT % across recent weeks, while Saturday remains the lowest. Shift 1 consistently drives elevated downtime on Sundays and Thursdays — prioritize handover gaps and mechanical failures on those combinations for targeted improvement.</p>
+      <p class="ai-summary-text" data-ai-summary="dow">✦ AI Summary Loading…</p>
     </div></div>`;
   }
 
   function reasonTabSummaryHTML() {
     return `<div class="ai-summary"><div class="ai-summary-icon">✦</div><div>
       <div class="ai-summary-label">AI Summary</div>
-      <p class="ai-summary-text" data-ai-summary="reason">Unplanned DT % fluctuates across periods with a recent peak in P4 (8.85%) and a low in P3 (7.49%). "No Event" remains the top contributor at 6,255 hours (0.48%), followed by Unplanned Sanitation and Insufficient Qualified Staff. Focus root-cause reduction on the top three reasons to drive the largest period-over-period improvement.</p>
+      <p class="ai-summary-text" data-ai-summary="reason">✦ AI Summary Loading…</p>
     </div></div>`;
   }
 
   function buildReasonTable(count = 20) {
+    if (!hasLiveMetrics()) return metricsLoadingPlaceholder();
     const rows = activeReasonsData().slice(0, count);
     const maxHours = rows[0]?.hours || 1;
     return `<div class="table-scroll reason-table-scroll">
@@ -2789,6 +2837,7 @@
   }
 
   function buildDowHeatmapTable(showLegend = true) {
+    if (!hasLiveMetrics()) return metricsLoadingPlaceholder();
     const compareReady = state.compareMode && state.compareContext === 'dow' ? ' compare-ready' : '';
     const weeks = activeWeeks();
     const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
@@ -2862,7 +2911,7 @@
         </div>
       </div>
       <div class="data-card-body">
-        <div id="view-dow-table" class="panel-overlay-host">${buildDowHeatmapTable(false)}</div>
+        <div id="view-dow-table" class="panel-overlay-host">${metricsLoadingPlaceholder()}</div>
       </div>
     </div>`;
   }
@@ -2888,6 +2937,7 @@
   }
 
   function buildHeatmapTable(showLegend = true) {
+    if (!hasLiveMetrics()) return metricsLoadingPlaceholder();
     const compareReady = state.compareMode && (state.compareContext === 'category' || state.compareContext === 'heatmap') ? ' compare-ready' : '';
     const periods = activePeriods();
     const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
@@ -2978,7 +3028,7 @@
         </div>
       </div>
       <div class="data-card-body">
-        <div id="view-heatmap-table" class="panel-overlay-host category-table-view">${buildHeatmapTable(false)}</div>
+        <div id="view-heatmap-table" class="panel-overlay-host category-table-view">${metricsLoadingPlaceholder()}</div>
       </div>
     </div>`;
   }
@@ -3077,10 +3127,10 @@
     overview.innerHTML = `
       ${metricStripHTML()}${aiSummaryHTML()}
       ${dataCard('Unplanned DT % by Category',
-        `<div id="view-category-table" class="panel-overlay-host category-table-view">${buildHeatmapTable(true)}</div>
+        `<div id="view-category-table" class="panel-overlay-host category-table-view">${metricsLoadingPlaceholder()}</div>
          <div id="view-category-chart" class="hidden-view panel-overlay-host"><div class="chart-wrap chart-wrap-pro"><canvas id="chart-category"></canvas></div></div>`, 'category', true, 'export-overview-category')}
       ${dataCard('Unplanned DT % by Line/Category',
-        `<div id="view-line-table" class="panel-overlay-host">${buildLineHeatmapTable()}</div>
+        `<div id="view-line-table" class="panel-overlay-host">${metricsLoadingPlaceholder()}</div>
          <div id="view-line-chart" class="hidden-view panel-overlay-host"><div class="chart-wrap tall chart-wrap-pro"><canvas id="chart-line"></canvas></div></div>`, 'line', true, 'export-overview-line', 'line')}
       <div class="overview-grid-3">
         ${dataCard('Unplanned DT % by Day of Week', '<div class="chart-wrap short"><canvas id="chart-dow"></canvas></div>')}

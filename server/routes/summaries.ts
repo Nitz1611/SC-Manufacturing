@@ -9,7 +9,7 @@ import {
   resolveMetricView,
   warmupWarehouse,
 } from '../lib/analytics.js';
-import { coarseCacheKey, normalizeParams } from '../lib/config.js';
+import { coarseCacheKey, consoleDemoMode, normalizeParams } from '../lib/config.js';
 import { buildTabInsights } from '../lib/metricsTransform.js';
 import { sqlConfigured } from '../lib/databricksSql.js';
 import {
@@ -256,6 +256,16 @@ summariesRouter.post('/console-data', async (req, res) => {
       _job_id: jobId,
       _source: 'loading',
       status: 'running',
+    });
+  }
+
+  if (!consoleDemoMode()) {
+    return res.status(503).json({
+      error: 'Live SQL is not configured. Set DATABRICKS_* in .env, or set CONSOLE_DEMO_MODE=true to enable demo data.',
+      metrics: null,
+      _source: 'error',
+      _cached: true,
+      metric_view: resolveMetricView(),
     });
   }
 

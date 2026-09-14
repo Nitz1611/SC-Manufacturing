@@ -4,7 +4,7 @@
  */
 import type { MetricsPayload, QueryKey } from '../../shared/types/dashboard.js';
 import { cacheGet, cacheSet } from './cache.js';
-import { bindSqlParams, coarseCacheKey, loadQuerySql, normalizeParams, resolveMetricView } from './config.js';
+import { bindSqlParams, coarseCacheKey, consoleDemoMode, loadQuerySql, normalizeParams, resolveMetricView } from './config.js';
 import { executeStatement, sqlConfigured, warmupWarehouse } from './databricksSql.js';
 import {
   applySiteFilter,
@@ -191,6 +191,12 @@ export async function getMetricsBundle(filters: Record<string, unknown> = {}): P
     }
   }
 
+  if (!consoleDemoMode()) {
+    throw new Error(
+      'Live SQL is not configured. Set DATABRICKS_* in .env, or set CONSOLE_DEMO_MODE=true to enable demo data.',
+    );
+  }
+
   const demo = loadMetricsFromDemoFallback(filters);
   setMemoryCached(norm, demo);
   return demo;
@@ -218,6 +224,12 @@ export async function runAnalyticsQuery(
       }
       throw e;
     }
+  }
+
+  if (!consoleDemoMode()) {
+    throw new Error(
+      'Live SQL is not configured. Set DATABRICKS_* in .env, or set CONSOLE_DEMO_MODE=true to enable demo data.',
+    );
   }
 
   const metrics = loadMetricsFromDemoFallback(params);

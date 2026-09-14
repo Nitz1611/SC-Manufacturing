@@ -227,6 +227,11 @@ export function normalizeParams(raw: Record<string, unknown> = {}): Record<strin
   return { period, year, site, timeframe, regions };
 }
 
+/** When false (default), the console never serves synthetic demo metrics unless SQL is unavailable and demo is explicitly enabled. */
+export function consoleDemoMode(): boolean {
+  return String(process.env.CONSOLE_DEMO_MODE || '').toLowerCase() === 'true';
+}
+
 export function coarseCacheKey(params: Record<string, string | null>): string {
   return `metrics_${JSON.stringify({
     period: params.period || 'week',

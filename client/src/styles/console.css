@@ -1378,6 +1378,32 @@ body {
 .data-status-bar.error { color: #991b1b; background: #fef2f2; }
 .data-status-bar.error .data-status-dot { background: #ef4444; }
 
+.metrics-loading-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 220px;
+  padding: 32px 16px;
+  color: #64748b;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.metrics-loading-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #e2e8f0;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: metricsSpin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes metricsSpin {
+  to { transform: rotate(360deg); }
+}
+
 @keyframes pulseDot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
