@@ -826,7 +826,7 @@ export function initManufacturingConsole(): () => void {
   }
 
   /** Zoom Y-axis so line series fill at least ~70% of plot height (Millions/Thousands). */
-  function lineYScaleFromValues(chartValues, minFillRatio = LINE_CHART_FILL_RATIO) {
+  function lineYScaleFromValues(chartValues, minFillRatio = LINE_CHART_FILL_RATIO, options = {}) {
     const axis = chartYAxisConfig();
     const positive = chartValues
       .filter(v => Number.isFinite(Number(v)) && Number(v) > 0)
@@ -834,8 +834,18 @@ export function initManufacturingConsole(): () => void {
     if (positive.length < 1) return yScaleFromValues(chartValues);
 
     const sorted = [...positive].sort((a, b) => a - b);
-    const dataMin = positive.length >= 4 ? percentileOf(sorted, 0.05) : sorted[0];
-    const dataMax = positive.length >= 4 ? percentileOf(sorted, 0.95) : sorted[sorted.length - 1];
+    const actualMin = sorted[0];
+    const actualMax = sorted[sorted.length - 1];
+    const trimOutliers = options.trimOutliers ?? positive.length > 14;
+
+    let dataMin = trimOutliers && positive.length >= 4 ? percentileOf(sorted, 0.05) : actualMin;
+    let dataMax = trimOutliers && positive.length >= 4 ? percentileOf(sorted, 0.95) : actualMax;
+
+    if (!trimOutliers) {
+      dataMin = actualMin;
+      dataMax = actualMax;
+    }
+
     let span = dataMax - dataMin;
 
     if (span <= 0 || span / Math.max(dataMax, 1e-12) < 1e-6) {
@@ -843,6 +853,12 @@ export function initManufacturingConsole(): () => void {
       span = Math.max(center * 0.2, stepFloor(center), 1e-8);
     }
 
+    // Bezier tension (0.42) and point labels can exceed endpoint values — reserve headroom.
+    const headroom = Math.max(span * 0.18, stepFloor(dataMax) * 0.5, actualMax * 0.025, 1e-7);
+    dataMax += headroom;
+    if (dataMin > 0) dataMin = Math.max(0, dataMin - headroom * 0.35);
+
+    span = dataMax - dataMin;
     const targetRange = span / minFillRatio;
     const pad = (targetRange - span) / 2;
     let yMin = dataMin - pad;
@@ -853,7 +869,7 @@ export function initManufacturingConsole(): () => void {
       yMax = Math.max(dataMax + pad, targetRange);
     }
 
-    const stepSize = niceStepSize(targetRange / 4);
+    const stepSize = niceStepSize((yMax - (yMin > 0 ? yMin : 0)) / 4);
 
     return {
       axis,
@@ -2477,7 +2493,7 @@ export function initManufacturingConsole(): () => void {
   const FOCUS_CHARTS = {
     'chart-dow': { render: id => makeDowTrendLineChart(id, 'all') },
     'chart-reason': { render: id => makeReasonChart(id) },
-    'chart-trend': { render: id => makeReasonTrendLineChart(id, 'all') },
+    'chart-trend': { render: id => makeOverviewWeekTrendChart(id) },
     'chart-category': {
       chartViewOnly: true,
       render: id => makeGroupedBarChart(id, CATEGORIES, CATEGORY_BASE, 8, null),
@@ -4089,7 +4105,7 @@ export function initManufacturingConsole(): () => void {
     const days = filter === 'all' ? DAY_LABELS : [filter];
     const weeks = activeWeeks();
     const series = days.flatMap(day => activeDayTrendSeries(day).map(v => chartValueFromMetric(v)));
-    const yScale = lineYScaleFromValues(series);
+    const yScale = lineYScaleFromValues(series, LINE_CHART_FILL_RATIO, { trimOutliers: true });
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -4263,7 +4279,7 @@ export function initManufacturingConsole(): () => void {
     const peak = Math.max(...data, 0);
     const minY = useHours ? 0 : Math.max(0, Math.floor((Math.min(...data.filter(v => v > 0), peak) || peak) * 10) / 10 - 0.5);
     const maxY = useHours ? null : Math.ceil((peak + 0.5) * 10) / 10;
-    const hoursYScale = useHours ? lineYScaleFromValues(data) : null;
+    const hoursYScale = useHours ? lineYScaleFromValues(data, LINE_CHART_FILL_RATIO, { trimOutliers: false }) : null;
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -4281,10 +4297,12 @@ export function initManufacturingConsole(): () => void {
           pointBorderColor: lineColor,
           pointBorderWidth: 2.5,
           borderWidth: 2.5,
+          clip: false,
         }],
       },
       options: {
         ...CHART_DEFAULTS,
+        layout: { padding: { top: 22 } },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
         interaction: { intersect: false, mode: 'index' },
         scales: {
