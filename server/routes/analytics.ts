@@ -2,10 +2,11 @@ import { Router } from 'express';
 import type { QueryKey } from '../../shared/types/dashboard.js';
 import { databricksConfigured, getLastSqlError, getLastSqlSuccessAt, resolveMetricView, runAnalyticsQuery, verifyMetricViewAccess } from '../lib/analytics.js';
 import { sqlEnvStatus } from '../lib/env.js';
-import { sqlColumnSummary } from '../lib/config.js';
+import { consoleDemoMode, sqlColumnSummary } from '../lib/config.js';
 import { runningJobCount } from '../lib/jobs.js';
 import { supervisorConfigured } from '../lib/supervisor.js';
 import { sqlConfigured, warmupWarehouse } from '../lib/databricksSql.js';
+import { getPreloadStatus } from '../lib/preload.js';
 
 const VALID_KEYS: QueryKey[] = [
   'dashboard_dt_kpis',
@@ -89,9 +90,17 @@ analyticsRouter.get('/status', async (_req, res) => {
     schema: process.env.DATABRICKS_SCHEMA || '(not set — two-part view name)',
     metric_view: metricView,
     sql_columns: sqlColumnSummary(),
-    mode: sqlTest.ok ? 'live-sql-metric-view' : configured ? 'sql-error' : 'demo-fallback',
+    mode: sqlTest.ok
+      ? 'live-sql-metric-view'
+      : configured
+        ? 'sql-error'
+        : consoleDemoMode()
+          ? 'demo-fallback'
+          : 'production-no-demo',
+    demo_mode: consoleDemoMode(),
     supervisor: supervisorConfigured() ? process.env.SUPERVISOR_ENDPOINT_NAME : 'not configured',
     summaries: supervisorConfigured() ? 'supervisor-agent' : 'template-fallback',
     active_supervisor_jobs: runningJobCount(),
+    preload: getPreloadStatus(),
   });
 });

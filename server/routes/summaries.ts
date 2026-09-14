@@ -19,6 +19,7 @@ import {
   newJobId,
   updateJobMessage,
 } from '../lib/jobs.js';
+import { getPreloadStatus, preloadEnabled } from '../lib/preload.js';
 import { getAllSupervisorSummaries, getSupervisorSummary, supervisorConfigured } from '../lib/supervisor.js';
 import type { SummaryEntity } from '../lib/summaryPrompts.js';
 
@@ -96,7 +97,7 @@ summariesRouter.post('/summaries', async (req, res) => {
   const { entityType, params, forceRefresh } = parsed.data;
   const cacheKey = summaryCacheKey(entityType, params);
 
-  if (!forceRefresh) {
+  if (!forceRefresh && !supervisorConfigured()) {
     const hit = summaryCache.get(cacheKey);
     if (hit && Date.now() - hit.ts < SUMMARY_TTL_MS) {
       return res.json({
@@ -147,7 +148,7 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
   const { params, forceRefresh } = parsed.data;
   const filters = filtersFromParams(params);
 
-  if (!forceRefresh) {
+  if (!forceRefresh && !supervisorConfigured()) {
     const cached = cachedBatchSummaries(params);
     if (cached) {
       const firstHit = summaryCache.get(summaryCacheKey(SUMMARY_TABS[0], params))!;
@@ -182,7 +183,7 @@ summariesRouter.post('/summaries/batch', async (req, res) => {
       console.log(`[job ${jobId.slice(0, 8)}] Done — ${Object.values(summaries).filter(Boolean).length} tabs`);
     } catch (e) {
       try {
-        const metrics = await getMetricsBundle(params);
+        const metrics = getCachedMetricsBundle(params) || await getMetricsBundle(params);
         const templateInsights = metrics.tab_insights || buildTabInsights(metrics);
         storeBatchSummaries(params, templateInsights, 'template-fallback');
         finishJob(jobId, { summaries: templateInsights, source: 'template-fallback' });
@@ -214,15 +215,23 @@ summariesRouter.get('/warmup', async (_req, res) => {
   }
 });
 
+summariesRouter.get('/preload/status', (_req, res) => {
+  res.json(getPreloadStatus());
+});
+
 summariesRouter.post('/console-data', async (req, res) => {
   const filters = (req.body?.filters || {}) as Record<string, unknown>;
   const force = Boolean(req.body?.force);
+  const usePreload = preloadEnabled() && sqlConfigured();
 
-  if (!force) {
-    const fresh = getFreshMetricsBundle(filters);
-    if (fresh) {
-      return res.json(metricsBundleToConsolePayload(fresh));
-    }
+  const cached = getCachedMetricsBundle(filters);
+  const fresh = getFreshMetricsBundle(filters);
+
+  if (cached && (usePreload || !force)) {
+    return res.json(metricsBundleToConsolePayload(cached, {
+      fromCache: true,
+      _refreshing: usePreload && !fresh,
+    }));
   }
 
   if (sqlConfigured()) {
@@ -240,11 +249,9 @@ summariesRouter.post('/console-data', async (req, res) => {
       }
     })();
 
-    const cached = force ? null : getCachedMetricsBundle(filters);
-    if (cached) {
-      const payload = metricsBundleToConsolePayload(cached, { _job_id: jobId, _refreshing: true });
-      payload._cached = true;
-      payload._source = 'cache';
+    const stale = force ? null : cached;
+    if (stale) {
+      const payload = metricsBundleToConsolePayload(stale, { _job_id: jobId, _refreshing: true, fromCache: true });
       return res.json(payload);
     }
 

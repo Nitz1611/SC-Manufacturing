@@ -8,6 +8,7 @@ import { cacheInfo } from './lib/cache.js';
 import { loadEnv, repoRoot, sqlEnvStatus } from './lib/env.js';
 import { sqlConfigured } from './lib/databricksSql.js';
 import { verifyMetricViewAccess, warmupWarehouse } from './lib/analytics.js';
+import { startPreloadScheduler } from './lib/preload.js';
 import { supervisorConfigured } from './lib/supervisor.js';
 
 loadEnv();
@@ -64,6 +65,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`║  Analytics  : POST /api/analytics/query/:queryKey    ║`);
   console.log(`║  Summaries  : POST /api/summaries                    ║`);
   console.log(`║  Legacy     : POST /api/console-data                   ║`);
+  console.log(`║  Preload    : GET  /api/preload/status                 ║`);
   console.log(`║  Warmup     : GET  /api/warmup                         ║`);
   console.log('╚══════════════════════════════════════════════════════╝');
   console.log('');
@@ -75,6 +77,7 @@ app.listen(PORT, '0.0.0.0', () => {
         const test = await verifyMetricViewAccess();
         if (test.ok) {
           console.log(`[startup] ✓ metric view OK (${test.row_count ?? 0} rows)`);
+          startPreloadScheduler();
         } else {
           console.error(`[startup] ✗ metric view check failed: ${test.error}`);
         }

@@ -521,7 +521,7 @@ function aggregateEntityByPeriod(
   return { pct, hrs };
 }
 
-function buildFilterOptions(rows: Record<string, unknown>[]) {
+export function buildFilterOptions(rows: Record<string, unknown>[]) {
   const site_regions: Record<string, string> = {};
   const sites: string[] = [];
   const regions = new Set<string>();

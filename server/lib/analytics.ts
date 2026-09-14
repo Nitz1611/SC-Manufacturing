@@ -17,6 +17,7 @@ import {
 } from './metricsTransform.js';
 
 const MEMORY_TTL_MS = Number(process.env.METRICS_MEMORY_CACHE_MINUTES || 15) * 60 * 1000;
+const PERIOD_VARIANTS = ['week', 'month', 'quarter', 'fiscal_year'] as const;
 const memoryCache = new Map<string, { data: MetricsPayload; ts: number }>();
 
 let lastSqlError: string | null = null;
@@ -101,7 +102,6 @@ async function loadMetricsFromSql(
   const metrics = buildMetricsFromSql(results, norm);
   lastSqlError = null;
   lastSqlSuccessAt = Date.now();
-  cacheSet(coarseCacheKey(norm), metrics as unknown as Record<string, unknown>);
   return metrics;
 }
 
@@ -144,6 +144,23 @@ function setMemoryCached(norm: Record<string, string | null>, metrics: MetricsPa
   memoryCache.set(coarseCacheKey(norm), { data: metrics, ts: Date.now() });
 }
 
+/** Store metrics under all timeframe cache keys — SQL ignores period, UI does not. */
+export function storeMetricsBundleToCache(
+  norm: Record<string, string | null>,
+  metrics: MetricsPayload,
+): void {
+  for (const period of PERIOD_VARIANTS) {
+    const keyNorm: Record<string, string | null> = { ...norm, period };
+    const scoped = applySiteFilter(metrics, keyNorm.site);
+    setMemoryCached(keyNorm, scoped);
+    cacheSet(coarseCacheKey(keyNorm), scoped as unknown as Record<string, unknown>);
+  }
+}
+
+export function getMemoryCacheStats(): { entries: number; keys: string[] } {
+  return { entries: memoryCache.size, keys: [...memoryCache.keys()] };
+}
+
 /** Return cached metrics if available (memory or disk), without hitting SQL. */
 export function getCachedMetricsBundle(filters: Record<string, unknown> = {}): MetricsPayload | null {
   const norm = normalizeParams(filters);
@@ -164,7 +181,7 @@ export async function refreshMetricsBundle(
   const norm = normalizeParams(filters);
   const metrics = await loadMetricsFromSql(norm, onProgress);
   const scoped = applySiteFilter(metrics, norm.site);
-  setMemoryCached(norm, scoped);
+  storeMetricsBundleToCache(norm, metrics);
   return scoped;
 }
 
@@ -177,7 +194,7 @@ export async function getMetricsBundle(filters: Record<string, unknown> = {}): P
     try {
       console.log(`[analytics] Loading live data from ${resolveMetricView()}…`);
       const metrics = await loadMetricsFromSql(norm);
-      setMemoryCached(norm, metrics);
+      storeMetricsBundleToCache(norm, metrics);
       return applySiteFilter(metrics, norm.site);
     } catch (err) {
       console.error('[analytics] Live SQL failed:', (err as Error).message);
@@ -240,15 +257,16 @@ export async function runAnalyticsQuery(
 
 export function metricsBundleToConsolePayload(
   metrics: MetricsPayload | null,
-  extras: { _job_id?: string | null; _refreshing?: boolean } = {},
+  extras: { _job_id?: string | null; _refreshing?: boolean; fromCache?: boolean } = {},
 ) {
+  const fromCache = extras.fromCache ?? false;
   return {
     metrics,
     dashboard: {},
-    _cached: metrics ? metrics.meta.source !== 'sql' : true,
+    _cached: fromCache || (metrics ? metrics.meta.source !== 'sql' : true),
     _refreshing: extras._refreshing ?? false,
     _job_id: extras._job_id ?? null,
-    _source: metrics?.meta?.source ?? 'loading',
+    _source: fromCache ? 'cache' : (metrics?.meta?.source ?? 'loading'),
   };
 }
 

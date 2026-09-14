@@ -1170,20 +1170,21 @@
 
     const filterKey = dataFilterKey();
     const filtersChanged = Boolean(state.lastDataFilterKey && state.lastDataFilterKey !== filterKey);
-    const shouldForce = force || filtersChanged;
+    const initialLoad = !state.metricsBase;
 
-    const showLoading = !state.metricsBase || shouldForce;
-    if (showLoading) {
+    if (initialLoad) {
       resetMetricsDisplayForLoading();
       setDataStatus('loading', 'Loading unplanned DT metrics…');
       setBootStatus('Loading unplanned DT metrics');
+    } else if (filtersChanged) {
+      setDataStatus('loading', 'Applying filters…');
     }
 
     try {
       const res = await fetch('/api/console-data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filters: apiFiltersFromState(), force: shouldForce }),
+        body: JSON.stringify({ filters: apiFiltersFromState(), force: Boolean(force) }),
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
@@ -1219,6 +1220,10 @@
         if (!data.metrics) setBootStatus('Querying Databricks metric view');
         state.dataPollTimer = setInterval(() => pollConsoleJob(data._job_id, false), pollMs);
         pollConsoleJob(data._job_id, false);
+      } else if (data._cached && data.metrics && !isRefreshing) {
+        setDataStatus('cached', 'Cached metrics · filter changes apply instantly');
+        state.dataLoading = false;
+        if (!data.metrics) loadAiSummaries(false);
       } else if (data._source === 'sql' || data.metrics?.meta?.source === 'sql') {
         setDataStatus('live', 'Live unplanned DT data from metric view');
         state.dataLoading = false;
