@@ -703,9 +703,80 @@ export function initManufacturingConsole(): () => void {
     return 0;
   }
 
+  function yearAvgHours() {
+    const trend = state.liveMetrics?.period_trend_hrs || TREND_DATA_HRS_MUTABLE;
+    const validTrend = (trend || []).filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0);
+    if (validTrend.length) return validTrend.reduce((a, b) => a + Number(b), 0) / validTrend.length;
+
+    const siteValues = activeHeatmapSites().flatMap(s => state.liveMetrics?.site_by_period_hrs?.[s] || [])
+      .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0);
+    if (siteValues.length) return siteValues.reduce((a, b) => a + Number(b), 0) / siteValues.length;
+
+    const total = totalDtHours();
+    const n = activePeriods().length || 1;
+    if (total > 0) return total / n;
+    return 0;
+  }
+
+  function displayBenchmark() {
+    if (isHoursDisplayMode()) {
+      const avg = yearAvgHours();
+      return {
+        raw: avg,
+        label: `vs ${cellDisplayValue(avg)} Avg`,
+      };
+    }
+    const avg = yearAvgDtPct();
+    return {
+      raw: avg,
+      label: `vs ${avg.toFixed(2)}% Avg`,
+    };
+  }
+
+  function compareToBenchmark(value) {
+    const bench = displayBenchmark();
+    const above = Number(value) >= bench.raw;
+    return {
+      label: bench.label,
+      cssClass: above ? 'val-high' : 'val-low',
+      text: above ? 'Above avg' : 'Below avg',
+    };
+  }
+
   function chartValueFromMetric(value) {
     if (value == null || Number.isNaN(Number(value))) return 0;
+    if (isHoursDisplayMode()) return chartYAxisConfig().scale(Number(value));
     return Number(value);
+  }
+
+  function yScaleFromValues(chartValues) {
+    const peak = Math.max(...chartValues, 0);
+    const axis = chartYAxisConfig(peak);
+    if (showInMode() === 'percentage') {
+      const yMax = axis.max ?? Math.max(Math.ceil(peak * 1.15), 5);
+      const stepSize = yMax <= 10 ? 1 : yMax <= 25 ? 2 : 5;
+      return { axis, yMax, stepSize };
+    }
+    const padded = peak > 0 ? peak * 1.2 : 0.01;
+    const stepSize = padded <= 0.05 ? 0.01 : padded <= 0.2 ? 0.02 : padded <= 1 ? 0.1 : padded <= 5 ? 0.5 : 1;
+    const yMax = Math.max(stepSize, Math.ceil(padded / stepSize) * stepSize);
+    return { axis, yMax, stepSize };
+  }
+
+  function proYAxisScale(scaleCfg) {
+    const { axis, yMax, stepSize } = scaleCfg;
+    return {
+      beginAtZero: true,
+      max: yMax,
+      ...PRO_AXIS,
+      title: proAxisTitle(axis.title),
+      ticks: {
+        ...PRO_AXIS.ticks,
+        stepSize,
+        maxTicksLimit: 8,
+        callback: v => Number(v).toFixed(axis.decimals) + axis.tickSuffix,
+      },
+    };
   }
 
   function chartYAxisConfig(yMaxHint) {
@@ -2526,7 +2597,8 @@ export function initManufacturingConsole(): () => void {
               ...PRO_AXIS,
               title: proAxisTitle(chartYAxisConfig().title),
               ticks: {
-                callback: v => chartYAxisConfig().scale(v).toFixed(chartYAxisConfig().decimals) + chartYAxisConfig().tickSuffix,
+                ...PRO_AXIS.ticks,
+                callback: v => Number(v).toFixed(chartYAxisConfig().decimals) + chartYAxisConfig().tickSuffix,
               },
             },
             x: { grid: { display: false }, ticks: HORIZONTAL_X_TICKS },
@@ -2716,6 +2788,7 @@ export function initManufacturingConsole(): () => void {
     const summaryLabel = isHoursDisplayMode() ? 'Total' : 'Average DT %';
     const summaryDisplay = summary != null ? formatTableSummary(summary) : '—';
     const detailScale = collectValuesHeatmapScale([vals]);
+    const compare = compareToBenchmark(peak);
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2734,7 +2807,7 @@ export function initManufacturingConsole(): () => void {
           <div class="category-detail-stats">
             <div class="detail-stat"><div class="detail-stat-label">${summaryLabel}</div><div class="detail-stat-value">${summaryDisplay}</div></div>
             <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${periods[peakIdx] || '—'} · ${cellDisplayValue(peak)}</div></div>
-            <div class="detail-stat"><div class="detail-stat-label">vs ${yearAvgDtPct().toFixed(2)}% Avg</div><div class="detail-stat-value ${peak >= yearAvgDtPct() ? 'val-high' : 'val-low'}">${peak >= yearAvgDtPct() ? 'Above avg' : 'Below avg'}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">${compare.label}</div><div class="detail-stat-value ${compare.cssClass}">${compare.text}</div></div>
           </div>
         </div>
         <div class="table-scroll" style="margin-top:16px">
@@ -2756,14 +2829,15 @@ export function initManufacturingConsole(): () => void {
       destroyChart('detail-chart');
       const canvas = document.getElementById('detail-chart');
       if (!canvas || typeof Chart === 'undefined') return;
-      const axis = chartYAxisConfig(Math.max(...vals.map(v => chartValueFromMetric(v)), 0));
+      const chartVals = vals.map(v => chartValueFromMetric(v));
+      const yScale = yScaleFromValues(chartVals);
       state.charts['detail-chart'] = new Chart(canvas, {
         type: 'bar',
         data: {
           labels: periods,
           datasets: [{
             label: category,
-            data: vals.map(v => chartValueFromMetric(v)),
+            data: chartVals,
             backgroundColor: PERIOD_COLORS,
             borderRadius: { topLeft: 4, topRight: 4 },
             borderSkipped: false,
@@ -2771,17 +2845,10 @@ export function initManufacturingConsole(): () => void {
         },
         options: {
           ...CHART_DEFAULTS,
+          layout: { padding: { left: 8, top: 12 } },
           plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
           scales: {
-            y: {
-              beginAtZero: true,
-              ...PRO_AXIS,
-              title: proAxisTitle(axis.title),
-              ticks: {
-                ...PRO_AXIS.ticks,
-                callback: v => axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix,
-              },
-            },
+            y: proYAxisScale(yScale),
             x: { ...PRO_AXIS },
           },
         },
@@ -2800,6 +2867,12 @@ export function initManufacturingConsole(): () => void {
     const peak = numeric.length ? Math.max(...numeric.map(Number)) : 0;
     const peakIdx = numeric.length ? vals.findIndex(v => Number(v) === peak) : 0;
     const detailScale = collectValuesHeatmapScale([vals]);
+    const metricLabel = tableMetricLabel();
+    const avgLabel = isHoursDisplayMode() ? 'Average Hours' : 'Average DT %';
+    const avgDisplay = isHoursDisplayMode() ? cellDisplayValue(avg) : fmtPct(avg);
+    const compare = compareToBenchmark(avg);
+    const periods = activePeriods();
+    const year = state.filters.year || state.liveMetrics?.meta?.year || '2026';
 
     const panel = document.createElement('div');
     panel.id = 'inline-panel';
@@ -2808,7 +2881,7 @@ export function initManufacturingConsole(): () => void {
       <div class="inline-panel-header">
         <div>
           <div class="inline-panel-title">Detailed View — ${line}</div>
-          <div class="inline-panel-sub">${site} · line period breakdown</div>
+          <div class="inline-panel-sub">${site} · ${metricLabel.toLowerCase()} by period</div>
         </div>
         <button type="button" class="inline-panel-close" aria-label="Close">&times;</button>
       </div>
@@ -2816,16 +2889,16 @@ export function initManufacturingConsole(): () => void {
         <div class="inline-detail-grid">
           <div class="compare-chart-wrap"><canvas id="detail-chart"></canvas></div>
           <div class="category-detail-stats">
-            <div class="detail-stat"><div class="detail-stat-label">Average DT %</div><div class="detail-stat-value">${fmtPct(avg)}</div></div>
-            <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${PERIODS[peakIdx]} · ${fmtPct(peak)}</div></div>
-            <div class="detail-stat"><div class="detail-stat-label">vs ${yearAvgDtPct().toFixed(2)}% Avg</div><div class="detail-stat-value ${avg >= yearAvgDtPct() ? 'val-high' : 'val-low'}">${avg >= yearAvgDtPct() ? 'Above avg' : 'Below avg'}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">${avgLabel}</div><div class="detail-stat-value">${avgDisplay}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">Peak Period</div><div class="detail-stat-value">${periods[peakIdx] || '—'} · ${cellDisplayValue(peak)}</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">${compare.label}</div><div class="detail-stat-value ${compare.cssClass}">${compare.text}</div></div>
           </div>
         </div>
         <div class="table-scroll" style="margin-top:16px">
           <table class="data-table compare-table heatmap-table">
-            <thead><tr><th>Metric</th>${PERIODS.map(p => `<th>2026 ${p}</th>`).join('')}<th>Avg</th></tr></thead>
+            <thead><tr><th>Metric</th>${periods.map(p => `<th>${year} ${p}</th>`).join('')}<th>${tableSummaryHeader()}</th></tr></thead>
             <tbody><tr>
-              <td>Unplanned DT %</td>
+              <td>${metricLabel}</td>
               ${vals.map(v => heatTd(v, detailScale)).join('')}
               ${summaryTd(vals, detailScale)}
             </tr></tbody>
@@ -2840,13 +2913,15 @@ export function initManufacturingConsole(): () => void {
       destroyChart('detail-chart');
       const canvas = document.getElementById('detail-chart');
       if (!canvas || typeof Chart === 'undefined') return;
+      const chartVals = vals.map(v => chartValueFromMetric(v));
+      const yScale = yScaleFromValues(chartVals);
       state.charts['detail-chart'] = new Chart(canvas, {
         type: 'bar',
         data: {
-          labels: PERIODS,
+          labels: periods,
           datasets: [{
-            label: `${line} DT %`,
-            data: vals,
+            label: line,
+            data: chartVals,
             backgroundColor: PERIOD_COLORS,
             borderRadius: { topLeft: 4, topRight: 4 },
             borderSkipped: false,
@@ -2854,9 +2929,10 @@ export function initManufacturingConsole(): () => void {
         },
         options: {
           ...CHART_DEFAULTS,
+          layout: { padding: { left: 8, top: 12 } },
           plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
           scales: {
-            y: { beginAtZero: true, max: 14, ...PRO_AXIS, ticks: { ...PRO_AXIS.ticks, callback: v => v + '%' } },
+            y: proYAxisScale(yScale),
             x: { ...PRO_AXIS },
           },
         },
@@ -3736,21 +3812,52 @@ export function initManufacturingConsole(): () => void {
     return { display: true, text, color: '#64748b', font: { family: 'Inter', weight: '600', size: 11 } };
   }
 
-  function linePointLabelPlugin(formatFn) {
+  function linePointLabelPlugin(formatFn, opts = {}) {
+    const edgePadding = opts.edgePadding ?? 40;
     return {
       id: 'linePointLabels',
       afterDatasetsDraw(chart) {
-        const { ctx } = chart;
+        const { ctx, chartArea } = chart;
         chart.data.datasets.forEach((dataset, i) => {
           chart.getDatasetMeta(i).data.forEach((point, idx) => {
+            const val = dataset.data[idx];
+            if (val == null) return;
+            const label = formatFn(val);
+            ctx.save();
+            ctx.fillStyle = '#1e293b';
+            ctx.font = '600 10px Inter, sans-serif';
+            ctx.textBaseline = 'bottom';
+            if (point.x < chartArea.left + edgePadding) {
+              ctx.textAlign = 'left';
+              ctx.fillText(label, point.x + 4, point.y - 10);
+            } else {
+              ctx.textAlign = 'center';
+              ctx.fillText(label, point.x, point.y - 10);
+            }
+            ctx.restore();
+          });
+        });
+      },
+    };
+  }
+
+  function horizontalBarLabelPlugin(formatFn) {
+    return {
+      id: 'horizontalBarLabels',
+      afterDatasetsDraw(chart) {
+        const { ctx, chartArea } = chart;
+        chart.data.datasets.forEach((dataset, i) => {
+          chart.getDatasetMeta(i).data.forEach((bar, idx) => {
             const val = dataset.data[idx];
             if (val == null) return;
             ctx.save();
             ctx.fillStyle = '#1e293b';
             ctx.font = '600 10px Inter, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
-            ctx.fillText(formatFn(val), point.x, point.y - 10);
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            const label = formatFn(val);
+            const x = Math.min(bar.x + 6, chartArea.right - 2);
+            ctx.fillText(label, x, bar.y);
             ctx.restore();
           });
         });
@@ -3816,9 +3923,7 @@ export function initManufacturingConsole(): () => void {
     if (!canvas || typeof Chart === 'undefined') return;
     const chartMatrix = pctMatrixToChartMatrix(matrix);
     const allVals = labels.flatMap(l => chartMatrix[l] || []);
-    const peak = Math.max(...allVals, 0);
-    const axis = chartYAxisConfig(yMaxHint || peak);
-    const yMax = axis.max ?? Math.max(peak * 1.15, peak + (showInMode() === 'millions' ? peak * 0.1 : 1));
+    const yScale = yScaleFromValues(allVals);
     const datasets = activePeriods().map((p, i) => ({
       label: p,
       data: labels.map(l => chartMatrix[l]?.[i] ?? 0),
@@ -3846,16 +3951,7 @@ export function initManufacturingConsole(): () => void {
         },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         scales: {
-          y: {
-            beginAtZero: true,
-            max: yMax,
-            ...PRO_AXIS,
-            title: proAxisTitle(axis.title),
-            ticks: {
-              ...PRO_AXIS.ticks,
-              callback: v => axis.scale(v).toFixed(axis.decimals) + axis.tickSuffix,
-            },
-          },
+          y: proYAxisScale(yScale),
           x: { ...PRO_AXIS, ticks: HORIZONTAL_X_TICKS },
         },
       },
@@ -3876,10 +3972,11 @@ export function initManufacturingConsole(): () => void {
     const ctx = canvas.getContext('2d');
     const days = filter === 'all' ? DAY_LABELS : [filter];
     const weeks = activeWeeks();
-    const series = days.flatMap(day => activeDayTrendSeries(day));
-    const peak = Math.max(...series, 0);
-    const yMax = Math.max(8, Math.ceil((peak + 2) / 2) * 2);
-    const yMin = 0;
+    const useHours = isHoursDisplayMode();
+    const axis = chartYAxisConfig();
+    const series = days.flatMap(day => activeDayTrendSeries(day).map(v => chartValueFromMetric(v)));
+    const yScale = yScaleFromValues(series);
+    const labelFormat = v => Number(v).toFixed(axis.decimals) + axis.tickSuffix;
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -3891,7 +3988,7 @@ export function initManufacturingConsole(): () => void {
           grad.addColorStop(1, color + '00');
           return {
             label: day,
-            data: activeDayTrendSeries(day),
+            data: activeDayTrendSeries(day).map(v => chartValueFromMetric(v)),
             borderColor: color,
             backgroundColor: grad,
             fill: true,
@@ -3907,17 +4004,11 @@ export function initManufacturingConsole(): () => void {
       },
       options: {
         ...CHART_DEFAULTS,
+        layout: { padding: { left: 12, top: 16, right: 8 } },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { ...CHART_DEFAULTS.plugins.legend, position: 'bottom' } },
         interaction: { intersect: false, mode: 'index' },
         scales: {
-          y: {
-            beginAtZero: true,
-            min: yMin,
-            max: yMax,
-            ...PRO_AXIS,
-            title: proAxisTitle('Unplanned DT %'),
-            ticks: { ...PRO_AXIS.ticks, callback: v => v + '%', stepSize: yMax <= 20 ? 2 : undefined },
-          },
+          y: proYAxisScale(yScale),
           x: {
             ...PRO_AXIS,
             title: proAxisTitle('Week'),
@@ -3925,6 +4016,7 @@ export function initManufacturingConsole(): () => void {
           },
         },
       },
+      plugins: [linePointLabelPlugin(labelFormat)],
     });
   }
 
@@ -3953,6 +4045,7 @@ export function initManufacturingConsole(): () => void {
       options: {
         ...CHART_DEFAULTS,
         indexAxis: 'y',
+        layout: { padding: { right: 48 } },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
         scales: {
           x: {
@@ -3967,6 +4060,7 @@ export function initManufacturingConsole(): () => void {
           },
         },
       },
+      plugins: [horizontalBarLabelPlugin(v => `${Math.round(Number(v)).toLocaleString()} h`)],
     });
   }
 
@@ -4050,7 +4144,7 @@ export function initManufacturingConsole(): () => void {
     const useHours = isHoursDisplayMode();
     const axis = chartYAxisConfig();
     const raw = networkWeekTrend().map(v => (v == null ? 0 : Number(v)));
-    const data = useHours ? raw.map(v => axis.scale(v)) : raw;
+    const data = useHours ? raw.map(v => chartValueFromMetric(v)) : raw;
     const lineColor = PERIOD_COLORS[2];
     const grad = ctx.createLinearGradient(0, 0, 0, 320);
     grad.addColorStop(0, lineColor + '35');
@@ -4058,6 +4152,7 @@ export function initManufacturingConsole(): () => void {
     const peak = Math.max(...data, 0);
     const minY = useHours ? 0 : Math.max(0, Math.floor((Math.min(...data.filter(v => v > 0), peak) || peak) * 10) / 10 - 0.5);
     const maxY = useHours ? null : Math.ceil((peak + 0.5) * 10) / 10;
+    const hoursYScale = useHours ? yScaleFromValues(data) : null;
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -4079,21 +4174,24 @@ export function initManufacturingConsole(): () => void {
       },
       options: {
         ...CHART_DEFAULTS,
+        layout: { padding: { left: 16, top: 18, right: 8 } },
         plugins: { ...CHART_DEFAULTS.plugins, legend: { display: false } },
         interaction: { intersect: false, mode: 'index' },
         scales: {
-          y: {
-            beginAtZero: true,
-            ...(maxY != null ? { min: minY, max: maxY } : {}),
-            ...PRO_AXIS,
-            title: proAxisTitle(useHours ? axis.title : 'Unplanned DT %'),
-            ticks: {
-              ...PRO_AXIS.ticks,
-              callback: v => useHours
-                ? Number(v).toFixed(axis.decimals) + axis.tickSuffix
-                : v.toFixed(1) + '%',
+          y: useHours && hoursYScale
+            ? proYAxisScale(hoursYScale)
+            : {
+              beginAtZero: true,
+              ...(maxY != null ? { min: minY, max: maxY } : {}),
+              ...PRO_AXIS,
+              title: proAxisTitle(useHours ? axis.title : 'Unplanned DT %'),
+              ticks: {
+                ...PRO_AXIS.ticks,
+                callback: v => useHours
+                  ? Number(v).toFixed(axis.decimals) + axis.tickSuffix
+                  : v.toFixed(1) + '%',
+              },
             },
-          },
           x: {
             ...PRO_AXIS,
             title: proAxisTitle('Week'),
@@ -4103,7 +4201,7 @@ export function initManufacturingConsole(): () => void {
       },
       plugins: [linePointLabelPlugin(v => useHours
         ? Number(v).toFixed(axis.decimals) + axis.tickSuffix
-        : Number(v).toFixed(2) + '%')],
+        : Number(v).toFixed(2) + '%', { edgePadding: 48 })],
     });
   }
 
