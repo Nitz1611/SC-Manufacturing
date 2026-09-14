@@ -71,3 +71,17 @@ export function cacheInfo() {
     return { entry_count: 0, entries: [] };
   }
 }
+
+/** Load all non-expired metrics_* entries from disk (for memory warm-up). */
+export function cacheLoadAllMetrics(): Array<{ key: string; data: Record<string, unknown>; ts: number }> {
+  try {
+    if (!fs.existsSync(CACHE_FILE)) return [];
+    const store = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8')) as Record<string, CacheEntry>;
+    const now = Date.now();
+    return Object.entries(store)
+      .filter(([key, entry]) => key.startsWith('metrics_') && entry?.data && now - entry.ts <= TTL_MS)
+      .map(([key, entry]) => ({ key, data: entry.data, ts: entry.ts }));
+  } catch {
+    return [];
+  }
+}

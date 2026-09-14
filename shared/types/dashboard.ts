@@ -54,6 +54,16 @@ export interface MetricsPayload {
   top_sites_trend: Record<string, number[]>;
   top_sites_trend_hrs?: Record<string, number[]>;
   shift_comparison: Array<{ shift: string; hours: number; color?: string }>;
+  /** Site-indexed slices for instant client-side / cache-derived site filtering */
+  site_kpis?: Record<string, MetricsPayload['kpis']>;
+  site_reasons?: Record<string, MetricsPayload['reasons']>;
+  site_dow_by_day_week?: Record<string, Record<string, Record<string, number>>>;
+  site_dow_by_day_week_hrs?: Record<string, Record<string, Record<string, number>>>;
+  site_dow_by_shift?: Record<string, Record<string, Record<string, Record<string, number>>>>;
+  site_dow_by_shift_hrs?: Record<string, Record<string, Record<string, Record<string, number>>>>;
+  site_shift_comparison?: Record<string, MetricsPayload['shift_comparison']>;
+  site_top_lines?: Record<string, Record<string, number>>;
+  site_top_lines_hrs?: Record<string, Record<string, number>>;
   key_insights?: Array<{ text: string; color: string }>;
 }
 

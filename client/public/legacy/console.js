@@ -229,6 +229,7 @@
     siteRegionMap: {},
     categoriesLive: null,
     linesLive: null,
+    metricsCache: new Map(),
   };
 
   let REASONS_DATA_MUTABLE = null;
@@ -1043,6 +1044,27 @@
     };
   }
 
+  function rememberMetricsCache(metrics, filterKey) {
+    if (!metrics || !filterKey) return;
+    state.metricsCache.set(filterKey, metrics);
+    if (state.metricsCache.size > 120) {
+      const first = state.metricsCache.keys().next().value;
+      state.metricsCache.delete(first);
+    }
+  }
+
+  function tryApplyCachedFilters() {
+    const key = dataFilterKey();
+    const cached = state.metricsCache.get(key);
+    if (!cached) return false;
+    state.metricsBase = cached;
+    state.lastDataFilterKey = key;
+    applyConsoleData({ metrics: filterMetricsClient(cached), dashboard: state.dashboard || {} });
+    setDataStatus('cached', 'Instant filter · preloaded metrics');
+    loadAiSummaries(false);
+    return true;
+  }
+
   function scheduleDataReload(fromFilterId) {
     clearTimeout(state.dataReloadTimer);
     state.dataReloadTimer = setTimeout(() => {
@@ -1056,11 +1078,12 @@
         return;
       }
       applySiteFilterUiState();
+      if (tryApplyCachedFilters()) return;
       state.summariesLoaded = false;
       state.summaryFilterKey = null;
       setAiSummaryLoading();
       loadConsoleData(false);
-    }, 80);
+    }, 16);
   }
 
   function applySummaryTexts(summaries) {
@@ -1172,6 +1195,8 @@
     const filtersChanged = Boolean(state.lastDataFilterKey && state.lastDataFilterKey !== filterKey);
     const initialLoad = !state.metricsBase;
 
+    if (filtersChanged && tryApplyCachedFilters()) return;
+
     if (initialLoad) {
       resetMetricsDisplayForLoading();
       setDataStatus('loading', 'Loading unplanned DT metrics…');
@@ -1204,6 +1229,7 @@
       if (data.metrics && !isRefreshing) {
         state.metricsBase = data.metrics;
         state.lastDataFilterKey = dataFilterKey();
+        rememberMetricsCache(data.metrics, dataFilterKey());
         applyConsoleData({ metrics: filterMetricsClient(data.metrics), dashboard: data.dashboard || {} });
         dismissBootSplash();
         loadAiSummaries(false);
@@ -1221,7 +1247,10 @@
         state.dataPollTimer = setInterval(() => pollConsoleJob(data._job_id, false), pollMs);
         pollConsoleJob(data._job_id, false);
       } else if (data._cached && data.metrics && !isRefreshing) {
-        setDataStatus('cached', 'Cached metrics · filter changes apply instantly');
+        setDataStatus(
+          'cached',
+          data._instant ? 'Instant filter · all sites preloaded' : 'Cached metrics · filter changes apply instantly',
+        );
         state.dataLoading = false;
         if (!data.metrics) loadAiSummaries(false);
       } else if (data._source === 'sql' || data.metrics?.meta?.source === 'sql') {
@@ -1282,6 +1311,7 @@
         if (state.metricsJobFilterKey && state.metricsJobFilterKey !== dataFilterKey()) return;
         state.metricsBase = job.result.metrics;
         state.lastDataFilterKey = dataFilterKey();
+        rememberMetricsCache(job.result.metrics, dataFilterKey());
         applyConsoleData({ metrics: filterMetricsClient(job.result.metrics), dashboard: {} });
         setDataStatus('live', 'Live unplanned DT data from metric view');
         dismissBootSplash();

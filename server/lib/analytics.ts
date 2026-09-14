@@ -3,7 +3,7 @@
  * When SQL is configured, never serves synthetic demo data on failure.
  */
 import type { MetricsPayload, QueryKey } from '../../shared/types/dashboard.js';
-import { cacheGet, cacheSet } from './cache.js';
+import { cacheGet, cacheLoadAllMetrics, cacheSet } from './cache.js';
 import { bindSqlParams, coarseCacheKey, consoleDemoMode, loadQuerySql, normalizeParams, resolveMetricView } from './config.js';
 import { executeStatement, sqlConfigured, warmupWarehouse } from './databricksSql.js';
 import {
@@ -110,8 +110,15 @@ function loadPriorSqlCache(filters: Record<string, unknown>): MetricsPayload | n
   const key = coarseCacheKey(norm);
   const cached = cacheGet(key) as MetricsPayload | null;
   if (cached?.kpis && cached.meta?.source === 'sql') {
-    return applySiteFilter(structuredClone(cached), norm.site);
+    const data = structuredClone(cached);
+    return norm.site ? applySiteFilter(data, norm.site) : data;
   }
+  return null;
+}
+
+function loadPriorSqlCacheRaw(norm: Record<string, string | null>): MetricsPayload | null {
+  const cached = cacheGet(coarseCacheKey(norm)) as MetricsPayload | null;
+  if (cached?.kpis && cached.meta?.source === 'sql') return structuredClone(cached);
   return null;
 }
 
@@ -133,28 +140,107 @@ function loadMetricsFromDemoFallback(filters: Record<string, unknown>): MetricsP
   return applySiteFilter(metricsFromCache(norm), norm.site);
 }
 
-function getMemoryCached(norm: Record<string, string | null>): MetricsPayload | null {
-  const key = coarseCacheKey(norm);
-  const hit = memoryCache.get(key);
+function getMemoryCachedRaw(norm: Record<string, string | null>): MetricsPayload | null {
+  const hit = memoryCache.get(coarseCacheKey(norm));
   if (!hit || Date.now() - hit.ts > MEMORY_TTL_MS) return null;
-  return applySiteFilter(hit.data, norm.site);
+  return hit.data;
 }
 
-function setMemoryCached(norm: Record<string, string | null>, metrics: MetricsPayload): void {
+function getMemoryCached(norm: Record<string, string | null>): MetricsPayload | null {
+  const raw = getMemoryCachedRaw(norm);
+  if (!raw) return null;
+  if (!norm.site) return raw;
+  const siteKey = norm.site.toUpperCase();
+  if (raw.meta?.filtered_site === siteKey) return raw;
+  return applySiteFilter(structuredClone(raw), norm.site);
+}
+
+function setMemoryCachedRaw(norm: Record<string, string | null>, metrics: MetricsPayload): void {
   memoryCache.set(coarseCacheKey(norm), { data: metrics, ts: Date.now() });
 }
 
+function setMemoryCached(norm: Record<string, string | null>, metrics: MetricsPayload): void {
+  setMemoryCachedRaw(norm, metrics);
+}
+
 /** Store metrics under all timeframe cache keys — SQL ignores period, UI does not. */
+/** Store network bundle + all site-derived views for every timeframe key. */
 export function storeMetricsBundleToCache(
   norm: Record<string, string | null>,
   metrics: MetricsPayload,
 ): void {
+  const networkNorm: Record<string, string | null> = { ...norm, site: null };
+  const sites = Object.keys(metrics.site_by_period || {});
+
   for (const period of PERIOD_VARIANTS) {
-    const keyNorm: Record<string, string | null> = { ...norm, period };
-    const scoped = applySiteFilter(metrics, keyNorm.site);
-    setMemoryCached(keyNorm, scoped);
-    cacheSet(coarseCacheKey(keyNorm), scoped as unknown as Record<string, unknown>);
+    const networkKey: Record<string, string | null> = { ...networkNorm, period };
+    setMemoryCachedRaw(networkKey, metrics);
+    cacheSet(coarseCacheKey(networkKey), metrics as unknown as Record<string, unknown>);
+
+    for (const site of sites) {
+      const siteKey: Record<string, string | null> = { ...networkNorm, period, site };
+      const scoped = applySiteFilter(metrics, site);
+      setMemoryCached(siteKey, scoped);
+      cacheSet(coarseCacheKey(siteKey), scoped as unknown as Record<string, unknown>);
+    }
   }
+}
+
+/** Promote disk entries into memory on startup for instant filter changes. */
+export function warmMemoryCacheFromDisk(): number {
+  let loaded = 0;
+  for (const entry of cacheLoadAllMetrics()) {
+    try {
+      const parsed = JSON.parse(entry.key.replace(/^metrics_/, '')) as {
+        period?: string;
+        year?: string | null;
+        site?: string | null;
+        regions?: string | null;
+      };
+      const norm: Record<string, string | null> = {
+        period: parsed.period || 'week',
+        year: parsed.year && String(parsed.year) !== '2026' ? String(parsed.year) : '2026',
+        site: parsed.site || null,
+        regions: parsed.regions || null,
+        timeframe: parsed.period || 'week',
+      };
+      if (parsed.year === null || parsed.year === undefined) norm.year = null;
+      if (!getMemoryCachedRaw(norm)) {
+        setMemoryCachedRaw(norm, entry.data as unknown as MetricsPayload);
+        loaded++;
+      }
+    } catch {
+      // skip malformed keys
+    }
+  }
+  if (loaded) console.log(`[cache] warmed ${loaded} metrics bundle(s) from disk into memory`);
+  return loaded;
+}
+
+/**
+ * Resolve metrics: exact cache → derive site view from network bundle → disk exact.
+ * Site changes are instant once the network (All sites) bundle is cached.
+ */
+export function resolveMetricsBundle(filters: Record<string, unknown> = {}): MetricsPayload | null {
+  const norm = normalizeParams(filters);
+
+  const memExact = getMemoryCached(norm);
+  if (memExact) return memExact;
+
+  if (norm.site) {
+    const parentNorm: Record<string, string | null> = { ...norm, site: null };
+    let parent = getMemoryCachedRaw(parentNorm) || loadPriorSqlCacheRaw(parentNorm);
+    if (parent?.site_by_period?.[norm.site.toUpperCase()]) {
+      const scoped = applySiteFilter(parent, norm.site);
+      for (const period of PERIOD_VARIANTS) {
+        const keyNorm: Record<string, string | null> = { ...norm, period };
+        setMemoryCached(keyNorm, scoped);
+      }
+      return scoped;
+    }
+  }
+
+  return loadPriorSqlCache(filters);
 }
 
 export function getMemoryCacheStats(): { entries: number; keys: string[] } {
@@ -163,8 +249,7 @@ export function getMemoryCacheStats(): { entries: number; keys: string[] } {
 
 /** Return cached metrics if available (memory or disk), without hitting SQL. */
 export function getCachedMetricsBundle(filters: Record<string, unknown> = {}): MetricsPayload | null {
-  const norm = normalizeParams(filters);
-  return getMemoryCached(norm) || loadPriorSqlCache(filters);
+  return resolveMetricsBundle(filters);
 }
 
 /** Return in-memory cache only (fresh within TTL). */
@@ -179,10 +264,10 @@ export async function refreshMetricsBundle(
   onProgress?: (message: string) => void,
 ): Promise<MetricsPayload> {
   const norm = normalizeParams(filters);
-  const metrics = await loadMetricsFromSql(norm, onProgress);
-  const scoped = applySiteFilter(metrics, norm.site);
-  storeMetricsBundleToCache(norm, metrics);
-  return scoped;
+  const sqlNorm: Record<string, string | null> = { ...norm, site: null };
+  const metrics = await loadMetricsFromSql(sqlNorm, onProgress);
+  storeMetricsBundleToCache(sqlNorm, metrics);
+  return applySiteFilter(metrics, norm.site);
 }
 
 export async function getMetricsBundle(filters: Record<string, unknown> = {}): Promise<MetricsPayload> {
@@ -193,8 +278,8 @@ export async function getMetricsBundle(filters: Record<string, unknown> = {}): P
   if (sqlConfigured()) {
     try {
       console.log(`[analytics] Loading live data from ${resolveMetricView()}…`);
-      const metrics = await loadMetricsFromSql(norm);
-      storeMetricsBundleToCache(norm, metrics);
+      const metrics = await loadMetricsFromSql({ ...norm, site: null });
+      storeMetricsBundleToCache({ ...norm, site: null }, metrics);
       return applySiteFilter(metrics, norm.site);
     } catch (err) {
       console.error('[analytics] Live SQL failed:', (err as Error).message);
@@ -257,13 +342,19 @@ export async function runAnalyticsQuery(
 
 export function metricsBundleToConsolePayload(
   metrics: MetricsPayload | null,
-  extras: { _job_id?: string | null; _refreshing?: boolean; fromCache?: boolean } = {},
+  extras: {
+    _job_id?: string | null;
+    _refreshing?: boolean;
+    fromCache?: boolean;
+    _instant?: boolean;
+  } = {},
 ) {
   const fromCache = extras.fromCache ?? false;
   return {
     metrics,
     dashboard: {},
     _cached: fromCache || (metrics ? metrics.meta.source !== 'sql' : true),
+    _instant: extras._instant ?? false,
     _refreshing: extras._refreshing ?? false,
     _job_id: extras._job_id ?? null,
     _source: fromCache ? 'cache' : (metrics?.meta?.source ?? 'loading'),

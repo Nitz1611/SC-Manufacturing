@@ -6,6 +6,7 @@ import {
   getMetricsBundle,
   metricsBundleToConsolePayload,
   refreshMetricsBundle,
+  resolveMetricsBundle,
   resolveMetricView,
   warmupWarehouse,
 } from '../lib/analytics.js';
@@ -19,7 +20,7 @@ import {
   newJobId,
   updateJobMessage,
 } from '../lib/jobs.js';
-import { getPreloadStatus, preloadEnabled } from '../lib/preload.js';
+import { getPreloadStatus, preloadEnabled, prioritizePreloadCombo } from '../lib/preload.js';
 import { getAllSupervisorSummaries, getSupervisorSummary, supervisorConfigured } from '../lib/supervisor.js';
 import type { SummaryEntity } from '../lib/summaryPrompts.js';
 
@@ -226,14 +227,19 @@ summariesRouter.post('/console-data', async (req, res) => {
   const force = Boolean(req.body?.force);
   const usePreload = preloadEnabled() && sqlConfigured();
 
-  const cached = getCachedMetricsBundle(filters);
+  const resolved = resolveMetricsBundle(filters);
   const fresh = getFreshMetricsBundle(filters);
 
-  if (cached && (usePreload || !force)) {
-    return res.json(metricsBundleToConsolePayload(cached, {
+  if (resolved && (usePreload || !force)) {
+    return res.json(metricsBundleToConsolePayload(resolved, {
       fromCache: true,
+      _instant: true,
       _refreshing: usePreload && !fresh,
     }));
+  }
+
+  if (usePreload) {
+    prioritizePreloadCombo(filters);
   }
 
   if (sqlConfigured()) {
@@ -251,7 +257,7 @@ summariesRouter.post('/console-data', async (req, res) => {
       }
     })();
 
-    const stale = force ? null : cached;
+    const stale = force ? null : getCachedMetricsBundle(filters);
     if (stale) {
       const payload = metricsBundleToConsolePayload(stale, { _job_id: jobId, _refreshing: true, fromCache: true });
       return res.json(payload);
