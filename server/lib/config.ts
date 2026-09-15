@@ -127,6 +127,7 @@ export function stopsColumn(): string {
   return resolveColumn('DATABRICKS_STOPS_COLUMN', GOLD_NAMES.stops);
 }
 
+/** @deprecated Do not filter Downtime Type before MEASURE() — use dtMeasureContextFilter(). */
 export function dtTypeFilter(): string {
   const raw = process.env.DATABRICKS_DT_TYPE_FILTER?.trim();
   if (raw) return raw;
@@ -135,13 +136,25 @@ export function dtTypeFilter(): string {
 }
 
 /**
- * Row filter for MEASURE(`Unplanned Downtime %`) queries.
- * Do NOT filter Downtime Type before pct MEASURE — that averages row-level % incorrectly (~20% vs ~5%).
- * Hours/stops queries still use dtTypeFilter().
+ * Row filter for MEASURE() queries (`Unplanned Downtime %`, `Unplanned Downtime Hours`, STOPS).
+ * Default 1=1 — do NOT filter Downtime Type before MEASURE (breaks UC rollup).
  */
-export function dtPctContextFilter(): string {
-  const raw = process.env.DATABRICKS_DT_PCT_FILTER?.trim();
+export function dtMeasureContextFilter(): string {
+  const raw =
+    process.env.DATABRICKS_MEASURE_FILTER?.trim()
+    || process.env.DATABRICKS_DT_PCT_FILTER?.trim()
+    || process.env.DATABRICKS_DT_HOURS_FILTER?.trim();
   return raw || '1=1';
+}
+
+/** @alias dtMeasureContextFilter */
+export function dtPctContextFilter(): string {
+  return dtMeasureContextFilter();
+}
+
+/** @alias dtMeasureContextFilter */
+export function dtHoursContextFilter(): string {
+  return dtMeasureContextFilter();
 }
 
 /** UC metric views require MEASURE() — AVG/SUM on measure columns is invalid. */
@@ -185,8 +198,10 @@ function applySqlFragments(sql: string): string {
     .replace(/\{\{dt_pct_m\}\}/g, dtPctMeasure())
     .replace(/\{\{dt_hours_m\}\}/g, dtHoursMeasure())
     .replace(/\{\{stops_m\}\}/g, stopsMeasure())
-    .replace(/\{\{dt_type_filter\}\}/g, dtTypeFilter())
-    .replace(/\{\{dt_pct_filter\}\}/g, dtPctContextFilter());
+    .replace(/\{\{dt_type_filter\}\}/g, dtMeasureContextFilter())
+    .replace(/\{\{dt_pct_filter\}\}/g, dtMeasureContextFilter())
+    .replace(/\{\{dt_hours_filter\}\}/g, dtMeasureContextFilter())
+    .replace(/\{\{dt_stops_filter\}\}/g, dtMeasureContextFilter());
 }
 
 export function loadQuerySql(queryKey: string): string {
@@ -244,7 +259,7 @@ export function consoleDemoMode(): boolean {
 }
 
 export function coarseCacheKey(params: Record<string, string | null>): string {
-  return `metrics_v2_${JSON.stringify({
+  return `metrics_v3_${JSON.stringify({
     period: params.period || 'week',
     year: params.year || '2026',
     site: params.site || null,
