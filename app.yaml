@@ -1,0 +1,4 @@
+# Databricks App — Flask entry with identical React UI + Node API engine
+command:
+  - python
+  - app.py

@@ -4,31 +4,29 @@ Two maintained branches serve different architectures. **Neither replaces the ot
 
 | Branch | Stack | Status |
 |--------|-------|--------|
-| `cursor/flask-legacy-e63a` | Flask + Supervisor/Genie | **Frozen legacy** — original functionality preserved |
-| `cursor/react-frontend-migration-e63a` | React + Node + direct SQL | **Active** — current Manufacturing Console |
+| `cursor/flask-legacy-e63a` | Original Flask Insights + RCA + Ask Genie | Legacy preserved |
+| `cursor/react-frontend-migration-e63a` | React + Node (npm start) | Active React branch |
+| `cursor/flask-react-parity-e63a` | **Flask entry + same React/Node build** | **Exact React parity via `python app.py`** |
 
 ---
 
-## Flask legacy (`cursor/flask-legacy-e63a`)
+## Flask React parity (`cursor/flask-react-parity-e63a`) — exact replica
 
-**Purpose:** Preserve the initial uploaded Flask app with zero regression.
+**Purpose:** Run `python app.py` (or Databricks App with `app.yaml`) while using the **identical** React UI and Node API engine.
 
-| Feature | Status |
-|---------|--------|
-| Supervisor → Genie data loading | ✅ |
-| Waste + Downtime + OEE KPIs | ✅ |
-| Key Insights, Observations, Opportunities | ✅ |
-| Waste / Downtime trend charts | ✅ |
-| Root Cause Analysis tab | ✅ |
-| Ask Genie chat | ✅ |
-| Shift “Did I Win?” | ✅ |
-| File cache (`cache.json`) | ✅ |
+| Component | Source | Parity |
+|-----------|--------|--------|
+| UI | `client/dist` (same Vite build) | ✅ 100% |
+| API logic | `server/dist` (same TypeScript compile) | ✅ 100% |
+| SQL queries | `config/queries/*.obo.sql` | ✅ 100% |
+| MEASURE() KPIs, filters, heatmaps | Node `analytics.ts` + `metricsTransform.ts` | ✅ 100% |
+| Claude Opus summaries | Node `claudeSummary.ts` | ✅ 100% |
 
-**Not on this branch:** React UI, direct SQL queries, Show In filter, heatmaps, Databricks Node deploy bundle.
+No functionality is reimplemented in Python — Flask only serves static files and proxies `/api/*` to the Node server on an internal port.
 
 ---
 
-## React / Node (`cursor/react-frontend-migration-e63a`) — you are here
+## React / Node (`cursor/react-frontend-migration-e63a`)
 
 **Purpose:** Current production target — unplanned downtime analytics with direct SQL.
 

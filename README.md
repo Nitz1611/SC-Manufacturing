@@ -2,16 +2,20 @@
 
 Unplanned downtime (DT %) analytics dashboard for PepsiCo manufacturing operations.
 
-> **Version strategy:** This branch (`cursor/react-frontend-migration-e63a`) is the **active** React + Node app.  
-> The original Flask app is preserved unchanged on `cursor/flask-legacy-e63a`.  
-> See [docs/VERSIONS.md](docs/VERSIONS.md) for the full feature comparison.
+> **This branch (`cursor/flask-react-parity-e63a`)** runs the **exact same React UI and Node API** as the React branch, with a **Python Flask entry point** (`python app.py`).  
+> Live data, filters, MEASURE() KPIs, heatmaps, and Claude summaries are identical — same `client/dist`, same `server/dist`, same SQL files.
+
+See [docs/VERSIONS.md](docs/VERSIONS.md) for branch comparison.
 
 ## Project structure
 
 ```
 SC-Manufacturing/
-├── client/                 # React UI (Manufacturing Console)
-├── server/                 # Node.js API
+├── app.py                  # Flask entry (serves React UI + proxies to Node API)
+├── app.yaml                # Databricks App config (python app.py)
+├── requirements.txt        # Python deps for Flask entry
+├── client/                 # React UI → built to client/dist
+├── server/                 # Node.js API → built to server/dist
 ├── config/queries/         # Named SQL queries (*.obo.sql)
 ├── shared/types/           # Shared TypeScript types
 └── docs/ARCHITECTURE.md    # Architecture reference
@@ -19,25 +23,28 @@ SC-Manufacturing/
 
 ## Prerequisites
 
-- **Node.js LTS** (includes npm) — https://nodejs.org/
+- **Node.js LTS** (includes npm) — build step only
+- **Python 3.10+** with pip — runtime entry point
 
-On Windows PowerShell, if `npm` is blocked:
-
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-```
-
-## Run locally
+## Run locally (Flask parity mode)
 
 ```powershell
 npm install
-npm run dev
+npm run build
+pip install -r requirements.txt
+python app.py
 ```
 
 | Service | URL |
 |---------|-----|
-| Manufacturing Console UI | http://localhost:5173 |
-| API server | http://localhost:8000 |
+| Manufacturing Console UI | http://localhost:8000 |
+| API (via Node engine) | http://localhost:8000/api/status |
+
+Alternative — Node-only dev (same output):
+
+```powershell
+npm run dev
+```
 
 ## Frontend stack
 
