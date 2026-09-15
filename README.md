@@ -1,8 +1,8 @@
-# SC Manufacturing Console — Pure Flask
+# SC Manufacturing Console — Unplanned Downtime (Pure Flask)
 
 Branch: **`cursor/flask-pure-python-e63a`**
 
-Python + Flask only. No npm, no React, no Node.
+Same **Unplanned Downtime KPI dashboard** as the React branch — **no React, no npm at runtime**.
 
 ## Clone
 
@@ -11,40 +11,58 @@ git clone -b cursor/flask-pure-python-e63a https://github.com/Nitz1611/SC-Manufa
 cd SC-Manufacturing-Flask
 ```
 
-Use a short path (e.g. `C:\scm\`) — not deep OneDrive folders.
+Use a short path (e.g. `C:\scm\`) — avoid deep OneDrive folders.
 
-## Files in this branch
-
-```
-app.py                  Flask entry + API routes
-views.py                Direct SQL for KPI widgets
-cache.py                File cache (cache.json created at runtime)
-supervisor.py           MAS Supervisor / Genie
-claude_supervisor.py    Claude direct mode (USE_CLAUDE_DIRECT=true)
-templates/index.html    UI (Insights, RCA, Ask Genie)
-requirements.txt
-app.yaml                Databricks App config
-.env.example
-```
-
-## Run
+## Run (Windows)
 
 ```powershell
-pip install -r requirements.txt
+py -m pip install -r requirements.txt
 copy .env.example .env
+py app.py
+```
+
+Or with a virtual environment:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 python app.py
 ```
 
 Open http://localhost:8000
 
+## What's included
+
+| Path | Purpose |
+|------|---------|
+| `app.py` | Flask entry |
+| `py_server/` | Python API (same as React branch Node server) |
+| `config/queries/` | MEASURE SQL queries |
+| `templates/index.html` | Dashboard shell (same DOM as React AppLayout) |
+| `static/js/console-engine.js` | Dashboard engine (bundled from React `engine.ts`) |
+| `static/css/boot.css`, `console.css` | Same styles as React branch |
+| `app.yaml` | Databricks App: `python app.py` |
+
+## API (identical to React branch)
+
+- `POST /api/console-data` — metrics bundle
+- `POST /api/analytics/query/:key` — chart SQL
+- `POST /api/summaries`, `/api/summaries/batch` — AI tab narratives
+- `GET /api/status`, `/api/warmup`, `/api/job/:id`
+
+## Rebuild UI from source (maintainers only)
+
+If `client/src/lib/console/engine.ts` changes on the React branch, run once:
+
+```bash
+bash scripts/bundle-console.sh
+```
+
+Commit updated `static/js/console-engine.js`. End users never need npm.
+
 ## Databricks App
 
-1. Copy this folder to Workspace (or connect as a Git repo on this branch)
-2. Set env vars in the App UI (PAT via secrets)
-3. Deploy with `python app.py` (see `app.yaml`)
-
-Verify: `https://<app-url>/api/status`
-
-## Environment variables
-
-See `.env.example` for `DATABRICKS_SERVER_HOSTNAME`, `DATABRICKS_PAT_TOKEN`, `SUPERVISOR_ENDPOINT_NAME`, `DATABRICKS_HTTP_PATH`, etc.
+1. Copy this folder to Workspace (or connect Git repo on this branch)
+2. Set env vars (`DATABRICKS_*`, `CLAUDE_SERVING_ENDPOINT`, etc.)
+3. `pip install -r requirements.txt` → `python app.py`
