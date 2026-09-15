@@ -1,16 +1,46 @@
 """
-supervisor.py — single blocking call, stream=True, no polling loop.
+supervisor.py — dashboard provider (Claude Opus default, Supervisor Agent optional fallback)
+
+Default AI path: Databricks Claude Opus + SQL warehouse context (same JSON schema + prompts).
+Set AI_PROVIDER=supervisor to restore original Supervisor Agent → Genie behaviour.
 """
 import os, json, re, requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
+import claude_ai
+import sql_context
+
 HOSTNAME   = os.getenv("DATABRICKS_SERVER_HOSTNAME","").replace("https://","").replace("http://","").rstrip("/")
 PAT        = os.getenv("DATABRICKS_PAT_TOKEN","")
 ENDPOINT   = os.getenv("SUPERVISOR_ENDPOINT_NAME","")
 DEBUG      = os.getenv("SUPERVISOR_DEBUG","false").lower() == "true"
 QUERY_MODE = os.getenv("SUPERVISOR_QUERY_MODE","minimal")
+AI_PROVIDER = os.getenv("AI_PROVIDER", os.getenv("SUMMARY_PROVIDER", "claude")).lower()
+
+
+def ai_provider() -> str:
+    if AI_PROVIDER == "supervisor":
+        return "supervisor"
+    if claude_ai.claude_configured():
+        return "claude"
+    if all([HOSTNAME, PAT, ENDPOINT]):
+        return "supervisor"
+    return "none"
+
+
+def _call_ai(messages: list) -> str:
+    """Route to Claude Opus (default) or legacy Supervisor Agent."""
+    provider = ai_provider()
+    if provider == "claude":
+        return claude_ai.invoke_claude(messages)
+    if provider == "supervisor":
+        return _call_supervisor(messages)
+    raise RuntimeError(
+        "AI not configured — set DATABRICKS_HOST + DATABRICKS_PAT_TOKEN + CLAUDE_SERVING_ENDPOINT "
+        "(or SUPERVISOR_ENDPOINT_NAME with AI_PROVIDER=supervisor)"
+    )
 
 
 def _is_timeout_response(text: str) -> bool:
@@ -346,26 +376,29 @@ QUESTIONS = {
 
 
 def _call_one_question(q_key: str, view: str, question: str, ctx: str) -> dict:
-    """Call Supervisor with one focused question. Returns partial dict."""
+    """Call Claude Opus (or Supervisor) with one focused question. Returns partial dict."""
+    sql_blob = sql_context.fetch_question_context(q_key, ctx)
+    agent_label = "Claude Opus manufacturing analyst" if ai_provider() == "claude" else "manufacturing analytics supervisor agent"
     prompt = (
-        f"You are a manufacturing analytics supervisor agent.\n"
+        f"You are a {agent_label}.\n"
         f"Filters: {ctx}\n"
         f"View: {view}\n\n"
+        f"LIVE WAREHOUSE DATA (use these numbers — do not invent values):\n{sql_blob}\n\n"
         f"{question}\n\n"
         f"Return ONLY valid JSON — no text before or after."
     )
-    print(f"[supervisor] question={q_key}")
+    print(f"[ai] question={q_key} provider={ai_provider()}")
     try:
-        raw    = _call_supervisor([{"role": "user", "content": prompt}])
+        raw    = _call_ai([{"role": "user", "content": prompt}])
         parsed = _parse(raw)
         if "narrative" in parsed and len(parsed) == 1:
-            print(f"[supervisor]   {q_key} → plain text, skipping")
+            print(f"[ai]   {q_key} → plain text, skipping")
             return {}
         mapped = _map_supervisor_schema(parsed)
-        print(f"[supervisor]   {q_key} → keys: {list(mapped.keys())}")
+        print(f"[ai]   {q_key} → keys: {list(mapped.keys())}")
         return mapped
     except Exception as e:
-        print(f"[supervisor]   {q_key} → failed: {e}")
+        print(f"[ai]   {q_key} → failed: {e}")
         return {}
 
 
@@ -684,7 +717,10 @@ def _sanitise(d):
 def get_dashboard(filters):
     if QUERY_MODE in ("parallel", "split"):
         return get_dashboard_parallel(filters)
-    raw  = _call_supervisor([{"role":"user","content":_build_dashboard_prompt(filters)}])
+    ctx = ", ".join(f"{k}={v}" for k,v in filters.items() if v) or "all sites, current week"
+    sql_blob = sql_context.fetch_dashboard_snapshot(ctx)
+    prompt = _build_dashboard_prompt(filters) + f"\n\nLIVE WAREHOUSE DATA (use these numbers — do not invent):\n{sql_blob}\n"
+    raw  = _call_ai([{"role":"user","content": prompt}])
     d    = _parse(raw)
     if "narrative" in d and len(d)==1:
         n=d["narrative"]
@@ -702,7 +738,10 @@ def get_dashboard(filters):
 
 
 def ask_question(question, filters):
-    raw=_call_supervisor([{"role":"user","content":_build_ask_prompt(question,filters)}])
+    ctx = ", ".join(f"{k}={v}" for k,v in filters.items() if v) or "all sites"
+    sql_blob = sql_context.fetch_question_context("ask", ctx)
+    prompt = _build_ask_prompt(question, filters) + f"\n\nLIVE WAREHOUSE DATA:\n{sql_blob}\n"
+    raw=_call_ai([{"role":"user","content": prompt}])
     d=_parse(raw)
     return d.get("narrative") or raw or "No answer returned."
 

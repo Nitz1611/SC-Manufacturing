@@ -11,7 +11,9 @@ Open: http://localhost:8000
 import os, json, time, uuid, threading
 from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
-from supervisor import get_dashboard, ask_question, get_rca
+from supervisor import get_dashboard, ask_question, get_rca, ai_provider
+import claude_ai
+import databricks_client as db_client
 import cache as cache_store
 
 load_dotenv()
@@ -61,7 +63,7 @@ def _cleanup_old_jobs():
 # ── Background worker ─────────────────────────────────────────────
 def _run_dashboard_job(jid: str, filters: dict, cache_key: str):
     try:
-        print(f"[job {jid[:8]}] Starting Supervisor call…")
+        print(f"[job {jid[:8]}] Starting AI dashboard call ({ai_provider()})…")
         data = get_dashboard(filters)
         cache_store.set(cache_key, data)
         _finish_job(jid, data)
@@ -74,10 +76,15 @@ def _run_dashboard_job(jid: str, filters: dict, cache_key: str):
 # ── GET /api/status ───────────────────────────────────────────────
 @app.route("/api/status")
 def status():
+    provider = ai_provider()
     return jsonify({
         "ok":        True,
+        "ai_provider": provider,
+        "claude":    claude_ai.status(),
         "supervisor": os.getenv("SUPERVISOR_ENDPOINT_NAME",   "NOT SET"),
-        "hostname":   os.getenv("DATABRICKS_SERVER_HOSTNAME", "NOT SET"),
+        "hostname":   os.getenv("DATABRICKS_HOST") or os.getenv("DATABRICKS_SERVER_HOSTNAME", "NOT SET"),
+        "warehouse":  os.getenv("DATABRICKS_WAREHOUSE_ID", "NOT SET"),
+        "sql_configured": db_client.sql_configured(),
         "pat_set":    bool(os.getenv("DATABRICKS_PAT_TOKEN")),
         "port":       PORT,
         "cache":      cache_store.info(),
@@ -95,7 +102,7 @@ def load_status():
     if active:
         elapsed = int(time.time() - active[0].get("started", time.time()))
         return jsonify({"state": "loading", "step": 2,
-                        "message": f"Querying Genie… {elapsed}s"})
+                        "message": f"Loading dashboard… {elapsed}s"})
     done = [j for j in _jobs.values() if j["status"] == "done"]
     if done:
         return jsonify({"state": "done", "step": 4, "message": "Ready"})
@@ -140,7 +147,7 @@ def job_status(jid):
         return jsonify({
             "status":  "running",
             "elapsed": elapsed,
-            "message": f"Supervisor querying Genie views… ({elapsed}s elapsed)",
+            "message": f"AI querying metric views… ({elapsed}s elapsed)",
         })
 
     if job["status"] == "error":
@@ -219,11 +226,13 @@ def index():
 if __name__ == "__main__":
     print()
     print("╔══════════════════════════════════════════════════════╗")
-    print("║  Manufacturing Console  —  Flask / Approach A        ║")
+    print("║  Manufacturing Console  —  Flask Legacy              ║")
     print(f"║  http://localhost:{PORT}                              ║")
     print("╠══════════════════════════════════════════════════════╣")
-    print(f"║  Supervisor : {os.getenv('SUPERVISOR_ENDPOINT_NAME','NOT SET'):<38}║")
-    print(f"║  Hostname   : {os.getenv('DATABRICKS_SERVER_HOSTNAME','NOT SET'):<38}║")
+    print(f"║  AI Provider: {ai_provider():<38}║")
+    print(f"║  Claude     : {claude_ai.endpoint() if claude_ai.claude_configured() else 'NOT SET':<38}║")
+    print(f"║  Hostname   : {os.getenv('DATABRICKS_HOST') or os.getenv('DATABRICKS_SERVER_HOSTNAME','NOT SET'):<38}║")
+    print(f"║  Warehouse  : {os.getenv('DATABRICKS_WAREHOUSE_ID','NOT SET'):<38}║")
     print(f"║  PAT        : {'SET ✓' if os.getenv('DATABRICKS_PAT_TOKEN') else 'NOT SET ⚠':<38}║")
     print(f"║  Mode       : {os.getenv('SUPERVISOR_QUERY_MODE','minimal'):<38}║")
     print(f"║  Cache TTL  : {os.getenv('INSIGHTS_REFRESH_INTERVAL_HOURS','24')+'h':<38}║")
@@ -236,7 +245,7 @@ if __name__ == "__main__":
             s = "VALID" if not e["expired"] else "EXPIRED"
             print(f"[cache]   {s} — {e['age_min']}m old, expires in {e['expires_in']}m")
     else:
-        print("\n[cache] No cache — will load from Supervisor on first request")
+        print("\n[cache] No cache — will load from Claude Opus + SQL on first request")
     print()
 
     if PREWARM:
