@@ -24,7 +24,7 @@ export function initManufacturingConsole(): () => void {
   'use strict';
 
   const SLICERS = {
-    showIn: { id: 'showIn', label: 'Show in', multi: false, options: ['Millions', 'Thousands', 'Percentage'], default: 'Millions' },
+    showIn: { id: 'showIn', label: 'Show in', multi: false, options: ['Millions', 'Thousands', 'Actual', 'Percentage'], default: 'Millions' },
     timeframe: { id: 'timeframe', label: 'Timeframe', multi: false, options: ['FY', 'Quarter', 'Month', 'Week'], default: 'FY' },
     year: { id: 'year', label: 'Year', multi: false, options: ['2026', '2025', '2024', '2023'], default: '2026' },
     site: { id: 'site', label: 'Site', multi: false, options: ['All', 'ABERDEEN', 'ARLINGTON', 'FRISCO', 'MODESTO', 'PLANO'], default: 'All' },
@@ -757,6 +757,7 @@ export function initManufacturingConsole(): () => void {
   function showInMode() {
     const v = String(state.filters.showIn || 'Millions');
     if (v.includes('Percent')) return 'percentage';
+    if (v.includes('Actual')) return 'actual';
     if (v.includes('Thousand')) return 'thousands';
     return 'millions';
   }
@@ -858,8 +859,14 @@ export function initManufacturingConsole(): () => void {
       return { axis, yMax, stepSize };
     }
 
-    const defaultMax = showInMode() === 'millions' ? 0.004 : 0.04;
-    const defaultStep = showInMode() === 'millions' ? 0.001 : 0.01;
+    const defaultMax = showInMode() === 'millions' ? 0.004
+      : showInMode() === 'thousands' ? 0.04
+        : showInMode() === 'actual' ? 100
+          : 0.04;
+    const defaultStep = showInMode() === 'millions' ? 0.001
+      : showInMode() === 'thousands' ? 0.01
+        : showInMode() === 'actual' ? 10
+          : 0.01;
     if (peak <= 0) {
       return { axis, yMax: defaultMax, stepSize: defaultStep };
     }
@@ -941,6 +948,10 @@ export function initManufacturingConsole(): () => void {
       return 0.0005;
     }
     if (showInMode() === 'thousands') return 0.05;
+    if (showInMode() === 'actual') {
+      if (dataMax <= 0) return 1;
+      return Math.max(niceStepSize(dataMax * 0.05), 1);
+    }
     return 0.5;
   }
 
@@ -985,6 +996,15 @@ export function initManufacturingConsole(): () => void {
         scale: v => v / 1e6,
       };
     }
+    if (showInMode() === 'actual') {
+      return {
+        max: null,
+        title: 'Hours',
+        tickSuffix: '',
+        decimals: 0,
+        scale: v => v,
+      };
+    }
     return {
       max: null,
       title: 'Hours (M)',
@@ -1010,11 +1030,19 @@ export function initManufacturingConsole(): () => void {
     return (Number(pct) / avg) * (total / n);
   }
 
+  function formatActualHours(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    const rounded = Math.abs(n) >= 100 ? Math.round(n) : +n.toFixed(2);
+    return `${rounded.toLocaleString()} h`;
+  }
+
   function cellDisplayValue(value) {
     if (value == null || Number.isNaN(Number(value))) return '—';
     if (showInMode() === 'percentage') return Number(value).toFixed(2) + '%';
     if (showInMode() === 'millions') return (Number(value) / 1e6).toFixed(3) + ' MM';
-    return (Number(value) / 1e3).toFixed(2) + ' M';
+    if (showInMode() === 'thousands') return (Number(value) / 1e3).toFixed(2) + ' M';
+    return formatActualHours(value);
   }
 
   function tableSummaryHeader() {
@@ -1044,6 +1072,7 @@ export function initManufacturingConsole(): () => void {
     const hours = parseHoursValue(raw);
     if (showInMode() === 'millions') return (hours / 1e6).toFixed(3) + ' MM';
     if (showInMode() === 'thousands') return (hours / 1e3).toFixed(2) + ' M';
+    if (showInMode() === 'actual') return formatActualHours(hours);
     return raw;
   }
 
@@ -1948,7 +1977,9 @@ export function initManufacturingConsole(): () => void {
       ? 'Unplanned DT %'
       : mode === 'millions'
         ? 'Unplanned DT Hours (MM)'
-        : 'Unplanned DT Hours (M)';
+        : mode === 'thousands'
+          ? 'Unplanned DT Hours (M)'
+          : 'Unplanned Downtime Hours';
     const primaryValue = mode === 'percentage' ? (dt.value || '—') : formatKpiHoursDisplay(dtHrs.value);
     const secondaryLabel = mode === 'percentage' ? 'Unplanned DT Hours' : 'Unplanned DT %';
     const secondaryValue = mode === 'percentage' ? formatKpiHoursDisplay(dtHrs.value) : (dt.value || '—');
