@@ -20,7 +20,29 @@ DO NOT COPY
   .env            — use Databricks App secrets / env vars
   .git/           — not needed
 
-STEP 1 — COPY TO DATABRICKS WORKSPACE
+STEP 1 — GET THE DEPLOY BUNDLE
+--------------------------------
+Option A — Clone repo and create ZIP locally (RECOMMENDED for private GitHub repos):
+
+  git clone -b cursor/react-frontend-migration-e63a https://github.com/Nitz1611/SC-Manufacturing.git
+  cd SC-Manufacturing
+  .\scripts\create-deploy-zip.ps1
+
+  Expected ZIP size: about 250–300 KB. If you see ~17 KB, that file is NOT a valid ZIP
+  (usually an HTML login/error page from GitHub — common with private repos).
+
+Option B — Use the folder directly (no ZIP needed):
+
+  git clone -b cursor/react-frontend-migration-e63a https://github.com/Nitz1611/SC-Manufacturing.git
+  cd SC-Manufacturing\SC-Manufacturing-Databricks-Deploy
+  .\verify-upload.ps1
+  .\import-with-cli.ps1 -WorkspacePath "/Workspace/Users/<your-email>/SC-Manufacturing"
+
+Option C — GitHub raw link (works only if you are logged in and repo access allows it):
+
+  https://raw.githubusercontent.com/Nitz1611/SC-Manufacturing/cursor/react-frontend-migration-e63a/SC-Manufacturing-Databricks-Deploy.zip
+
+STEP 2 — COPY TO DATABRICKS WORKSPACE
 ------------------------------------
 Target path example:
   /Workspace/Users/<your-email>/SC-Manufacturing
