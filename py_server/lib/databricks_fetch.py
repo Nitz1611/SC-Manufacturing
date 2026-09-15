@@ -11,13 +11,13 @@ _proxy_logged = False
 
 
 def databricks_host() -> str:
-    host = os.environ.get("DATABRICKS_HOST") or os.environ.get("DATABRICKS_SERVER_HOSTNAME") or ""
+    host = _env("DATABRICKS_HOST") or _env("DATABRICKS_SERVER_HOSTNAME")
     host = re.sub(r"^https?://", "", host)
     return host.rstrip("/")
 
 
 def databricks_token() -> str:
-    return os.environ.get("DATABRICKS_PAT_TOKEN") or os.environ.get("DATABRICKS_TOKEN") or ""
+    return _env("DATABRICKS_PAT_TOKEN") or _env("DATABRICKS_TOKEN")
 
 
 def _proxy_url() -> str | None:

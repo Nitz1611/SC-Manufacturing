@@ -45,12 +45,21 @@ def _resolve_column(env_key: str, default_name: str) -> str:
     return quote_ident(raw or default_name)
 
 
+def _env(key: str, default: str = "") -> str:
+    return (os.environ.get(key) or default).strip()
+
+
 def resolve_metric_view() -> str:
-    metric_view = (os.environ.get("DATABRICKS_METRIC_VIEW") or "").strip()
+    metric_view = _env("DATABRICKS_METRIC_VIEW")
     if metric_view:
+        # Whole three-part names must not be wrapped in one pair of backticks.
+        if metric_view.startswith("`") and metric_view.endswith("`"):
+            inner = metric_view[1:-1].strip()
+            if inner.count(".") >= 2 and "`" not in inner:
+                metric_view = inner
         return metric_view
-    catalog = os.environ.get("DATABRICKS_CATALOG") or "main"
-    schema = (os.environ.get("DATABRICKS_SCHEMA") or "").strip()
+    catalog = _env("DATABRICKS_CATALOG") or "main"
+    schema = _env("DATABRICKS_SCHEMA")
     if schema:
         return f"{catalog}.{schema}.pgt_plnt_prodtn_metric_view"
     return f"{catalog}.pgt_plnt_prodtn_metric_view"
