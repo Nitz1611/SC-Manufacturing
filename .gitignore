@@ -2,7 +2,3 @@
 __pycache__/
 *.pyc
 cache.json
-node_modules/
-client/
-server/
-SC_manf_Console_flask.zip

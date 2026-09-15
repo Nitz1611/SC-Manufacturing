@@ -37,14 +37,6 @@ except Exception as _ve:
     def validate_views(): return {}
 import cache as cache_store
 
-# KPI / direct-SQL engine (ported from React branch) — mounted at /api/metrics/*
-try:
-    from py_server.routes import register_routes as register_metrics_routes
-    METRICS_API_AVAILABLE = True
-except Exception as _me:
-    print(f"[metrics] py_server not available: {_me}")
-    METRICS_API_AVAILABLE = False
-
 PORT    = int(os.getenv("PORT") or os.getenv("DATABRICKS_APP_PORT") or 8000)
 PREWARM = os.getenv("GENIE_INSIGHTS_ON_STARTUP", "true").lower() == "true"
 REFRESH_MINUTES = int(os.getenv("INSIGHTS_REFRESH_INTERVAL_MINUTES", "30"))
@@ -76,10 +68,6 @@ def _background_refresh_loop():
         ).start()
 
 app = Flask(__name__)
-
-if METRICS_API_AVAILABLE:
-    register_metrics_routes(app, url_prefix="/api/metrics")
-    print("[metrics] KPI SQL API mounted at /api/metrics/*")
 
 # ── Job store — holds background task results ─────────────────────
 # { job_id: {"status": "running|done|error", "result": {...}, "error": ""} }
@@ -154,8 +142,6 @@ def status():
         "active_jobs": len([j for j in _jobs.values() if j["status"] == "running"]),
         "cache_hit":   bool(cached),
         "cached_data": cached,
-        "metrics_api": METRICS_API_AVAILABLE,
-        "metrics_prefix": "/api/metrics",
     })
 
 

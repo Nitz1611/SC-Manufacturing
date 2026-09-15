@@ -1,66 +1,50 @@
-# SC Manufacturing Console — Pure Flask (no React)
+# SC Manufacturing Console — Pure Flask
 
-Branch: `cursor/flask-pure-python-e63a`
+Branch: **`cursor/flask-pure-python-e63a`**
 
-Manufacturing console in **Python + Flask only** — no npm, no React, no Node at runtime.
+Python + Flask only. No npm, no React, no Node.
 
-Structure matches Sravani's module layout, with the React migration SQL engine available under `/api/metrics/*`.
+## Clone
 
-## Project layout
+```powershell
+git clone -b cursor/flask-pure-python-e63a https://github.com/Nitz1611/SC-Manufacturing.git SC-Manufacturing-Flask
+cd SC-Manufacturing-Flask
+```
+
+Use a short path (e.g. `C:\scm\`) — not deep OneDrive folders.
+
+## Files in this branch
 
 ```
-app.py                  Flask entry + Insights/RCA/Ask routes
-views.py                Direct SQL for KPI cards (MEASURE)
-cache.py                File cache (cache.json at runtime)
-supervisor.py           MAS Supervisor / Genie client
+app.py                  Flask entry + API routes
+views.py                Direct SQL for KPI widgets
+cache.py                File cache (cache.json created at runtime)
+supervisor.py           MAS Supervisor / Genie
 claude_supervisor.py    Claude direct mode (USE_CLAUDE_DIRECT=true)
-templates/
-  index.html            Full UI (inline CSS/JS, Chart.js CDN)
-py_server/              Direct-SQL KPI engine (from React migration)
-config/queries/         Named SQL files for py_server
+templates/index.html    UI (Insights, RCA, Ask Genie)
 requirements.txt
-app.yaml                Databricks App: python app.py
+app.yaml                Databricks App config
+.env.example
 ```
 
-## Run locally
+## Run
 
-```bash
+```powershell
 pip install -r requirements.txt
-cp .env.example .env   # edit credentials
+copy .env.example .env
 python app.py
 ```
 
 Open http://localhost:8000
 
-## UI tabs (templates/index.html)
+## Databricks App
 
-| Tab | API |
-|-----|-----|
-| Insights | `POST /api/dashboard` → poll `GET /api/job/<id>` |
-| Root Cause Analysis | `POST /api/rca` |
-| Ask Genie | `POST /api/ask` |
-| Fast SQL widgets | `POST /api/views`, `GET /api/filters` |
+1. Copy this folder to Workspace (or connect as a Git repo on this branch)
+2. Set env vars in the App UI (PAT via secrets)
+3. Deploy with `python app.py` (see `app.yaml`)
 
-## KPI SQL API (ported from React branch)
-
-Mounted at **`/api/metrics`** to avoid route clashes with Sravani's `/api/status` and `/api/job`:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /api/metrics/console-data` | Full metrics bundle (heatmaps, filters) |
-| `POST /api/metrics/analytics/query/<key>` | Individual SQL queries |
-| `POST /api/metrics/summaries` | Claude tab summaries |
-| `GET /api/metrics/status` | SQL engine health |
-
-## Deploy bundle
-
-```bash
-bash scripts/build-flask-deploy-bundle.sh
-bash scripts/test-flask-deploy.sh
-```
-
-Upload `SC-Manufacturing-Databricks-Deploy/` to Databricks → `./setup.sh` → deploy with `python app.py`.
+Verify: `https://<app-url>/api/status`
 
 ## Environment variables
 
-See `.env.example` for Supervisor, Claude, warehouse SQL, and cache settings.
+See `.env.example` for `DATABRICKS_SERVER_HOSTNAME`, `DATABRICKS_PAT_TOKEN`, `SUPERVISOR_ENDPOINT_NAME`, `DATABRICKS_HTTP_PATH`, etc.
