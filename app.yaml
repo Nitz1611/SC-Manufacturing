@@ -1,0 +1,4 @@
+# Databricks App — Python + Flask (no Node runtime)
+command:
+  - python
+  - app.py
