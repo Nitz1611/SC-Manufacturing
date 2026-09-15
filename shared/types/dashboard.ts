@@ -25,6 +25,12 @@ export interface MetricsPayload {
     stops: KpiValue;
     oee: KpiValue;
   };
+  /** Per-site MEASURE() KPI rollups (network fetch only). */
+  site_kpis?: Record<string, {
+    downtime_pct: number;
+    downtime_hrs: number;
+    stops: number;
+  }>;
   tab_insights: Record<string, string>;
   filter_options?: {
     sites: string[];
@@ -69,6 +75,7 @@ export interface AnalyticsParams {
 
 export type QueryKey =
   | 'dashboard_dt_kpis'
+  | 'dashboard_dt_site_kpis'
   | 'dashboard_dt_period_trend'
   | 'dashboard_dt_site_by_period'
   | 'dashboard_dt_category_by_period'

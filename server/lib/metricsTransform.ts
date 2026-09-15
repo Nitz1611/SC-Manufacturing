@@ -252,6 +252,48 @@ function parseHours(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+export function formatKpisFromRaw(raw: {
+  downtime_pct?: unknown;
+  downtime_hrs?: unknown;
+  stops?: unknown;
+}): MetricsPayload['kpis'] {
+  const dtPct = Number(raw.downtime_pct ?? 0);
+  const dtHrs = Number(raw.downtime_hrs ?? 0);
+  const stops = Number(raw.stops ?? 0);
+  return {
+    downtime_pct: {
+      value: `${dtPct.toFixed(2)}%`,
+      delta: 'vs prior period',
+      direction: dtPct > 5 ? 'bad' as const : 'good' as const,
+    },
+    downtime_hrs: {
+      value: `${Math.round(dtHrs).toLocaleString()} h`,
+      delta: '',
+      direction: 'warn' as const,
+    },
+    stops: {
+      value: String(Math.round(stops)),
+      delta: '',
+      direction: 'warn' as const,
+    },
+    oee: { value: 'N/A', delta: 'Not in metric view', direction: 'warn' as const },
+  };
+}
+
+function buildSiteKpisMap(rows: Record<string, unknown>[]): MetricsPayload['site_kpis'] {
+  const out: NonNullable<MetricsPayload['site_kpis']> = {};
+  for (const row of rows) {
+    const site = String(row.site || '').toUpperCase();
+    if (!site) continue;
+    out[site] = {
+      downtime_pct: +Number(row.downtime_pct ?? 0).toFixed(2),
+      downtime_hrs: +Number(row.downtime_hrs ?? 0).toFixed(0),
+      stops: +Number(row.stops ?? 0).toFixed(0),
+    };
+  }
+  return out;
+}
+
 function periodValuesWithSignal(arr: (number | null | undefined)[] | undefined): number[] {
   return (arr || [])
     .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0)
@@ -357,6 +399,9 @@ export function applySiteFilter(metrics: MetricsPayload, site: string | null): M
     if (out.site_by_period[siteKey]?.length) {
       out.period_trend = [...out.site_by_period[siteKey]];
     }
+    if (out.site_kpis?.[siteKey]) {
+      out.kpis = formatKpisFromRaw(out.site_kpis[siteKey]);
+    }
     out.meta.filtered_site = siteKey;
     out.tab_insights = buildTabInsights(out);
     return out;
@@ -381,6 +426,13 @@ export function queryResultForKey(queryKey: string, metrics: MetricsPayload): un
   switch (queryKey) {
     case 'dashboard_dt_kpis':
       return { rows: [metrics.kpis] };
+    case 'dashboard_dt_site_kpis':
+      return {
+        rows: Object.entries(metrics.site_kpis || {}).map(([site, kpi]) => ({
+          site,
+          ...kpi,
+        })),
+      };
     case 'dashboard_dt_period_trend':
       return { rows: metrics.periods.map((p, i) => ({ period_label: p, dt_pct: metrics.period_trend[i] })) };
     case 'dashboard_dt_site_by_period':
@@ -550,6 +602,7 @@ function buildDowByShift(
 
 export interface SqlQueryResults {
   kpis: Record<string, unknown>[];
+  siteKpis: Record<string, unknown>[];
   periodTrend: Record<string, unknown>[];
   siteByPeriod: Record<string, unknown>[];
   categoryByPeriod: Record<string, unknown>[];
@@ -582,28 +635,8 @@ export function buildMetricsFromSql(
   });
 
   const k = results.kpis[0] || {};
-  const dtPct = Number(k.downtime_pct ?? 0);
-  const dtHrs = Number(k.downtime_hrs ?? 0);
-  const stops = Number(k.stops ?? 0);
-
-  const kpis = {
-    downtime_pct: {
-      value: `${dtPct.toFixed(2)}%`,
-      delta: 'vs prior period',
-      direction: dtPct > 5 ? 'bad' as const : 'good' as const,
-    },
-    downtime_hrs: {
-      value: `${Math.round(dtHrs).toLocaleString()} h`,
-      delta: '',
-      direction: 'warn' as const,
-    },
-    stops: {
-      value: String(Math.round(stops)),
-      delta: '',
-      direction: 'warn' as const,
-    },
-    oee: { value: 'N/A', delta: 'Not in metric view', direction: 'warn' as const },
-  };
+  const kpis = formatKpisFromRaw(k);
+  const site_kpis = buildSiteKpisMap(results.siteKpis);
 
   const site_by_period = pivotMetricRows(results.siteByPeriod, 'site', periods, 'dt_pct');
   const site_by_period_hrs = pivotMetricRows(results.siteByPeriod, 'site', periods, 'dt_hours');
@@ -695,6 +728,7 @@ export function buildMetricsFromSql(
     periods,
     weeks: dowWeeks,
     kpis,
+    site_kpis,
     tab_insights: {},
     filter_options,
     site_by_period,

@@ -1292,6 +1292,30 @@ export function initManufacturingConsole(): () => void {
     return { overview, category, line, dow: dowInsight, reason };
   }
 
+  function formatKpisFromRaw(raw) {
+    const dtPct = Number(raw?.downtime_pct ?? 0);
+    const dtHrs = Number(raw?.downtime_hrs ?? 0);
+    const stops = Number(raw?.stops ?? 0);
+    return {
+      downtime_pct: {
+        value: `${dtPct.toFixed(2)}%`,
+        delta: 'vs prior period',
+        direction: dtPct > 5 ? 'bad' : 'good',
+      },
+      downtime_hrs: {
+        value: `${Math.round(dtHrs).toLocaleString()} h`,
+        delta: '',
+        direction: 'warn',
+      },
+      stops: {
+        value: String(Math.round(stops)),
+        delta: '',
+        direction: 'warn',
+      },
+      oee: { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
+    };
+  }
+
   function filterMetricsClient(base) {
     if (!base) return base;
     const m = JSON.parse(JSON.stringify(base));
@@ -1336,6 +1360,10 @@ export function initManufacturingConsole(): () => void {
         if (m.site_category_by_period_hrs?.[siteKey]) m.category_by_period_hrs = m.site_category_by_period_hrs[siteKey];
         if (m.site_line_by_period?.[siteKey]) m.line_by_period = m.site_line_by_period[siteKey];
         if (m.site_line_by_period_hrs?.[siteKey]) m.line_by_period_hrs = m.site_line_by_period_hrs[siteKey];
+
+        if (isLiveSql(m) && m.site_kpis?.[siteKey]) {
+          m.kpis = formatKpisFromRaw(m.site_kpis[siteKey]);
+        }
 
         m.meta = { ...(m.meta || {}), filtered_site: siteKey };
       } else if (isLiveSql(m)) {
@@ -1387,7 +1415,7 @@ export function initManufacturingConsole(): () => void {
       periodVals = m.period_trend.filter(v => v != null && Number(v) > 0);
     }
 
-    if (periodVals.length && dtPct === 0) {
+    if (periodVals.length && dtPct === 0 && !isLiveSql(m) && !m.site_kpis) {
       dtPct = periodVals.reduce((a, b) => a + Number(b), 0) / periodVals.length;
     }
 

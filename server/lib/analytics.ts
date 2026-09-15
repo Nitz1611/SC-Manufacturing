@@ -59,6 +59,7 @@ async function loadMetricsFromSql(
   onProgress?.('Querying KPIs, sites, and trends…');
   const [
     kpis,
+    siteKpis,
     periodTrend,
     siteByPeriod,
     reasons,
@@ -68,6 +69,7 @@ async function loadMetricsFromSql(
     filterOptions,
   ] = await Promise.all([
     executeQuery('dashboard_dt_kpis', norm),
+    executeQuery('dashboard_dt_site_kpis', norm),
     executeQuery('dashboard_dt_period_trend', norm),
     executeQuery('dashboard_dt_site_by_period', norm),
     executeQuery('dashboard_dt_reasons', norm),
@@ -88,6 +90,7 @@ async function loadMetricsFromSql(
 
   const results: SqlQueryResults = {
     kpis,
+    siteKpis,
     periodTrend,
     siteByPeriod,
     categoryByPeriod,

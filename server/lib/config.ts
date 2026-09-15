@@ -134,6 +134,16 @@ export function dtTypeFilter(): string {
   return `UPPER(TRIM(${col})) IN ('UNPLANNED', 'UNSPECIFIED')`;
 }
 
+/**
+ * Row filter for MEASURE(`Unplanned Downtime %`) queries.
+ * Do NOT filter Downtime Type before pct MEASURE — that averages row-level % incorrectly (~20% vs ~5%).
+ * Hours/stops queries still use dtTypeFilter().
+ */
+export function dtPctContextFilter(): string {
+  const raw = process.env.DATABRICKS_DT_PCT_FILTER?.trim();
+  return raw || '1=1';
+}
+
 /** UC metric views require MEASURE() — AVG/SUM on measure columns is invalid. */
 function measureExpr(columnExpr: string): string {
   return `MEASURE(${columnExpr})`;
@@ -175,7 +185,8 @@ function applySqlFragments(sql: string): string {
     .replace(/\{\{dt_pct_m\}\}/g, dtPctMeasure())
     .replace(/\{\{dt_hours_m\}\}/g, dtHoursMeasure())
     .replace(/\{\{stops_m\}\}/g, stopsMeasure())
-    .replace(/\{\{dt_type_filter\}\}/g, dtTypeFilter());
+    .replace(/\{\{dt_type_filter\}\}/g, dtTypeFilter())
+    .replace(/\{\{dt_pct_filter\}\}/g, dtPctContextFilter());
 }
 
 export function loadQuerySql(queryKey: string): string {
@@ -233,7 +244,7 @@ export function consoleDemoMode(): boolean {
 }
 
 export function coarseCacheKey(params: Record<string, string | null>): string {
-  return `metrics_${JSON.stringify({
+  return `metrics_v2_${JSON.stringify({
     period: params.period || 'week',
     year: params.year || '2026',
     site: params.site || null,
