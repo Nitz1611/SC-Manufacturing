@@ -27,9 +27,29 @@ Option A — Clone repo and create ZIP locally (RECOMMENDED for private GitHub r
   git clone -b cursor/react-frontend-migration-e63a https://github.com/Nitz1611/SC-Manufacturing.git
   cd SC-Manufacturing
   .\scripts\create-deploy-zip.ps1
+  Expand-Archive scm-deploy.zip -DestinationPath C:\scm -Force
+  cd C:\scm\scm-deploy
 
   Expected ZIP size: about 250–300 KB. If you see ~17 KB, that file is NOT a valid ZIP
   (usually an HTML login/error page from GitHub — common with private repos).
+
+  Extract to a SHORT path (NOT OneDrive):
+    Expand-Archive scm-deploy.zip -DestinationPath C:\scm -Force
+    cd C:\scm\scm-deploy
+
+WINDOWS — Error 0x80010135 "Path too long"
+------------------------------------------
+  Do NOT extract or copy under OneDrive or deep nested project folders.
+  Use a short local path instead:
+
+    cd SC-Manufacturing\SC-Manufacturing-Databricks-Deploy
+    .\prepare-short-path.ps1
+
+  This copies everything to C:\scm-deploy\ (short path). Deploy from there.
+
+  Or enable long paths (Windows 10/11, admin PowerShell once):
+    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+      -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force
 
 Option B — Use the folder directly (no ZIP needed):
 
