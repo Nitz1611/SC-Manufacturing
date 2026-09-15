@@ -6,8 +6,13 @@ __pycache__/
 .DS_Store
 *.tsbuildinfo
 
+# Pre-built deploy bundle (includes client/dist and server/dist)
+!SC-Manufacturing-Databricks-Deploy/
+!SC-Manufacturing-Databricks-Deploy/**/
+
 # Runtime cache — regenerated locally, do not commit
 cache.json
 
 # Build output
 client/dist/
+server/dist/
