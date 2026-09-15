@@ -1,0 +1,25 @@
+# Databricks App configuration
+# Docs: https://docs.databricks.com/en/dev-tools/databricks-apps/index.html
+#
+# 1. Copy this folder to /Workspace/Users/<your-email>/SC-Manufacturing
+# 2. Set environment variables in the App UI (Secrets recommended for PAT)
+# 3. Create App → point to this folder → Deploy
+
+command:
+  - npm
+  - start
+
+# Uncomment and set values in Databricks App UI → Environment variables instead of hardcoding secrets.
+# env:
+#   - name: DATABRICKS_WAREHOUSE_ID
+#     value: "your-warehouse-id"
+#   - name: DATABRICKS_HOST
+#     value: "adb-xxxxx.azuredatabricks.net"
+#   - name: DATABRICKS_METRIC_VIEW
+#     value: "catalog.schema.pgt_plnt_prodtn_metric_view"
+#   - name: DATABRICKS_PAT_TOKEN
+#     valueFrom: secret
+#   - name: SUMMARY_PROVIDER
+#     value: "claude"
+#   - name: CLAUDE_SERVING_ENDPOINT
+#     value: "databricks-claude-opus-4-6"
