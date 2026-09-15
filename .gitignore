@@ -1,9 +1,0 @@
-.env
-__pycache__/
-*.pyc
-cache.json
-node_modules/
-client/
-server/
-py_server/
-SC-Manufacturing-Databricks-Deploy/

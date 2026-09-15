@@ -1,4 +1,0 @@
-# Databricks App — pure Python + Flask (no npm)
-command:
-  - python
-  - app.py
