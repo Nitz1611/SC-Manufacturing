@@ -596,9 +596,34 @@ body {
 /* ── METRIC STRIP ── */
 .metric-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
   margin-bottom: 24px;
+}
+
+.metric-card-with-trend {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.metric-card-main {
+  flex: 0 0 auto;
+  min-width: 118px;
+}
+
+.metric-card-trend {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  height: 72px;
+}
+
+.metric-card-trend canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .metric-card {
@@ -1344,6 +1369,12 @@ body {
 }
 
 .compare-chart-wrap { height: 260px; margin-bottom: 16px; position: relative; }
+
+.compare-chart-wrap-horizontal {
+  min-height: 240px;
+  max-height: 520px;
+  overflow-y: auto;
+}
 
 .compare-table .site-best td { background: #e8f8f4 !important; font-weight: 700; }
 .compare-table .site-worst td { background: #fef2f2 !important; }
