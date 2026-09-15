@@ -86,6 +86,7 @@ def _fetch_with_optional_proxy(
     headers: dict[str, str] | None = None,
     json_body: Any = None,
     timeout: float = 120.0,
+    stream: bool = False,
 ) -> requests.Response:
     global _proxy_logged
     proxy = _proxy_url()
@@ -103,6 +104,7 @@ def _fetch_with_optional_proxy(
         json=json_body,
         proxies=proxies,
         timeout=timeout,
+        stream=stream,
     )
 
 
@@ -112,9 +114,17 @@ def databricks_fetch(
     headers: dict[str, str] | None = None,
     json_body: Any = None,
     timeout: float = 120.0,
+    stream: bool = False,
 ) -> requests.Response:
     try:
-        return _fetch_with_optional_proxy(url, method=method, headers=headers, json_body=json_body, timeout=timeout)
+        return _fetch_with_optional_proxy(
+            url,
+            method=method,
+            headers=headers,
+            json_body=json_body,
+            timeout=timeout,
+            stream=stream,
+        )
     except requests.RequestException as err:
         raise RuntimeError(format_fetch_error(err, url)) from err
 
