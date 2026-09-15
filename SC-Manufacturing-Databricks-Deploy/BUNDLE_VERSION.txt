@@ -1,1 +1,1 @@
-2026-09-15 python-flask
+2026-09-15 flask-pure-python

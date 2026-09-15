@@ -1,4 +1,4 @@
-# Databricks App — Python + Flask (no Node runtime)
+# Databricks App — pure Python + Flask (no npm, no React)
 command:
   - python
   - app.py

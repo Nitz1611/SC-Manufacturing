@@ -1,18 +1,8 @@
-node_modules/
-dist/
+.env
 __pycache__/
 *.pyc
-.env
-.DS_Store
-*.tsbuildinfo
-
-# Pre-built deploy bundle (includes client/dist and server/dist)
-!SC-Manufacturing-Databricks-Deploy/
-!SC-Manufacturing-Databricks-Deploy/**/
-
-# Runtime cache — regenerated locally, do not commit
 cache.json
-
-# Build output
-client/dist/
-server/dist/
+node_modules/
+client/
+server/
+SC_manf_Console_flask.zip

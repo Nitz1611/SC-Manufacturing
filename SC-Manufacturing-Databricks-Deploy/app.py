@@ -1,128 +1,418 @@
 """
-SC Manufacturing Console — Pure Python + Flask (React UI parity)
+app.py — Manufacturing Console (Flask / Approach A)
 
-Serves the built React UI (client/dist) and Python API (py_server/).
-All dashboard logic, SQL queries, MEASURE() rollups, filters, and Claude summaries
-run in Python — no Node runtime required at deploy time.
+Uses background thread for Supervisor calls so browser never times out.
+Browser polls /api/job/<id> every 5s until result is ready.
 
-Run:
-  npm run build          # once — builds client/dist (UI only)
-  pip install -r requirements.txt
-  python app.py
-
+Run:  python app.py
 Open: http://localhost:8000
 """
-from __future__ import annotations
 
-import os
-import sys
-import threading
-from pathlib import Path
+import os, json, time, uuid, threading
+from flask import Flask, request, jsonify, render_template
+from dotenv import load_dotenv
 
-from flask import Flask, send_from_directory
+# ── Load .env FIRST before any getenv calls ───────────────────────
+load_dotenv()
 
-from py_server.lib.analytics import verify_metric_view_access
-from py_server.lib.databricks_fetch import test_databricks_reachability
-from py_server.lib.databricks_sql import sql_configured, warmup_warehouse
-from py_server.lib.env import load_env, sql_env_status
-from py_server.lib.preload import start_preload_scheduler
-from py_server.lib.summary_provider import describe_summary_provider
-from py_server.routes import register_routes
+# Toggle: set USE_CLAUDE_DIRECT=true in .env to bypass MAS Supervisor
+if os.getenv("USE_CLAUDE_DIRECT","false").lower() == "true":
+    print("[app] Using Claude direct mode (bypassing MAS Supervisor)")
+    from claude_supervisor import get_dashboard, ask_question, get_rca
+else:
+    print("[app] Using MAS Supervisor mode")
+    from supervisor import get_dashboard, ask_question, get_rca
+try:
+    from views import get_all_view_data, validate_views
+    VIEWS_AVAILABLE = True
+    # Validate views on startup if HTTP_PATH is set
+    import os as _os
+    if _os.getenv("DATABRICKS_HTTP_PATH","").strip():
+        import threading
+        threading.Thread(target=validate_views, daemon=True).start()
+except Exception as _ve:
+    print(f"[views] import failed: {_ve}")
+    VIEWS_AVAILABLE = False
+    def get_all_view_data(filters): return {}
+    def validate_views(): return {}
+import cache as cache_store
 
-load_env()
+# KPI / direct-SQL engine (ported from React branch) — mounted at /api/metrics/*
+try:
+    from py_server.routes import register_routes as register_metrics_routes
+    METRICS_API_AVAILABLE = True
+except Exception as _me:
+    print(f"[metrics] py_server not available: {_me}")
+    METRICS_API_AVAILABLE = False
 
-ROOT = Path(__file__).resolve().parent
-CLIENT_DIST = ROOT / "client" / "dist"
-PORT = int(os.getenv("PORT") or os.getenv("DATABRICKS_APP_PORT") or 8000)
-
-app = Flask(__name__, static_folder=None)
-register_routes(app)
-
-
-def _ensure_client_build() -> None:
-    if CLIENT_DIST.joinpath("index.html").is_file():
-        return
-    print("[flask] Missing client/dist — run: npm install && npm run build", file=sys.stderr)
-    sys.exit(1)
+PORT    = int(os.getenv("PORT") or os.getenv("DATABRICKS_APP_PORT") or 8000)
+PREWARM = os.getenv("GENIE_INSIGHTS_ON_STARTUP", "true").lower() == "true"
+REFRESH_MINUTES = int(os.getenv("INSIGHTS_REFRESH_INTERVAL_MINUTES", "30"))
 
 
-def _startup_warmup() -> None:
-    if not sql_configured():
-        return
+def _background_refresh_loop():
+    """Refresh dashboard cache every N minutes so users always get instant data."""
+    import time as _t
+    default_filters = {}
+    key = json.dumps(default_filters, sort_keys=True)
+    while True:
+        _t.sleep(REFRESH_MINUTES * 60)
+        with _jobs_lock:
+            already = any(
+                j["status"] == "running" and j.get("filter_key") == key
+                for j in _jobs.values()
+            )
+        if already:
+            print(f"[auto-refresh] Job running — skipping")
+            continue
+        print(f"[auto-refresh] Refreshing cache (interval={REFRESH_MINUTES}m)…")
+        jid = _new_job()
+        with _jobs_lock:
+            _jobs[jid]["filter_key"] = key
+        threading.Thread(
+            target=_run_dashboard_job,
+            args=(jid, default_filters, key),
+            daemon=True,
+        ).start()
+
+app = Flask(__name__)
+
+if METRICS_API_AVAILABLE:
+    register_metrics_routes(app, url_prefix="/api/metrics")
+    print("[metrics] KPI SQL API mounted at /api/metrics/*")
+
+# ── Job store — holds background task results ─────────────────────
+# { job_id: {"status": "running|done|error", "result": {...}, "error": ""} }
+_jobs: dict = {}
+_jobs_lock  = threading.Lock()
+
+
+def _new_job() -> str:
+    jid = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[jid] = {"status": "running", "result": None, "error": "", "started": time.time()}
+    return jid
+
+
+def _finish_job(jid: str, result: dict):
+    with _jobs_lock:
+        _jobs[jid] = {"status": "done", "result": result, "error": "", "started": _jobs[jid]["started"]}
+
+
+def _fail_job(jid: str, error: str):
+    with _jobs_lock:
+        _jobs[jid] = {"status": "error", "result": None, "error": error, "started": _jobs[jid].get("started", 0)}
+
+
+def _get_job(jid: str) -> dict:
+    with _jobs_lock:
+        return _jobs.get(jid, {})
+
+
+def _cleanup_old_jobs():
+    """Remove jobs older than 2 hours."""
+    cutoff = time.time() - 7200
+    with _jobs_lock:
+        old = [k for k, v in _jobs.items() if v.get("started", 0) < cutoff]
+        for k in old:
+            del _jobs[k]
+
+
+# ── Background worker ─────────────────────────────────────────────
+def _run_dashboard_job(jid: str, filters: dict, cache_key: str):
     try:
-        reach = test_databricks_reachability()
-        if not reach.get("ok"):
-            print(f"[startup] ✗ Databricks unreachable: {reach.get('error')}")
-            if reach.get("proxy"):
-                print(f"[startup]   proxy={reach.get('proxy')}")
-            return
-        warmup_warehouse()
-        test = verify_metric_view_access()
-        if test.get("ok"):
-            print(f"[startup] ✓ metric view OK ({test.get('row_count', 0)} rows)")
-            start_preload_scheduler()
-        else:
-            print(f"[startup] ✗ metric view check failed: {test.get('error')}")
-    except Exception as exc:
-        print(f"[startup] warmup failed: {exc}")
+        print(f"[job {jid[:8]}] Starting Supervisor call…")
+        data = get_dashboard(filters)
+        cache_store.set(cache_key, data)
+        _finish_job(jid, data)
+        print(f"[job {jid[:8]}] Done — {len(data.get('key_insights',[]))} insights")
+    except Exception as e:
+        _fail_job(jid, str(e))
+        print(f"[job {jid[:8]}] Failed: {e}")
 
 
-def _print_banner() -> None:
-    mode = "Live SQL (metric view)     " if sql_configured() else "Demo fallback (no .env SQL)"
-    summary_info = describe_summary_provider()
-    if summary_info.get("provider") == "template":
-        sum_mode = "Template summaries (no AI endpoint) "
+# ── GET /api/status ───────────────────────────────────────────────
+@app.route("/api/status")
+def status():
+    # Check if we have cached dashboard data to serve immediately
+    filters  = request.args.to_dict() or {}
+    key      = json.dumps(filters, sort_keys=True)
+    cached   = cache_store.get(key)
+    # Also try empty filter key (most common)
+    if not cached:
+        cached = cache_store.get("{}")
+    if not cached:
+        cached = cache_store.get("")
+    return jsonify({
+        "ok":          True,
+        "architecture": "flask-pure-python",
+        "supervisor":  os.getenv("SUPERVISOR_ENDPOINT_NAME",   "NOT SET"),
+        "hostname":    os.getenv("DATABRICKS_SERVER_HOSTNAME", "NOT SET"),
+        "pat_set":     bool(os.getenv("DATABRICKS_PAT_TOKEN")),
+        "port":        PORT,
+        "cache":       cache_store.info(),
+        "active_jobs": len([j for j in _jobs.values() if j["status"] == "running"]),
+        "cache_hit":   bool(cached),
+        "cached_data": cached,
+        "metrics_api": METRICS_API_AVAILABLE,
+        "metrics_prefix": "/api/metrics",
+    })
+
+
+
+# ── GET /api/load-status — loader polls this for step progress ────
+_load_status = {"state": "idle", "step": 0, "message": ""}
+
+@app.route("/api/load-status")
+def load_status():
+    all_jobs = list(_jobs.values())
+    running = [j for j in all_jobs if j["status"] == "running"]
+    done    = [j for j in all_jobs if j["status"] == "done"]
+    error   = [j for j in all_jobs if j["status"] == "error"]
+
+    if running:
+        elapsed = int(time.time() - running[0].get("started", time.time()))
+        step = 2 if elapsed < 30 else 3
+        return jsonify({"state": "loading", "step": step,
+                        "message": f"Querying Genie views… {elapsed}s elapsed"})
+    if done:
+        # Return step 3 only — browser job poller handles step 4 + hideLoader
+        return jsonify({"state": "done", "step": 3, "message": "Ready"})
+    if error:
+        return jsonify({"state": "error", "step": 0, "message": error[0].get("error","")})
+    return jsonify({"state": "idle", "step": 1, "message": ""})
+
+# ── POST /api/dashboard ───────────────────────────────────────────
+
+@app.route("/api/views", methods=["POST"])
+def views_data():
+    """Direct from Databricks views — fast, no Genie needed."""
+    import os
+    if not VIEWS_AVAILABLE or not os.getenv("DATABRICKS_HTTP_PATH","").strip():
+        print("[views] Warehouse ID not set or views unavailable — skipping direct queries")
+        return jsonify({"status":"ok","data":{},"from_cache":False,"skipped":True})
+    filters = request.get_json(silent=True) or {}
+    cache_key = "views_" + json.dumps(filters, sort_keys=True)
+    cached = cache_store.get(cache_key)
+    if cached:
+        print("[views] Cache HIT")
+        return jsonify({"status":"ok","data":cached,"from_cache":True})
+    try:
+        data = get_all_view_data(filters)
+        if data:
+            cache_store.set(cache_key, data, ttl_hours=1)
+        return jsonify({"status":"ok","data":data,"from_cache":False})
+    except Exception as e:
+        print(f"[views] Error: {e}")
+        return jsonify({"status":"ok","data":{},"error":str(e)})
+
+
+@app.route("/api/filters", methods=["GET"])
+def get_filters():
+    """Get distinct filter values directly from views — no Genie needed."""
+    import os
+    if not VIEWS_AVAILABLE or not os.getenv("DATABRICKS_HTTP_PATH","").strip():
+        # Return empty — browser will use defaults
+        return jsonify({"status":"ok","data":{"sites":[],"regions":[],"markets":[],"years":[]}})
+    try:
+        from views import _run_sql, _qualified
+        sites_sql   = f"SELECT DISTINCT Site FROM {_qualified('pgt_plnt_prodtn_metric_view')} WHERE Site IS NOT NULL GROUP BY ALL ORDER BY Site LIMIT 100"
+        regions_sql = f"SELECT DISTINCT Region FROM {_qualified('pgt_plnt_prodtn_metric_view')} WHERE Region IS NOT NULL GROUP BY ALL ORDER BY Region LIMIT 50"
+        years_sql   = f"SELECT DISTINCT YEAR(`Production Date`) as yr FROM {_qualified('pgt_plnt_prodtn_metric_view')} WHERE `Production Date` IS NOT NULL GROUP BY ALL ORDER BY yr DESC LIMIT 5"
+        sites   = [r.get("Site","")   for r in _run_sql(sites_sql)   if r.get("Site")]
+        regions = [r.get("Region","") for r in _run_sql(regions_sql) if r.get("Region")]
+        years   = [str(r.get("yr","")) for r in _run_sql(years_sql)  if r.get("yr")]
+        return jsonify({"status":"ok","data":{"sites":sites,"regions":regions,"years":years}})
+    except Exception as e:
+        print(f"[filters] Error: {e}")
+        return jsonify({"status":"ok","data":{"sites":[],"regions":[],"markets":[],"years":[]}})
+
+@app.route("/api/dashboard", methods=["POST"])
+def dashboard():
+    body    = request.get_json(silent=True) or {}
+    filters = body.get("filters", {})
+    force   = body.get("force", False)
+    key     = json.dumps(filters, sort_keys=True)
+
+    if not force:
+        # Try exact key first
+        cached = cache_store.get(key)
+        # Fall back to any cached dashboard data (pre-warm may have different key)
+        if not cached:
+            for fallback_key in ["{}", '{"period": "week"}', '']:
+                cached = cache_store.get(fallback_key)
+                if cached:
+                    print(f"[server] Cache HIT (fallback key)")
+                    break
+        if cached:
+            print(f"[server] Cache HIT — serving immediately")
+            return jsonify({**cached, "_cached": True, "_job_id": None})
+
+    # Reuse any running job (not just same filter key)
+    with _jobs_lock:
+        for jid_existing, job in _jobs.items():
+            if job["status"] == "running":
+                print(f"[server] Reusing running job {jid_existing[:8]}")
+                return jsonify({"_job_id": jid_existing, "_cached": False, "status": "running"})
+
+    # Start new job
+    _cleanup_old_jobs()
+    jid = _new_job()
+    with _jobs_lock:
+        _jobs[jid]["filter_key"] = key
+    t = threading.Thread(target=_run_dashboard_job, args=(jid, filters, key), daemon=True)
+    t.start()
+    print(f"[server] Started background job {jid[:8]} for filters={filters}")
+
+    return jsonify({"_job_id": jid, "_cached": False, "status": "running"})
+
+
+# ── GET /api/job/<jid> — browser polls this ───────────────────────
+@app.route("/api/job/<jid>")
+def job_status(jid):
+    job = _get_job(jid)
+    if not job:
+        return jsonify({"status": "not_found"}), 404
+
+    elapsed = int(time.time() - job.get("started", time.time()))
+
+    if job["status"] == "running":
+        return jsonify({
+            "status":  "running",
+            "elapsed": elapsed,
+            "message": f"Supervisor querying Genie views… ({elapsed}s elapsed)",
+        })
+
+    if job["status"] == "error":
+        return jsonify({"status": "error", "error": job["error"], "elapsed": elapsed})
+
+    # Done — return full result
+    return jsonify({"status": "done", "result": job["result"], "elapsed": elapsed})
+
+
+
+# ── POST /api/rca ─────────────────────────────────────────────────
+@app.route("/api/rca", methods=["POST"])
+def rca():
+    body      = request.get_json(silent=True) or {}
+    filters   = body.get("filters", {})
+    force     = body.get("force", False)
+    kpi_focus = body.get("kpi_focus", "auto")   # "auto" or specific KPI name
+    key       = f"rca_{kpi_focus}_" + json.dumps(filters, sort_keys=True)
+
+    if not force:
+        cached = cache_store.get(key)
+        if cached:
+            return jsonify({**cached, "_cached": True, "_job_id": None})
+
+    jid = _new_job()
+    def _rca_job():
+        try:
+            data = get_rca(filters, kpi_focus)
+            cache_store.set(key, data, ttl_hours=4)
+            _finish_job(jid, data)
+            print(f"[rca {jid[:8]}] Done — issue: {data.get('issue','?')}")
+        except Exception as e:
+            _fail_job(jid, str(e))
+            print(f"[rca {jid[:8]}] Error: {e}")
+    threading.Thread(target=_rca_job, daemon=True).start()
+    return jsonify({"_job_id": jid, "_cached": False, "status": "running"})
+
+# ── POST /api/ask ─────────────────────────────────────────────────
+@app.route("/api/ask", methods=["POST"])
+def ask():
+    body     = request.get_json(silent=True) or {}
+    question = (body.get("question") or "").strip()
+    filters  = body.get("filters", {})
+
+    if not question:
+        return jsonify({"error": "question required"}), 400
+
+    # Ask also runs in background — returns job_id
+    jid = _new_job()
+
+    def _ask_job():
+        try:
+            answer = ask_question(question, filters)
+            _finish_job(jid, {"narrative": answer, "question": question})
+        except Exception as e:
+            _fail_job(jid, str(e))
+
+    threading.Thread(target=_ask_job, daemon=True).start()
+    return jsonify({"_job_id": jid, "status": "running"})
+
+
+# ── POST /api/cache/clear ─────────────────────────────────────────
+@app.route("/api/cache/clear", methods=["POST"])
+def cache_clear():
+    body = request.get_json(silent=True) or {}
+    if body.get("rca_only"):
+        # Clear only RCA entries
+        import json as _json
+        store = cache_store._load_file()
+        store = {k:v for k,v in store.items() if not k.startswith("rca_")}
+        cache_store._save_file(store)
+        return jsonify({"ok": True, "cleared": "rca"})
+    elif body.get("dashboard_only"):
+        # Clear only dashboard entries (keep RCA)
+        store = cache_store._load_file()
+        store = {k:v for k,v in store.items() if k.startswith("rca_")}
+        cache_store._save_file(store)
+        return jsonify({"ok": True, "cleared": "dashboard"})
     else:
-        sum_mode = f"{summary_info.get('label', 'AI')} (AI summaries) "
-    env = sql_env_status()
+        # Clear everything
+        cache_store.clear()
+        return jsonify({"ok": True, "cleared": "all"})
 
-    print("")
+
+# ── GET / ─────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+# ── Start ─────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    print()
     print("╔══════════════════════════════════════════════════════╗")
-    print("║  SC Manufacturing Console (Python + Flask)           ║")
+    print("║  Manufacturing Console  —  Flask / Approach A        ║")
     print(f"║  http://localhost:{PORT}                              ║")
     print("╠══════════════════════════════════════════════════════╣")
-    print(f"║  Mode       : {mode[:38]:<38}║")
-    print(f"║  Summaries  : {sum_mode[:38]:<38}║")
-    if summary_info.get("provider") == "template" and summary_info.get("reason"):
-        print(f"║  AI note    : {summary_info['reason'][:38]:<38}║")
-    if env.get("env_file"):
-        print(f"║  .env       : {env['env_file'][-38:]:<38}║")
-    if env.get("missing"):
-        print(f"║  Missing    : {', '.join(env['missing'])[:38]:<38}║")
-    print("║  Analytics  : POST /api/analytics/query/:queryKey    ║")
-    print("║  Summaries  : POST /api/summaries                    ║")
-    print("║  Legacy     : POST /api/console-data                   ║")
-    print("║  Preload    : GET  /api/preload/status                 ║")
-    print("║  Warmup     : GET  /api/warmup                         ║")
+    print(f"║  Supervisor : {os.getenv('SUPERVISOR_ENDPOINT_NAME','NOT SET'):<38}║")
+    print(f"║  Hostname   : {os.getenv('DATABRICKS_SERVER_HOSTNAME','NOT SET'):<38}║")
+    print(f"║  PAT        : {'SET ✓' if os.getenv('DATABRICKS_PAT_TOKEN') else 'NOT SET ⚠':<38}║")
+    print(f"║  Mode       : {os.getenv('SUPERVISOR_QUERY_MODE','minimal'):<38}║")
+    print(f"║  Cache TTL  : {os.getenv('INSIGHTS_REFRESH_INTERVAL_HOURS','24')+'h':<38}║")
     print("╚══════════════════════════════════════════════════════╝")
-    print("")
 
+    cinfo = cache_store.info()
+    if cinfo["entry_count"] > 0:
+        print(f"\n[cache] {cinfo['entry_count']} cached entries from previous run")
+        for e in cinfo["entries"]:
+            s = "VALID" if not e["expired"] else "EXPIRED"
+            print(f"[cache]   {s} — {e['age_min']}m old, expires in {e['expires_in']}m")
+    else:
+        print("\n[cache] No cache — will load from Supervisor on first request")
+    print()
 
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-def spa(path: str):
-    if path.startswith("api/"):
-        return {"error": "Not found"}, 404
-    target = CLIENT_DIST / path
-    if path and target.is_file():
-        return send_from_directory(CLIENT_DIST, path)
-    index = CLIENT_DIST / "index.html"
-    if index.is_file():
-        return send_from_directory(CLIENT_DIST, "index.html")
-    return (
-        f"""<!DOCTYPE html><html><body style="font-family:Inter,sans-serif;padding:40px">
-        <h1>SC Manufacturing Console</h1>
-        <p>Server is running on port {PORT}.</p>
-        <p>Run <code>npm run build</code> to build client/dist.</p>
-        <p><a href="/api/status">/api/status</a></p>
-        </body></html>""",
-        200,
-        {"Content-Type": "text/html; charset=utf-8"},
-    )
+    if PREWARM:
+        key = json.dumps({}, sort_keys=True)
+        if cache_store.get(key):
+            print("[startup] Cache valid — skipping pre-warm")
+        else:
+            print("[startup] Pre-warming in background thread…")
+            jid = _new_job()
+            with _jobs_lock:
+                _jobs[jid]["filter_key"] = key
+            t = threading.Thread(
+                target=_run_dashboard_job,
+                args=(jid, {}, key),
+                daemon=True,
+            )
+            t.start()
 
+    # Start background auto-refresh loop
+    threading.Thread(target=_background_refresh_loop, daemon=True).start()
+    print(f"[auto-refresh] Background refresh every {REFRESH_MINUTES}m started")
 
-if __name__ == "__main__":
-    _ensure_client_build()
-    _print_banner()
-    threading.Thread(target=_startup_warmup, daemon=True).start()
     app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
