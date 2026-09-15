@@ -76,13 +76,29 @@ body {
   flex-shrink: 0;
 }
 
-.header-logo {
-  width: 44px;
-  height: 44px;
+.header-logo-wrap {
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
-  object-fit: cover;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px;
+  flex-shrink: 0;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
   animation: logoGlow 3s ease-in-out infinite;
+}
+
+.header-logo {
+  width: 100%;
+  height: 100%;
+  max-width: 38px;
+  max-height: 38px;
+  object-fit: contain;
+  object-position: center;
+  image-rendering: auto;
+  display: block;
 }
 
 @keyframes logoGlow {
@@ -1134,6 +1150,15 @@ body {
   padding: 8px 12px;
   border-radius: 10px;
   transition: background 0.15s ease;
+}
+
+.kpi-tab-panel.active .donut-legend-item {
+  animation: legendReveal 0.45s ease both;
+}
+
+@keyframes legendReveal {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 .donut-legend-item:hover {
