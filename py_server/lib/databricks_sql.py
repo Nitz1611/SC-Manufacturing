@@ -53,6 +53,8 @@ def _poll_statement(statement_id: str) -> dict[str, Any]:
             err = (stmt.get("status") or {}).get("error") or {}
             raise RuntimeError(err.get("message") or f"SQL statement {state}")
 
+        if _ % 10 == 0:
+            print(f"[databricks] polling {statement_id} state={state}…", flush=True)
         time.sleep(1.5 if state == "PENDING" else 0.8)
 
     raise RuntimeError("Databricks SQL timed out waiting for results")
@@ -70,6 +72,7 @@ def execute_statement(sql: str) -> list[dict[str, Any]]:
         "warehouse_id": os.environ.get("DATABRICKS_WAREHOUSE_ID"),
         "statement": sql,
         "wait_timeout": "50s",
+        "on_wait_timeout": "CONTINUE",
         "format": "JSON_ARRAY",
     }
 

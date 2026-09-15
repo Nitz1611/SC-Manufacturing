@@ -60,19 +60,27 @@ def _remember_sql_error(err: BaseException) -> None:
 
 
 def _execute_query(query_key: str, params: dict[str, str | None]) -> list[dict[str, Any]]:
+    print(f'[analytics] SQL start: {query_key}', flush=True)
     sql = bind_sql_params(load_query_sql(query_key), params)
-    return execute_statement(sql)
+    rows = execute_statement(sql)
+    print(f'[analytics] SQL done: {query_key} ({len(rows)} rows)', flush=True)
+    return rows
+
+
+def _sql_max_workers(batch_size: int) -> int:
+    configured = int(os.getenv('SQL_MAX_CONCURRENCY') or 4)
+    return max(1, min(batch_size, configured))
 
 
 def load_metrics_from_sql(
     norm: dict[str, str | None],
     on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Run SQL in two waves to avoid hammering the warehouse with 11 concurrent scans."""
+    """Run SQL in two waves with limited concurrency (default 4 parallel queries)."""
     global _last_sql_error, _last_sql_success_at
 
     if on_progress:
-        on_progress('Querying KPIs, sites, and trends…')
+        on_progress('Querying KPIs, sites, and trends (wave 1/2)…')
 
     wave1_keys = (
         'dashboard_dt_kpis',
@@ -93,18 +101,27 @@ def load_metrics_from_sql(
         'dashboard_dt_dow_by_shift',
     )
 
-    def run_keys(keys: tuple[str, ...]) -> dict[str, list[dict[str, Any]]]:
+    def run_keys(keys: tuple[str, ...], wave_label: str) -> dict[str, list[dict[str, Any]]]:
         out: dict[str, list[dict[str, Any]]] = {}
-        with ThreadPoolExecutor(max_workers=len(keys)) as pool:
+        total = len(keys)
+        done = 0
+        workers = _sql_max_workers(total)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_execute_query, key, norm): key for key in keys}
             for fut in as_completed(futures):
-                out[futures[fut]] = fut.result()
+                key = futures[fut]
+                out[key] = fut.result()
+                done += 1
+                msg = f'{wave_label}: {done}/{total} queries complete ({key})'
+                print(f'[analytics] {msg}', flush=True)
+                if on_progress:
+                    on_progress(msg)
         return out
 
-    w1 = run_keys(wave1_keys)
+    w1 = run_keys(wave1_keys, 'Wave 1')
     if on_progress:
-        on_progress('Querying category, line, and shift breakdowns…')
-    w2 = run_keys(wave2_keys)
+        on_progress('Querying category, line, and shift breakdowns (wave 2/2)…')
+    w2 = run_keys(wave2_keys, 'Wave 2')
 
     results = {
         'kpis': w1['dashboard_dt_kpis'],
