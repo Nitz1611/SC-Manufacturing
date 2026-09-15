@@ -25,11 +25,29 @@ STEP 1 — COPY TO DATABRICKS WORKSPACE
 Target path example:
   /Workspace/Users/<your-email>/SC-Manufacturing
 
-Options:
-  A) Zip this entire folder → Import in Databricks Workspace UI
-  B) Databricks CLI:
-       databricks sync ./SC-Manufacturing-Databricks-Deploy \
-         "/Workspace/Users/<your-email>/SC-Manufacturing"
+IMPORTANT — DO NOT use Workspace UI "Import" for this bundle
+  The UI often fails on package.json, .js, and some .sql files
+  (you may see "Error importing package.json", env.js, config.js, etc.)
+  while other files import OK. The app will NOT run with a partial upload.
+
+RECOMMENDED options (in order):
+
+  A) Databricks CLI sync (best for Workspace upload):
+       cd SC-Manufacturing-Databricks-Deploy
+       databricks auth login
+       databricks sync . "/Workspace/Users/<your-email>/SC-Manufacturing" --full --overwrite
+
+     Windows PowerShell:
+       .\import-with-cli.ps1 -WorkspacePath "/Workspace/Users/<your-email>/SC-Manufacturing"
+
+  B) Databricks Repo (best for ongoing updates):
+       Workspace → Repos → Add Repo
+       URL: https://github.com/Nitz1611/SC-Manufacturing
+       Branch: cursor/react-frontend-migration-e63a
+       Path: /Repos/<you>/SC-Manufacturing
+       Use folder: SC-Manufacturing-Databricks-Deploy
+
+  C) Workspace UI zip import — only if CLI is blocked; re-import failed files via CLI
 
 STEP 2 — INSTALL DEPENDENCIES
 -----------------------------
@@ -69,6 +87,21 @@ STEP 5 — VERIFY
 
 TROUBLESHOOTING
 ---------------
+  - "Error importing package.json / env.js / config.js" in UI:
+      Delete the partial folder in Workspace, then use import-with-cli.ps1
+      or `databricks sync` (see Step 1). UI import is not reliable for Node apps.
+
   - Missing UI: ensure client/dist/ was copied
   - SQL errors: check DATABRICKS_METRIC_VIEW matches your catalog.schema.view
   - 503 on load: run ./setup.sh (node_modules missing)
+
+CRITICAL FILES (must all exist after upload)
+--------------------------------------------
+  package.json
+  server/dist/server.js
+  server/dist/lib/config.js
+  server/dist/lib/env.js
+  server/dist/lib/databricksSql.js
+  config/queries/dashboard_dt_kpis.obo.sql
+  config/queries/dashboard_filter_options.obo.sql
+  client/dist/index.html
