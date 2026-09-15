@@ -131,7 +131,7 @@ export function dtTypeFilter(): string {
   const raw = process.env.DATABRICKS_DT_TYPE_FILTER?.trim();
   if (raw) return raw;
   const col = quoteIdent(GOLD_NAMES.dtType);
-  return `TRIM(${col}) IN ('Unplanned', 'Unspecified')`;
+  return `UPPER(TRIM(${col})) IN ('UNPLANNED', 'UNSPECIFIED')`;
 }
 
 /** UC metric views require MEASURE() — AVG/SUM on measure columns is invalid. */

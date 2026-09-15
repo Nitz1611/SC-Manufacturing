@@ -687,11 +687,37 @@ export function initManufacturingConsole(): () => void {
     return matrix;
   }
 
+  function networkEntityMatrix(entityList, pctSeries, hrsSeries) {
+    const src = isHoursDisplayMode() ? hrsSeries : pctSeries;
+    if (!src || !Object.keys(src).length) return null;
+    const matrix = {};
+    entityList.forEach(entity => {
+      if (src[entity]?.length) matrix[entity] = alignPeriodValues(src[entity]);
+    });
+    return Object.keys(matrix).length ? matrix : null;
+  }
+
   function categoryMatrixFiltered() {
+    if (isLiveSql() && (!state.filters.site || state.filters.site === 'All')) {
+      const network = networkEntityMatrix(
+        activeCategories(),
+        state.liveMetrics?.category_by_period,
+        state.liveMetrics?.category_by_period_hrs,
+      );
+      if (network) return network;
+    }
     return matrixForActiveSite(activeCategories(), categoryPctForSiteHeatmap, categoryHoursForSiteHeatmap);
   }
 
   function lineMatrixFiltered() {
+    if (isLiveSql() && (!state.filters.site || state.filters.site === 'All')) {
+      const network = networkEntityMatrix(
+        activeLines(),
+        state.liveMetrics?.line_by_period,
+        state.liveMetrics?.line_by_period_hrs,
+      );
+      if (network) return network;
+    }
     return matrixForActiveSite(activeLines(), linePctForSite, lineHoursForSite);
   }
 
@@ -1322,7 +1348,7 @@ export function initManufacturingConsole(): () => void {
         }
         m.meta = { ...(m.meta || {}), filtered_site: siteKeyFallback };
       }
-    } else if (activeRegions) {
+    } else if (activeRegions && !isLiveSql(m)) {
       const siteEntries = Object.entries(m.site_by_period || {});
       if (siteEntries.length && m.period_trend?.length) {
         const n = m.period_trend.length;
@@ -1336,16 +1362,15 @@ export function initManufacturingConsole(): () => void {
     }
 
     m.tab_insights = buildTabInsightsClient(m);
-    m.kpis = deriveKpisFromMetrics(m);
+    if (!isLiveSql(m)) {
+      m.kpis = deriveKpisFromMetrics(m);
+    }
     return m;
   }
 
   function deriveKpisFromMetrics(m) {
     const base = m.kpis || {};
-    const siteKey = m.meta?.filtered_site;
-    const sqlFiltered = isLiveSql(m) && siteKey;
-
-    if (isLiveSql(m) && !siteKey) return base;
+    if (isLiveSql(m)) return base;
 
     const rawPct = parseFloat(String(base.downtime_pct?.value || '').replace('%', '').trim());
     let dtPct = Number.isFinite(rawPct) ? rawPct : 0;
@@ -1353,54 +1378,10 @@ export function initManufacturingConsole(): () => void {
     let stops = parseInt(String(base.stops?.value || '0').replace(/,/g, ''), 10);
     if (Number.isNaN(stops)) stops = 0;
 
+    const siteKey = m.meta?.filtered_site;
     const sites = siteKey ? [siteKey] : activeHeatmapSites();
     let periodVals = sites.flatMap(s => resolveSitePeriodTotals(s, m))
       .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0);
-
-    if (!periodVals.length && m.period_trend?.length) {
-      periodVals = m.period_trend.filter(v => v != null && Number(v) > 0);
-    }
-
-    if (sqlFiltered) {
-      const hrsVals = (m.site_by_period_hrs?.[siteKey] || m.period_trend_hrs || [])
-        .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0)
-        .map(v => Number(v));
-      if (periodVals.length) {
-        dtPct = periodVals.reduce((a, b) => a + Number(b), 0) / periodVals.length;
-      }
-      if (hrsVals.length) {
-        dtHrs = hrsVals.reduce((a, b) => a + Number(b), 0);
-      } else if (dtHrs === 0 && dtPct > 0) {
-        const mult = SITE_MULTIPLIERS[siteKey] || 1;
-        const n = activePeriods().length || 10;
-        dtHrs = Math.round((112474 / 6.2) * dtPct * mult * (periodVals.length / n));
-      }
-      if (stops === 0 && dtPct > 0) {
-        const mult = SITE_MULTIPLIERS[siteKey] || 1;
-        stops = Math.max(1, Math.round(819 * (dtPct / 6.2) * mult));
-      }
-      const benchmark = dtPct > 0 ? dtPct : 6.2;
-      return {
-        downtime_pct: {
-          value: `${dtPct.toFixed(2)}%`,
-          delta: base.downtime_pct?.delta || 'vs prior period',
-          direction: dtPct === 0 ? 'neutral' : dtPct >= benchmark * 1.05 ? 'bad' : 'good',
-        },
-        downtime_hrs: {
-          value: `${Math.round(dtHrs).toLocaleString()} h`,
-          delta: base.downtime_hrs?.delta || '',
-          direction: dtHrs === 0 ? 'neutral' : (base.downtime_hrs?.direction || 'warn'),
-        },
-        stops: {
-          value: String(stops || 0),
-          delta: base.stops?.delta || '',
-          direction: stops === 0 ? 'neutral' : (base.stops?.direction || 'warn'),
-        },
-        oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
-      };
-    }
-
-    if (isLiveSql(m)) return base;
 
     if (!periodVals.length && m.period_trend?.length) {
       periodVals = m.period_trend.filter(v => v != null && Number(v) > 0);
@@ -1411,15 +1392,15 @@ export function initManufacturingConsole(): () => void {
     }
 
     if (dtHrs === 0 && dtPct > 0) {
-      const siteKey = sites.length === 1 ? sites[0] : null;
-      const mult = siteKey ? (SITE_MULTIPLIERS[siteKey] || 1) : 1;
+      const scopedSite = sites.length === 1 ? sites[0] : null;
+      const mult = scopedSite ? (SITE_MULTIPLIERS[scopedSite] || 1) : 1;
       const n = activePeriods().length || 10;
       dtHrs = Math.round((112474 / 6.2) * dtPct * mult * (periodVals.length / n));
     }
 
     if (stops === 0 && dtPct > 0) {
-      const siteKey = sites.length === 1 ? sites[0] : null;
-      const mult = siteKey ? (SITE_MULTIPLIERS[siteKey] || 1) : 1;
+      const scopedSite = sites.length === 1 ? sites[0] : null;
+      const mult = scopedSite ? (SITE_MULTIPLIERS[scopedSite] || 1) : 1;
       stops = Math.max(1, Math.round(819 * (dtPct / 6.2) * mult));
     }
 
@@ -1889,7 +1870,7 @@ export function initManufacturingConsole(): () => void {
 
   function updateMetricStripDOM(kpis) {
     if (!kpis || !hasLiveMetrics()) return;
-    const resolved = deriveKpisFromMetrics({ kpis, site_by_period: state.liveMetrics?.site_by_period, period_trend: state.liveMetrics?.period_trend });
+    const resolved = isLiveSql() ? kpis : deriveKpisFromMetrics(state.liveMetrics || { kpis });
     const dt = resolved.downtime_pct || {};
     const dtHrs = resolved.downtime_hrs || {};
     const stops = resolved.stops || {};

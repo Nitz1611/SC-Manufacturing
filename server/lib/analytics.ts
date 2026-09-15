@@ -78,9 +78,11 @@ async function loadMetricsFromSql(
   ]);
 
   onProgress?.('Querying category, line, and shift breakdowns…');
-  const [categoryByPeriod, lineByPeriod, dowByShift] = await Promise.all([
+  const [categoryByPeriod, lineByPeriod, categoryNetwork, lineNetwork, dowByShift] = await Promise.all([
     executeQuery('dashboard_dt_category_by_period', norm),
     executeQuery('dashboard_dt_line_by_period', norm),
+    executeQuery('dashboard_dt_category_network', norm),
+    executeQuery('dashboard_dt_line_network', norm),
     executeQuery('dashboard_dt_dow_by_shift', norm),
   ]);
 
@@ -90,6 +92,8 @@ async function loadMetricsFromSql(
     siteByPeriod,
     categoryByPeriod,
     lineByPeriod,
+    categoryNetwork,
+    lineNetwork,
     reasons,
     dow,
     dowByShift,

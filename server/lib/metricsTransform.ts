@@ -268,24 +268,7 @@ function deriveKpisFromSitePeriods(metrics: MetricsPayload, siteKey: string): Me
   if (Number.isNaN(stops)) stops = 0;
 
   if (isSql) {
-    if (dtPct === 0) {
-      const periodVals = periodValuesWithSignal(metrics.site_by_period[siteKey])
-        .concat(periodValuesWithSignal(metrics.period_trend));
-      if (periodVals.length) {
-        dtPct = periodVals.reduce((a, b) => a + b, 0) / periodVals.length;
-      }
-    }
-    if (dtPct === 0 && dtHrs === 0 && stops === 0) return base;
-    return {
-      downtime_pct: {
-        value: `${dtPct.toFixed(2)}%`,
-        delta: base.downtime_pct?.delta || 'vs prior period',
-        direction: (base.downtime_pct?.direction || 'warn') as 'good' | 'bad' | 'warn',
-      },
-      downtime_hrs: base.downtime_hrs,
-      stops: base.stops,
-      oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' as const },
-    };
+    return base;
   }
 
   let periodVals = periodValuesWithSignal(metrics.site_by_period[siteKey]);
@@ -571,6 +554,8 @@ export interface SqlQueryResults {
   siteByPeriod: Record<string, unknown>[];
   categoryByPeriod: Record<string, unknown>[];
   lineByPeriod: Record<string, unknown>[];
+  categoryNetwork: Record<string, unknown>[];
+  lineNetwork: Record<string, unknown>[];
   reasons: Record<string, unknown>[];
   dow: Record<string, unknown>[];
   dowByShift: Record<string, unknown>[];
@@ -627,13 +612,10 @@ export function buildMetricsFromSql(
   const site_line_by_period = pivotSiteEntityRows(results.lineByPeriod, 'line', periods, 'dt_pct');
   const site_line_by_period_hrs = pivotSiteEntityRows(results.lineByPeriod, 'line', periods, 'dt_hours');
 
-  const categoryAgg = aggregateEntityByPeriod(results.categoryByPeriod, 'category', periods, 'dt_pct', 'dt_hours');
-  const category_by_period_fixed = categoryAgg.pct;
-  const category_by_period_hrs = categoryAgg.hrs;
-
-  const lineAgg = aggregateEntityByPeriod(results.lineByPeriod, 'line', periods, 'dt_pct', 'dt_hours');
-  const line_by_period = lineAgg.pct;
-  const line_by_period_hrs = lineAgg.hrs;
+  const category_by_period = pivotMetricRows(results.categoryNetwork, 'category', periods, 'dt_pct');
+  const category_by_period_hrs = pivotMetricRows(results.categoryNetwork, 'category', periods, 'dt_hours');
+  const line_by_period = pivotMetricRows(results.lineNetwork, 'line', periods, 'dt_pct');
+  const line_by_period_hrs = pivotMetricRows(results.lineNetwork, 'line', periods, 'dt_hours');
 
   const top_lines: Record<string, number> = {};
   const top_lines_hrs: Record<string, number> = {};
@@ -717,7 +699,7 @@ export function buildMetricsFromSql(
     filter_options,
     site_by_period,
     site_by_period_hrs,
-    category_by_period: category_by_period_fixed,
+    category_by_period,
     category_by_period_hrs,
     line_by_period,
     line_by_period_hrs,

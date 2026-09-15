@@ -17,7 +17,7 @@ Focus ONLY on UNPLANNED DOWNTIME (ignore waste metrics).
 The dashboard charts and heatmaps are already loaded from SQL on: ${view}
 Key dimensions: Site, Region, \`Line Desc\`, \`Downtime Category\`, \`Downtime Reason\`, \`Production Date\`, \`Production Period\`, \`Production week\`, Shift, \`Downtime Type\`
 Key measures (use MEASURE() in SQL): \`Unplanned Downtime %\`, \`Unplanned Downtime Hours\`, STOPS
-Filter unplanned rows: TRIM(\`Downtime Type\`) IN ('Unplanned', 'Unspecified')
+Filter unplanned rows: UPPER(TRIM(\`Downtime Type\`)) IN ('UNPLANNED', 'UNSPECIFIED')
 Use the DASHBOARD METRICS block below as the authoritative source for periods, KPIs, and peak/low periods.
 Do NOT mention any Production Period that is not listed in dashboard periods.
 If Genie returns periods outside the dashboard list, ignore them and use the dashboard data only.
