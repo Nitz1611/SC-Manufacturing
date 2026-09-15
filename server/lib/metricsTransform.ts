@@ -508,7 +508,7 @@ function pivotSiteEntityRows(
   const out: Record<string, Record<string, number[]>> = {};
   for (const row of rows) {
     const site = String(row.site || '').toUpperCase();
-    const entity = String(row[entityKey] || '');
+    const entity = String(row[entityKey] || '').toUpperCase();
     const period = String(row.period_label || '');
     const val = Number(row[valueKey] ?? 0);
     if (!site || !entity || !period) continue;

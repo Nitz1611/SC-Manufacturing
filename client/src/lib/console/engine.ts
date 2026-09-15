@@ -372,16 +372,26 @@ export function initManufacturingConsole(): () => void {
 
   function activeCategories() {
     if (state.categoriesLive?.length) return state.categoriesLive;
-    if (isLiveSql() && state.liveMetrics?.category_by_period) {
-      return Object.keys(state.liveMetrics.category_by_period).sort();
+    if (isLiveSql()) {
+      const cats = new Set([
+        ...Object.keys(state.liveMetrics?.category_by_period || {}),
+        ...entityKeysFromSiteMatrix(state.liveMetrics?.site_category_by_period),
+        ...entityKeysFromSiteMatrix(state.liveMetrics?.site_category_by_period_hrs),
+      ]);
+      if (cats.size) return [...cats].sort();
     }
     return CATEGORIES;
   }
 
   function activeLines() {
     if (state.linesLive?.length) return state.linesLive;
-    if (isLiveSql() && state.liveMetrics?.line_by_period) {
-      return Object.keys(state.liveMetrics.line_by_period).sort();
+    if (isLiveSql()) {
+      const lines = new Set([
+        ...Object.keys(state.liveMetrics?.line_by_period || {}),
+        ...entityKeysFromSiteMatrix(state.liveMetrics?.site_line_by_period),
+        ...entityKeysFromSiteMatrix(state.liveMetrics?.site_line_by_period_hrs),
+      ]);
+      if (lines.size) return [...lines].sort();
     }
     return LINES;
   }
@@ -432,6 +442,24 @@ export function initManufacturingConsole(): () => void {
     const token = upper.split(/\s+/)[0];
     const prefix = keys.find(k => k === token || k.startsWith(token) || upper.startsWith(k));
     return prefix || upper;
+  }
+
+  function resolveEntityKey(name, entityMap) {
+    if (!name) return '';
+    const upper = String(name).toUpperCase();
+    if (!entityMap) return upper;
+    if (entityMap[upper]) return upper;
+    if (entityMap[name]) return name;
+    const found = Object.keys(entityMap).find(k => k.toUpperCase() === upper);
+    return found || upper;
+  }
+
+  function entityKeysFromSiteMatrix(matrix) {
+    const keys = new Set();
+    Object.values(matrix || {}).forEach(entities => {
+      Object.keys(entities || {}).forEach(k => keys.add(k.toUpperCase()));
+    });
+    return keys;
   }
 
   function activeHeatmapSites() {
@@ -1818,8 +1846,20 @@ export function initManufacturingConsole(): () => void {
       state.metricSites = Object.keys(m.site_by_period).sort();
     }
     if (isLiveSql(m)) {
-      if (m.category_by_period) state.categoriesLive = Object.keys(m.category_by_period).sort();
-      if (m.line_by_period) state.linesLive = Object.keys(m.line_by_period).sort();
+      const cats = new Set([
+        ...Object.keys(m.category_by_period || {}),
+        ...entityKeysFromSiteMatrix(m.site_category_by_period),
+        ...entityKeysFromSiteMatrix(m.site_category_by_period_hrs),
+      ].map(k => k.toUpperCase()));
+      if (cats.size) state.categoriesLive = [...cats].sort();
+
+      const lines = new Set([
+        ...Object.keys(m.line_by_period || {}),
+        ...entityKeysFromSiteMatrix(m.site_line_by_period),
+        ...entityKeysFromSiteMatrix(m.site_line_by_period_hrs),
+      ].map(k => k.toUpperCase()));
+      if (lines.size) state.linesLive = [...lines].sort();
+
       syncSlicersFromMetrics(m);
     }
     if (m.periods?.length) PERIODS_MUTABLE = m.periods.map(String);
@@ -1967,16 +2007,20 @@ export function initManufacturingConsole(): () => void {
 
   function categoryPctForSiteHeatmap(site, category) {
     const siteKey = resolveSiteKey(site, state.liveMetrics?.site_category_by_period || state.liveMetrics?.site_by_period);
-    const liveSiteCat = state.liveMetrics?.site_category_by_period?.[siteKey]?.[category];
+    const siteCatMap = state.liveMetrics?.site_category_by_period?.[siteKey];
+    const catKey = resolveEntityKey(category, siteCatMap);
+    const liveSiteCat = siteCatMap?.[catKey];
     if (liveSiteCat?.length) return alignPeriodValues(liveSiteCat);
-    const scopedCat = state.liveMetrics?.category_by_period?.[category];
+    const networkCatMap = state.liveMetrics?.category_by_period;
+    const scopedKey = resolveEntityKey(category, networkCatMap);
+    const scopedCat = networkCatMap?.[scopedKey];
     if (scopedCat?.length && isSiteFiltered()) return alignPeriodValues(scopedCat);
     if (isLiveSql()) return alignPeriodValues([]);
 
     const sitePeriods = sitePeriodPct(site);
     const base = CATEGORY_BASE[category] || [];
     const baseSum = periodBaseTotals();
-    const liveCat = state.liveMetrics?.category_by_period?.[category];
+    const liveCat = state.liveMetrics?.category_by_period?.[resolveEntityKey(category, state.liveMetrics?.category_by_period)];
     const useNetworkCategory = liveCat?.length && !isSiteFiltered() && activeHeatmapSites().length === allMetricSites().length;
     if (useNetworkCategory) {
       const mult = SITE_MULTIPLIERS[site] || 1;
@@ -1991,9 +2035,13 @@ export function initManufacturingConsole(): () => void {
 
   function categoryHoursForSiteHeatmap(site, category) {
     const siteKey = resolveSiteKey(site, state.liveMetrics?.site_category_by_period_hrs || state.liveMetrics?.site_by_period);
-    const liveSiteHrs = state.liveMetrics?.site_category_by_period_hrs?.[siteKey]?.[category];
+    const siteCatMap = state.liveMetrics?.site_category_by_period_hrs?.[siteKey];
+    const catKey = resolveEntityKey(category, siteCatMap);
+    const liveSiteHrs = siteCatMap?.[catKey];
     if (liveSiteHrs?.length) return alignPeriodValues(liveSiteHrs);
-    const scopedHrs = state.liveMetrics?.category_by_period_hrs?.[category];
+    const networkCatMap = state.liveMetrics?.category_by_period_hrs;
+    const scopedKey = resolveEntityKey(category, networkCatMap);
+    const scopedHrs = networkCatMap?.[scopedKey];
     if (scopedHrs?.length && isSiteFiltered()) return alignPeriodValues(scopedHrs);
     if (isLiveSql()) return alignPeriodValues([]);
     return categoryPctForSiteHeatmap(site, category).map(v => (v == null ? null : pctToHours(v)));
@@ -3280,15 +3328,17 @@ export function initManufacturingConsole(): () => void {
 
   function linePctForSite(site, line) {
     const siteKey = resolveSiteKey(site, state.liveMetrics?.site_line_by_period || state.liveMetrics?.site_by_period);
-    const lineKey = String(line).toUpperCase();
-    const liveSiteLine = state.liveMetrics?.site_line_by_period?.[siteKey]?.[lineKey]
-      || state.liveMetrics?.site_line_by_period?.[siteKey]?.[line];
+    const siteLineMap = state.liveMetrics?.site_line_by_period?.[siteKey];
+    const lineKey = resolveEntityKey(line, siteLineMap);
+    const liveSiteLine = siteLineMap?.[lineKey];
     if (liveSiteLine?.length) return alignPeriodValues(liveSiteLine);
-    const scopedLine = state.liveMetrics?.line_by_period?.[lineKey] || state.liveMetrics?.line_by_period?.[line];
+    const networkLineMap = state.liveMetrics?.line_by_period;
+    const scopedKey = resolveEntityKey(line, networkLineMap);
+    const scopedLine = networkLineMap?.[scopedKey];
     if (scopedLine?.length && isSiteFiltered()) return alignPeriodValues(scopedLine);
     if (isLiveSql()) return alignPeriodValues([]);
 
-    const live = state.liveMetrics?.line_by_period?.[lineKey] || state.liveMetrics?.line_by_period?.[line];
+    const live = networkLineMap?.[scopedKey];
     const useNetworkLine = live?.length && !isSiteFiltered() && activeHeatmapSites().length === allMetricSites().length;
     if (useNetworkLine) {
       const mult = SITE_MULTIPLIERS[site] || 1;
@@ -3300,11 +3350,13 @@ export function initManufacturingConsole(): () => void {
 
   function lineHoursForSite(site, line) {
     const siteKey = resolveSiteKey(site, state.liveMetrics?.site_line_by_period_hrs || state.liveMetrics?.site_by_period);
-    const lineKey = String(line).toUpperCase();
-    const liveSiteLine = state.liveMetrics?.site_line_by_period_hrs?.[siteKey]?.[lineKey]
-      || state.liveMetrics?.site_line_by_period_hrs?.[siteKey]?.[line];
+    const siteLineMap = state.liveMetrics?.site_line_by_period_hrs?.[siteKey];
+    const lineKey = resolveEntityKey(line, siteLineMap);
+    const liveSiteLine = siteLineMap?.[lineKey];
     if (liveSiteLine?.length) return alignPeriodValues(liveSiteLine);
-    const scopedLine = state.liveMetrics?.line_by_period_hrs?.[lineKey] || state.liveMetrics?.line_by_period_hrs?.[line];
+    const networkLineMap = state.liveMetrics?.line_by_period_hrs;
+    const scopedKey = resolveEntityKey(line, networkLineMap);
+    const scopedLine = networkLineMap?.[scopedKey];
     if (scopedLine?.length && isSiteFiltered()) return alignPeriodValues(scopedLine);
     if (isLiveSql()) return alignPeriodValues([]);
     return linePctForSite(site, line).map(v => (v == null ? null : pctToHours(v)));
