@@ -10,6 +10,10 @@ import requests
 _proxy_logged = False
 
 
+def _env(key: str) -> str:
+    return (os.environ.get(key) or "").strip()
+
+
 def databricks_host() -> str:
     host = _env("DATABRICKS_HOST") or _env("DATABRICKS_SERVER_HOSTNAME")
     host = re.sub(r"^https?://", "", host)
