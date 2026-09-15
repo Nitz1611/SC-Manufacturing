@@ -1,7 +1,7 @@
 SC Manufacturing Console — Databricks Deploy Bundle
 ===================================================
 
-Branch: cursor/react-frontend-migration-e63a
+Branch: (deploy bundle — pre-built dist folders)
 Built: 2026-09-15
 
 WHAT THIS FOLDER CONTAINS
@@ -42,8 +42,8 @@ RECOMMENDED options (in order):
 
   B) Databricks Repo (best for ongoing updates):
        Workspace → Repos → Add Repo
-       URL: https://github.com/Nitz1611/SC-Manufacturing
-       Branch: cursor/react-frontend-migration-e63a
+       URL: <your Git repo URL>
+       Branch: <your deploy branch>
        Path: /Repos/<you>/SC-Manufacturing
        Use folder: SC-Manufacturing-Databricks-Deploy
 
@@ -87,6 +87,15 @@ STEP 5 — VERIFY
 
 TROUBLESHOOTING
 ---------------
+  - "[ERROR] Error building app" after npm install:
+      This bundle ships pre-built client/dist and server/dist (no TypeScript/Vite
+      sources). The build script is a no-op. If you still see this error, confirm
+      package.json was uploaded (UI import often skips it) and re-sync via CLI.
+
+  - "2 moderate severity vulnerabilities" during npm ci:
+      These are npm audit warnings, not build failures. .npmrc sets audit-level=high.
+      Run `npm audit` for details; do not block deploy on moderate findings.
+
   - "Error importing package.json / env.js / config.js" in UI:
       Delete the partial folder in Workspace, then use import-with-cli.ps1
       or `databricks sync` (see Step 1). UI import is not reliable for Node apps.
