@@ -2,6 +2,10 @@
 
 Unplanned downtime (DT %) analytics dashboard for PepsiCo manufacturing operations.
 
+> **Version strategy:** This branch (`cursor/react-frontend-migration-e63a`) is the **active** React + Node app.  
+> The original Flask app is preserved unchanged on `cursor/flask-legacy-e63a`.  
+> See [docs/VERSIONS.md](docs/VERSIONS.md) for the full feature comparison.
+
 ## Project structure
 
 ```
