@@ -12,8 +12,12 @@ echo "==> Step 1/3: npm install (production)"
 rm -rf node_modules client/node_modules server/node_modules
 NODE_ENV=production npm install
 
-echo "==> Step 2/3: npm run build"
-npm run build
+echo "==> Step 2/3: npm run build (skipped if no build script)"
+if node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).scripts?.build ? 'yes' : 'no'" 2>/dev/null | grep -qx yes; then
+  npm run build
+else
+  echo "    no root build script — Databricks skips compile (expected for pre-built bundle)"
+fi
 
 echo "==> Step 3/3: npm start (5s smoke test on port $PORT)"
 PORT="$PORT" timeout 5 npm start >/tmp/sc-deploy-smoke.log 2>&1 &

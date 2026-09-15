@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node -e \"console.log('Pre-built client/dist included — skipping vite build')\"",
+    "build": "node -p \"'prebuilt'\"",
     "preview": "vite preview"
   },
   "dependencies": {

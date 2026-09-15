@@ -107,9 +107,12 @@ STEP 6 — VERIFY
 TROUBLESHOOTING
 ---------------
   - "[ERROR] Error building app" after npm install:
-      This bundle ships pre-built client/dist and server/dist (no TypeScript/Vite
-      sources). The build script is a no-op. If you still see this error, confirm
-      package.json was uploaded (UI import often skips it) and re-sync via CLI.
+      Databricks runs npm run build when package.json defines a "build" script.
+      This bundle has NO root build script (pre-built dist only). If you see this error,
+      your upload is stale or partial — open Workspace package.json and check:
+        WRONG: "build": "npm run build --workspace=client && ..."
+        RIGHT: no "build" key at the root
+      Run verify-upload.ps1 locally, then re-sync with import-with-cli.ps1.
 
   - "2 moderate severity vulnerabilities" during npm ci:
       These are npm audit warnings, not build failures. .npmrc sets audit-level=high.
