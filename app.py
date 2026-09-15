@@ -16,7 +16,7 @@ import cache as cache_store
 
 load_dotenv()
 
-PORT    = int(os.getenv("DATABRICKS_APP_PORT", 8000))
+PORT    = int(os.getenv("PORT") or os.getenv("DATABRICKS_APP_PORT") or 8000)
 PREWARM = os.getenv("GENIE_INSIGHTS_ON_STARTUP", "true").lower() == "true"
 
 app = Flask(__name__)
