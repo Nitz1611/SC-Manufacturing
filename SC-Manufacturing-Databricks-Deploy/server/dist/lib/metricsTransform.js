@@ -1,0 +1,684 @@
+const PERIODS = Array.from({ length: 10 }, (_, i) => `P${i + 1}`);
+const WEEKS = [
+    '2026P01W01', '2026P01W02', '2026P01W03', '2026P01W04',
+    '2026P02W01', '2026P02W02', '2026P02W03', '2026P02W04',
+    '2026P03W01', '2026P03W02', '2026P03W03',
+];
+const SITES = [
+    'ABERDEEN', 'ARLINGTON', 'BELOIT', 'BRIDGEVIEW', 'BROOKHOLLOW',
+    'CAMBRIDGE', 'CANTON', 'CHARLOTTE', 'DENVER', 'FRISCO', 'HOUSTON', 'MODESTO', 'PLANO',
+];
+const SITE_WEIGHTS = {
+    ABERDEEN: 1.0, ARLINGTON: 0.92, FRISCO: 1.08, MODESTO: 0.85, PLANO: 1.12,
+    BELOIT: 1.1, BRIDGEVIEW: 4.5, BROOKHOLLOW: 1.05, CAMBRIDGE: 0.72, CANTON: 0.52,
+    CHARLOTTE: 0.04, DENVER: 0.88, HOUSTON: 0.95,
+};
+const CATEGORIES = [
+    'Changeover', 'Equipment', 'Facilities', 'Materials', 'No Event',
+    'Operation', 'Personnel', 'Sanitation', 'Warehouse',
+];
+const CATEGORY_WEIGHTS = {
+    Equipment: 0.28, Operation: 0.18, Changeover: 0.12, Sanitation: 0.10,
+    'No Event': 0.08, Facilities: 0.08, Materials: 0.08, Personnel: 0.05, Warehouse: 0.03,
+};
+const LINES = ['BCP1', 'FCP1', 'PTZ3', 'SUN1', 'TCS1', 'DIP1', 'FUN1', 'FCC1', 'PC1', 'PC2'];
+const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+function parsePct(v) {
+    const n = parseFloat(String(v ?? '').replace('%', '').trim());
+    return Number.isFinite(n) ? n : 6.2;
+}
+function expandSeries(values, targetLen) {
+    if (!values.length)
+        return Array(targetLen).fill(0);
+    const out = [...values];
+    while (out.length < targetLen)
+        out.push(out[out.length - 1]);
+    return out.slice(0, targetLen);
+}
+export function normalizePeriodTrendPct(values, anchor, targetLen = 10) {
+    const vals = values.filter(v => v != null && Number.isFinite(v));
+    if (!vals.length) {
+        return expandSeries(Array.from({ length: targetLen }, (_, i) => +(anchor * (0.92 + i * 0.015)).toFixed(2)), targetLen);
+    }
+    if (Math.max(...vals) > 50) {
+        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+        return expandSeries(vals, targetLen).map(v => +(anchor * (v / (avg || 1))).toFixed(2));
+    }
+    return expandSeries(vals, targetLen).map(v => +Number(v).toFixed(2));
+}
+function transformDashboard(dashboard) {
+    const kpisRaw = (dashboard.kpis || {});
+    const kpis = {
+        downtime_pct: kpisRaw.downtime_pct || { value: '6.2%', delta: '', direction: 'warn' },
+        downtime_hrs: kpisRaw.downtime_hrs || { value: '', delta: '', direction: 'warn' },
+        stops: kpisRaw.stops || { value: '', delta: '', direction: 'warn' },
+        oee: kpisRaw.oee || { value: 'N/A', delta: '', direction: 'warn' },
+    };
+    const dtTrend = (dashboard.downtime_trend || {});
+    const anchor = parsePct(kpis.downtime_pct.value);
+    const period_trend = normalizePeriodTrendPct(dtTrend.data || [], anchor, PERIODS.length);
+    const reasons = [];
+    for (const bullet of (dashboard.downtime_bullets || [])) {
+        const text = bullet?.text || '';
+        if (/unavailable|waste/i.test(text))
+            continue;
+        const hoursMatch = text.match(/([\d,]+\.?\d*)\s*h/i);
+        const hours = hoursMatch ? parseFloat(hoursMatch[1].replace(/,/g, '')) : 0;
+        const name = text.split(' caused')[0].split(' — ')[0].trim().slice(0, 80) || 'RSN';
+        reasons.push({ reason: name, hours, pct: Number(bullet.pct || 0) });
+    }
+    if (!reasons.length) {
+        reasons.push({ reason: 'No Event', hours: 6255.3, pct: 0.48 }, { reason: 'Unplanned Sanitation', hours: 3107.66, pct: 0.24 }, { reason: 'Equipment Failure', hours: 2100, pct: 0.18 });
+    }
+    if (!kpis.downtime_hrs.value) {
+        const total = reasons.reduce((a, r) => a + r.hours, 0);
+        kpis.downtime_hrs = {
+            value: `${total.toLocaleString()} h`,
+            delta: kpis.downtime_pct.delta || '',
+            direction: (kpis.downtime_pct.direction || 'warn'),
+        };
+    }
+    const top_lines = {};
+    for (const item of (dashboard.line_contributions || [])) {
+        if (item?.line && !/unavailable/i.test(item.line)) {
+            top_lines[item.line] = Number(item.pct || 0);
+        }
+    }
+    return {
+        meta: { year: 2026, period: 'P09', week: WEEKS[8], source: 'cache', filters: {} },
+        periods: PERIODS,
+        weeks: WEEKS,
+        kpis,
+        period_trend,
+        reasons,
+        top_lines,
+        shift_comparison: (dashboard.shift_comparison || []).filter(s => s?.hours > 0),
+        site_by_period: {},
+        category_by_period: {},
+        line_by_period: {},
+        dow_by_day_week: {},
+        top_sites_trend: {},
+        tab_insights: {},
+    };
+}
+function synthesizeFromTrend(period_trend) {
+    const site_by_period = {};
+    for (const site of SITES) {
+        const w = SITE_WEIGHTS[site] || 1;
+        site_by_period[site] = period_trend.map(v => +(v * w * 0.42).toFixed(2));
+    }
+    const category_by_period = {};
+    for (const cat of CATEGORIES) {
+        const w = CATEGORY_WEIGHTS[cat] || 0.05;
+        category_by_period[cat] = period_trend.map(v => +(v * w * 2.2).toFixed(2));
+    }
+    const line_by_period = {};
+    for (const line of LINES) {
+        line_by_period[line] = period_trend.map(v => +(v * 0.35 * 0.8).toFixed(2));
+    }
+    const topSites = Object.entries(SITE_WEIGHTS).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const top_sites_trend = {};
+    for (const [site, w] of topSites) {
+        top_sites_trend[site] = period_trend.map(v => +(v * w * 0.42).toFixed(2));
+    }
+    const anchor = period_trend.reduce((a, b) => a + b, 0) / (period_trend.length || 1) || 6.2;
+    const dow_by_day_week = {};
+    const dayMult = [0.85, 1.0, 1.12, 1.05, 1.18, 1.0, 0.78];
+    for (let di = 0; di < DAY_LABELS.length; di++) {
+        dow_by_day_week[DAY_LABELS[di]] = {};
+        WEEKS.forEach((week, wi) => {
+            dow_by_day_week[DAY_LABELS[di]][week] = +(anchor * dayMult[di] * (1 + wi * 0.008)).toFixed(2);
+        });
+    }
+    return { site_by_period, category_by_period, line_by_period, top_sites_trend, dow_by_day_week };
+}
+export function buildTabInsights(m) {
+    const dt = m.kpis.downtime_pct;
+    const dtHrs = m.kpis.downtime_hrs;
+    const stops = m.kpis.stops;
+    const trend = m.period_trend || [];
+    const periods = m.periods || [];
+    const anchor = parsePct(dt.value);
+    let peakLabel = '', peakVal = anchor, lowLabel = '', lowVal = anchor;
+    if (trend.length) {
+        const peakI = trend.indexOf(Math.max(...trend));
+        const lowI = trend.indexOf(Math.min(...trend));
+        peakLabel = periods[peakI] || `P${peakI + 1}`;
+        peakVal = trend[peakI];
+        lowLabel = periods[lowI] || `P${lowI + 1}`;
+        lowVal = trend[lowI];
+    }
+    const overview = `Unplanned DT % is ${dt.value || '—'} (${dt.delta || 'vs prior period'}). Peak at ${peakLabel || 'latest'} (${peakVal.toFixed(2)}%), low at ${lowLabel || '—'} (${lowVal.toFixed(2)}%). STOPS: ${stops.value || '—'}.`;
+    const cats = m.category_by_period || {};
+    let category;
+    if (Object.keys(cats).length) {
+        const topCat = Object.entries(cats).sort((a, b) => {
+            const sa = a[1].reduce((x, y) => x + y, 0);
+            const sb = b[1].reduce((x, y) => x + y, 0);
+            return sb - sa;
+        })[0];
+        const catAvg = topCat[1].reduce((a, b) => a + b, 0) / topCat[1].length;
+        category = `${topCat[0]} leads unplanned DT at ${catAvg.toFixed(2)}% avg across ${periods.length} periods. Network unplanned DT is ${anchor.toFixed(2)}% — focus reduction on ${topCat[0]} root causes.`;
+    }
+    else {
+        category = `Category-level unplanned DT averages ${anchor.toFixed(2)}%. Expand site rows to compare RSN categories by period.`;
+    }
+    const lines = m.top_lines || {};
+    let line;
+    if (Object.keys(lines).length) {
+        const ranked = Object.entries(lines).sort((a, b) => b[1] - a[1]).slice(0, 3);
+        line = `Top unplanned DT lines: ${ranked.map(([n, p]) => `${n} (${p.toFixed(1)}%)`).join(', ')}. Prioritize mechanical and changeover losses on highest-share lines.`;
+    }
+    else {
+        line = 'Line-level unplanned DT is concentrated in a few assets — use the heatmap to identify top site/line combinations.';
+    }
+    const shifts = m.shift_comparison || [];
+    let dow;
+    if (shifts.length) {
+        const topShift = shifts.reduce((a, b) => (a.hours > b.hours ? a : b));
+        dow = `${topShift.shift} drives ${topShift.hours.toLocaleString()} unplanned DT hours. Compare shifts across days to target handover gaps.`;
+    }
+    else {
+        dow = 'Day-of-week unplanned DT varies by shift — use the heatmap to compare Shift 1/2/3 patterns across weeks.';
+    }
+    const reasons = m.reasons || [];
+    let reason;
+    if (reasons.length) {
+        const top3 = reasons.slice(0, 3);
+        const rTxt = top3.map(r => `${r.reason} (${r.hours.toLocaleString()}h, ${r.pct.toFixed(2)}%)`).join('; ');
+        reason = `Top unplanned DT reasons: ${rTxt}. Period trend ranges ${Math.min(...trend).toFixed(2)}%–${Math.max(...trend).toFixed(2)}% with total hours ${dtHrs.value || '—'}.`;
+    }
+    else {
+        reason = `Unplanned DT % trend spans ${anchor.toFixed(2)}% across periods. Review RSN-level hours to prioritize contributors.`;
+    }
+    return { overview, category, line, dow, reason };
+}
+export function enrichMetrics(base, filters, source = 'cache') {
+    const period_trend = base.period_trend || normalizePeriodTrendPct([], parsePct(base.kpis?.downtime_pct?.value), PERIODS.length);
+    const synth = synthesizeFromTrend(period_trend);
+    const m = {
+        meta: { year: 2026, period: 'P09', week: WEEKS[8], source, filters: Object.fromEntries(Object.entries(filters).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])) },
+        periods: PERIODS,
+        weeks: WEEKS,
+        kpis: base.kpis || {
+            downtime_pct: { value: '6.2%', delta: '↓ 0.03pp vs prior week', direction: 'good' },
+            downtime_hrs: { value: '1,014 h', delta: '', direction: 'good' },
+            stops: { value: '819', delta: '', direction: 'good' },
+            oee: { value: 'N/A', delta: '', direction: 'warn' },
+        },
+        tab_insights: {},
+        site_by_period: (base.site_by_period && Object.keys(base.site_by_period).length) ? base.site_by_period : synth.site_by_period,
+        category_by_period: (base.category_by_period && Object.keys(base.category_by_period).length) ? base.category_by_period : synth.category_by_period,
+        line_by_period: (base.line_by_period && Object.keys(base.line_by_period).length) ? base.line_by_period : synth.line_by_period,
+        period_trend,
+        reasons: base.reasons || [],
+        dow_by_day_week: (base.dow_by_day_week && Object.keys(base.dow_by_day_week).length) ? base.dow_by_day_week : synth.dow_by_day_week,
+        top_lines: base.top_lines || {},
+        top_sites_trend: (base.top_sites_trend && Object.keys(base.top_sites_trend).length) ? base.top_sites_trend : synth.top_sites_trend,
+        shift_comparison: base.shift_comparison || [],
+        key_insights: base.key_insights,
+    };
+    m.tab_insights = buildTabInsights(m);
+    return m;
+}
+export function metricsFromCache(filters) {
+    return enrichMetrics({}, filters, 'demo');
+}
+export function metricsFromDashboardCache(dashboard, filters) {
+    return enrichMetrics(transformDashboard(dashboard), filters, 'cache');
+}
+function parseHours(v) {
+    const n = parseFloat(String(v ?? '').replace(/[^0-9.]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+}
+export function formatKpisFromRaw(raw) {
+    const dtPct = Number(raw.downtime_pct ?? 0);
+    const dtHrs = Number(raw.downtime_hrs ?? 0);
+    const stops = Number(raw.stops ?? 0);
+    return {
+        downtime_pct: {
+            value: `${dtPct.toFixed(2)}%`,
+            delta: 'vs prior period',
+            direction: dtPct > 5 ? 'bad' : 'good',
+        },
+        downtime_hrs: {
+            value: `${Math.round(dtHrs).toLocaleString()} h`,
+            delta: '',
+            direction: 'warn',
+        },
+        stops: {
+            value: String(Math.round(stops)),
+            delta: '',
+            direction: 'warn',
+        },
+        oee: { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
+    };
+}
+function buildSiteKpisMap(rows) {
+    const out = {};
+    for (const row of rows) {
+        const site = String(row.site || '').toUpperCase();
+        if (!site)
+            continue;
+        out[site] = {
+            downtime_pct: +Number(row.downtime_pct ?? 0).toFixed(2),
+            downtime_hrs: +Number(row.downtime_hrs ?? 0).toFixed(0),
+            stops: +Number(row.stops ?? 0).toFixed(0),
+        };
+    }
+    return out;
+}
+function periodValuesWithSignal(arr) {
+    return (arr || [])
+        .filter(v => v != null && Number.isFinite(Number(v)) && Number(v) > 0)
+        .map(v => Number(v));
+}
+function deriveKpisFromSitePeriods(metrics, siteKey) {
+    const base = metrics.kpis;
+    const isSql = metrics.meta?.source === 'sql';
+    const rawPct = parseFloat(String(base.downtime_pct?.value || '').replace('%', '').trim());
+    let dtPct = Number.isFinite(rawPct) ? rawPct : 0;
+    let dtHrs = parseHours(base.downtime_hrs?.value);
+    let stops = parseInt(String(base.stops?.value || '0').replace(/,/g, ''), 10);
+    if (Number.isNaN(stops))
+        stops = 0;
+    if (isSql) {
+        return base;
+    }
+    let periodVals = periodValuesWithSignal(metrics.site_by_period[siteKey]);
+    if (!periodVals.length)
+        periodVals = periodValuesWithSignal(metrics.period_trend);
+    if (!periodVals.length && metrics.period_trend?.length) {
+        const mult = SITE_WEIGHTS[siteKey] || 1;
+        periodVals = metrics.period_trend
+            .map(v => +(Number(v || 0) * mult * 0.95).toFixed(2))
+            .filter(v => v > 0);
+    }
+    if (periodVals.length && dtPct === 0) {
+        dtPct = periodVals.reduce((a, b) => a + b, 0) / periodVals.length;
+    }
+    if (dtHrs === 0 && dtPct > 0) {
+        const mult = SITE_WEIGHTS[siteKey] || 1;
+        const n = metrics.periods?.length || PERIODS.length;
+        dtHrs = Math.round((112474 / 6.2) * dtPct * mult * (periodVals.length / n));
+    }
+    if (stops === 0 && dtPct > 0) {
+        const mult = SITE_WEIGHTS[siteKey] || 1;
+        stops = Math.max(1, Math.round(819 * (dtPct / 6.2) * mult));
+    }
+    const benchmark = dtPct > 0 ? dtPct : 6.2;
+    return {
+        downtime_pct: {
+            value: `${dtPct.toFixed(2)}%`,
+            delta: base.downtime_pct?.delta || 'vs prior period',
+            direction: dtPct === 0 ? 'neutral' : dtPct >= benchmark * 1.05 ? 'bad' : 'good',
+        },
+        downtime_hrs: {
+            value: `${Math.round(dtHrs).toLocaleString()} h`,
+            delta: base.downtime_hrs?.delta || '',
+            direction: dtHrs === 0 ? 'neutral' : (base.downtime_hrs?.direction || 'warn'),
+        },
+        stops: {
+            value: String(stops || 0),
+            delta: base.stops?.delta || '',
+            direction: stops === 0 ? 'neutral' : (base.stops?.direction || 'warn'),
+        },
+        oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
+    };
+}
+export function applySiteFilter(metrics, site) {
+    if (!site)
+        return metrics;
+    const siteKey = site.toUpperCase();
+    const out = structuredClone(metrics);
+    if (out.site_by_period[siteKey])
+        out.site_by_period = { [siteKey]: out.site_by_period[siteKey] };
+    if (out.site_by_period_hrs?.[siteKey]) {
+        out.site_by_period_hrs = { [siteKey]: out.site_by_period_hrs[siteKey] };
+    }
+    else if (out.site_by_period_hrs) {
+        out.site_by_period_hrs = {};
+    }
+    if (out.top_sites_trend[siteKey])
+        out.top_sites_trend = { [siteKey]: out.top_sites_trend[siteKey] };
+    if (out.top_sites_trend_hrs?.[siteKey]) {
+        out.top_sites_trend_hrs = { [siteKey]: out.top_sites_trend_hrs[siteKey] };
+    }
+    else if (out.top_sites_trend_hrs) {
+        out.top_sites_trend_hrs = {};
+    }
+    if (out.site_category_by_period) {
+        out.site_category_by_period = out.site_category_by_period[siteKey]
+            ? { [siteKey]: out.site_category_by_period[siteKey] }
+            : {};
+    }
+    if (out.site_category_by_period_hrs) {
+        out.site_category_by_period_hrs = out.site_category_by_period_hrs[siteKey]
+            ? { [siteKey]: out.site_category_by_period_hrs[siteKey] }
+            : {};
+    }
+    if (out.site_line_by_period) {
+        out.site_line_by_period = out.site_line_by_period[siteKey]
+            ? { [siteKey]: out.site_line_by_period[siteKey] }
+            : {};
+    }
+    if (out.site_line_by_period_hrs) {
+        out.site_line_by_period_hrs = out.site_line_by_period_hrs[siteKey]
+            ? { [siteKey]: out.site_line_by_period_hrs[siteKey] }
+            : {};
+    }
+    if (out.meta?.source === 'sql') {
+        if (out.site_by_period[siteKey]?.length) {
+            out.period_trend = [...out.site_by_period[siteKey]];
+        }
+        if (out.site_kpis?.[siteKey]) {
+            out.kpis = formatKpisFromRaw(out.site_kpis[siteKey]);
+        }
+        out.meta.filtered_site = siteKey;
+        out.tab_insights = buildTabInsights(out);
+        return out;
+    }
+    const siteKeys = Object.keys(out.site_by_period || {});
+    const alreadySiteScoped = siteKeys.length === 1 && siteKeys[0] === siteKey;
+    if (!alreadySiteScoped) {
+        const mult = SITE_WEIGHTS[siteKey] || 1;
+        out.period_trend = out.period_trend.map(v => +(v * mult * 0.95).toFixed(2));
+    }
+    else if (out.site_by_period[siteKey]?.length) {
+        const scoped = out.site_by_period[siteKey].filter(v => v != null && Number(v) > 0);
+        if (scoped.length)
+            out.period_trend = [...out.site_by_period[siteKey]];
+    }
+    out.kpis = deriveKpisFromSitePeriods(out, siteKey);
+    out.tab_insights = buildTabInsights(out);
+    out.meta.filtered_site = siteKey;
+    return out;
+}
+export function queryResultForKey(queryKey, metrics) {
+    switch (queryKey) {
+        case 'dashboard_dt_kpis':
+            return { rows: [metrics.kpis] };
+        case 'dashboard_dt_site_kpis':
+            return {
+                rows: Object.entries(metrics.site_kpis || {}).map(([site, kpi]) => ({
+                    site,
+                    ...kpi,
+                })),
+            };
+        case 'dashboard_dt_period_trend':
+            return { rows: metrics.periods.map((p, i) => ({ period_label: p, dt_pct: metrics.period_trend[i] })) };
+        case 'dashboard_dt_site_by_period':
+            return { rows: Object.entries(metrics.site_by_period).flatMap(([site, vals]) => vals.map((dt_pct, i) => ({ site, period_label: metrics.periods[i], dt_pct }))) };
+        case 'dashboard_dt_category_by_period':
+            return { rows: Object.entries(metrics.category_by_period).flatMap(([category, vals]) => vals.map((dt_pct, i) => ({ category, period_label: metrics.periods[i], dt_pct }))) };
+        case 'dashboard_dt_line_by_period':
+            return { rows: Object.entries(metrics.line_by_period).flatMap(([line, vals]) => vals.map((dt_pct, i) => ({ line, period_label: metrics.periods[i], dt_pct }))) };
+        case 'dashboard_dt_reasons':
+            return { rows: metrics.reasons };
+        case 'dashboard_dt_dow':
+            return { rows: Object.entries(metrics.dow_by_day_week).flatMap(([day_name, weeks]) => Object.entries(weeks).map(([week_label, dt_pct]) => ({ day_name, week_label, dt_pct }))) };
+        case 'dashboard_dt_top_lines':
+            return { rows: Object.entries(metrics.top_lines).map(([line, dt_pct]) => ({ line, dt_pct })) };
+        case 'dashboard_dt_shift_comparison':
+            return { rows: metrics.shift_comparison };
+        case 'dashboard_filter_options':
+            return {
+                rows: (metrics.filter_options?.sites || Object.keys(metrics.site_by_period)).map(site => ({
+                    site,
+                    region: metrics.filter_options?.site_regions?.[site] || null,
+                })),
+            };
+        case 'dashboard_dt_dow_by_shift':
+            return {
+                rows: Object.entries(metrics.dow_by_shift || {}).flatMap(([day_name, shifts]) => Object.entries(shifts).flatMap(([shift_label, weeks]) => Object.entries(weeks).map(([week_label, dt_pct]) => ({ day_name, shift_label, week_label, dt_pct })))),
+            };
+        default:
+            return { rows: [] };
+    }
+}
+function sortPeriods(labels) {
+    return [...new Set(labels)].sort((a, b) => {
+        const na = parseInt(String(a).replace(/\D/g, ''), 10) || 0;
+        const nb = parseInt(String(b).replace(/\D/g, ''), 10) || 0;
+        return na - nb || String(a).localeCompare(String(b));
+    });
+}
+function pivotMetricRows(rows, entityKey, periods, valueKey = 'dt_pct') {
+    const out = {};
+    for (const row of rows) {
+        const entity = String(row[entityKey] || '').toUpperCase();
+        const period = String(row.period_label || '');
+        const val = Number(row[valueKey] ?? 0);
+        if (!entity || !period)
+            continue;
+        if (!out[entity])
+            out[entity] = periods.map(() => 0);
+        const idx = periods.indexOf(period);
+        if (idx >= 0)
+            out[entity][idx] = +val.toFixed(2);
+    }
+    return out;
+}
+function pivotSiteEntityRows(rows, entityKey, periods, valueKey = 'dt_pct') {
+    const out = {};
+    for (const row of rows) {
+        const site = String(row.site || '').toUpperCase();
+        const entity = String(row[entityKey] || '').toUpperCase();
+        const period = String(row.period_label || '');
+        const val = Number(row[valueKey] ?? 0);
+        if (!site || !entity || !period)
+            continue;
+        if (!out[site])
+            out[site] = {};
+        if (!out[site][entity])
+            out[site][entity] = periods.map(() => 0);
+        const idx = periods.indexOf(period);
+        if (idx >= 0)
+            out[site][entity][idx] = +val.toFixed(2);
+    }
+    return out;
+}
+function aggregateEntityByPeriod(rows, entityKey, periods, pctKey, hrsKey) {
+    const pctAgg = {};
+    const hrsAgg = {};
+    for (const row of rows) {
+        const entity = String(row[entityKey] || '');
+        const period = String(row.period_label || '');
+        const pct = Number(row[pctKey] ?? 0);
+        const hrs = Number(row[hrsKey] ?? 0);
+        if (!entity)
+            continue;
+        const idx = periods.indexOf(period);
+        if (idx < 0)
+            continue;
+        if (!pctAgg[entity])
+            pctAgg[entity] = {};
+        if (!pctAgg[entity][idx])
+            pctAgg[entity][idx] = { sum: 0, count: 0 };
+        pctAgg[entity][idx].sum += pct;
+        pctAgg[entity][idx].count += 1;
+        if (!hrsAgg[entity])
+            hrsAgg[entity] = {};
+        hrsAgg[entity][idx] = (hrsAgg[entity][idx] || 0) + hrs;
+    }
+    const pct = {};
+    const hrs = {};
+    for (const entity of new Set([...Object.keys(pctAgg), ...Object.keys(hrsAgg)])) {
+        pct[entity] = periods.map((_, idx) => {
+            const cell = pctAgg[entity]?.[idx];
+            return cell ? +(cell.sum / cell.count).toFixed(2) : 0;
+        });
+        hrs[entity] = periods.map((_, idx) => +(hrsAgg[entity]?.[idx] || 0).toFixed(2));
+    }
+    return { pct, hrs };
+}
+export function buildFilterOptions(rows) {
+    const site_regions = {};
+    const sites = [];
+    const regions = new Set();
+    const years = new Set();
+    for (const row of rows) {
+        const site = String(row.site || '').toUpperCase();
+        const region = String(row.region || '').trim();
+        const year = Number(row.year);
+        if (!site)
+            continue;
+        if (!sites.includes(site))
+            sites.push(site);
+        if (region) {
+            site_regions[site] = region;
+            regions.add(region);
+        }
+        if (Number.isFinite(year))
+            years.add(year);
+    }
+    sites.sort();
+    return {
+        sites,
+        regions: [...regions].sort(),
+        years: [...years].sort((a, b) => b - a),
+        site_regions,
+    };
+}
+function buildDowByShift(rows, valueKey = 'dt_pct') {
+    const out = {};
+    for (const row of rows) {
+        const day = String(row.day_name || '');
+        const week = String(row.week_label || '');
+        const shift = String(row.shift_label || '').trim();
+        const val = Number(row[valueKey] ?? 0);
+        if (!day || !week || !shift)
+            continue;
+        if (!out[day])
+            out[day] = {};
+        if (!out[day][shift])
+            out[day][shift] = {};
+        out[day][shift][week] = +val.toFixed(2);
+    }
+    return out;
+}
+export function buildMetricsFromSql(results, filters) {
+    const periodLabels = sortPeriods(results.periodTrend.map(r => String(r.period_label || '')).filter(Boolean));
+    const periods = periodLabels.length ? periodLabels : PERIODS;
+    const period_trend = periods.map(p => {
+        const row = results.periodTrend.find(r => String(r.period_label) === p);
+        return row ? +Number(row.dt_pct || 0).toFixed(2) : 0;
+    });
+    const period_trend_hrs = periods.map(p => {
+        const row = results.periodTrend.find(r => String(r.period_label) === p);
+        return row ? +Number(row.dt_hours || 0).toFixed(2) : 0;
+    });
+    const k = results.kpis[0] || {};
+    const kpis = formatKpisFromRaw(k);
+    const site_kpis = buildSiteKpisMap(results.siteKpis);
+    const site_by_period = pivotMetricRows(results.siteByPeriod, 'site', periods, 'dt_pct');
+    const site_by_period_hrs = pivotMetricRows(results.siteByPeriod, 'site', periods, 'dt_hours');
+    const site_category_by_period = pivotSiteEntityRows(results.categoryByPeriod, 'category', periods, 'dt_pct');
+    const site_category_by_period_hrs = pivotSiteEntityRows(results.categoryByPeriod, 'category', periods, 'dt_hours');
+    const site_line_by_period = pivotSiteEntityRows(results.lineByPeriod, 'line', periods, 'dt_pct');
+    const site_line_by_period_hrs = pivotSiteEntityRows(results.lineByPeriod, 'line', periods, 'dt_hours');
+    const category_by_period = pivotMetricRows(results.categoryNetwork, 'category', periods, 'dt_pct');
+    const category_by_period_hrs = pivotMetricRows(results.categoryNetwork, 'category', periods, 'dt_hours');
+    const line_by_period = pivotMetricRows(results.lineNetwork, 'line', periods, 'dt_pct');
+    const line_by_period_hrs = pivotMetricRows(results.lineNetwork, 'line', periods, 'dt_hours');
+    const top_lines = {};
+    const top_lines_hrs = {};
+    for (const row of results.topLines) {
+        const line = String(row.line || '').toUpperCase();
+        if (line) {
+            top_lines[line] = +Number(row.dt_pct || 0).toFixed(2);
+            top_lines_hrs[line] = +Number(row.dt_hours || 0).toFixed(2);
+        }
+    }
+    const weeks = sortPeriods(results.dow.map(r => String(r.week_label || '')).filter(Boolean));
+    const dowWeeks = weeks.length ? weeks : WEEKS;
+    const dow_by_day_week = {};
+    const dow_by_day_week_hrs = {};
+    for (const row of results.dow) {
+        const day = String(row.day_name || '');
+        const week = String(row.week_label || '');
+        const pct = Number(row.dt_pct ?? 0);
+        const hrs = Number(row.dt_hours ?? 0);
+        if (!day || !week)
+            continue;
+        if (!dow_by_day_week[day])
+            dow_by_day_week[day] = {};
+        if (!dow_by_day_week_hrs[day])
+            dow_by_day_week_hrs[day] = {};
+        dow_by_day_week[day][week] = +pct.toFixed(2);
+        dow_by_day_week_hrs[day][week] = +hrs.toFixed(2);
+    }
+    const reasons = results.reasons.map(r => ({
+        reason: String(r.reason || 'Unknown'),
+        hours: +Number(r.hours || 0).toFixed(2),
+        pct: +Number(r.pct || 0).toFixed(2),
+    }));
+    const shift_comparison = results.shiftComparison.map(r => ({
+        shift: String(r.shift || 'Shift'),
+        hours: +Number(r.hours || 0).toFixed(2),
+    }));
+    const top_sites_trend = {};
+    const top_sites_trend_hrs = {};
+    const siteTotals = Object.entries(site_by_period_hrs)
+        .map(([site, vals]) => [site, vals.reduce((a, b) => a + b, 0)])
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
+    for (const [site] of siteTotals) {
+        top_sites_trend[site] = site_by_period[site];
+        top_sites_trend_hrs[site] = site_by_period_hrs[site];
+    }
+    const dow_by_shift = buildDowByShift(results.dowByShift, 'dt_pct');
+    const dow_by_shift_hrs = buildDowByShift(results.dowByShift, 'dt_hours');
+    const filter_options = buildFilterOptions(results.filterOptions);
+    if (!filter_options.sites.length) {
+        filter_options.sites = Object.keys(site_by_period).sort();
+        for (const site of filter_options.sites) {
+            if (!filter_options.site_regions[site])
+                filter_options.site_regions[site] = 'Unknown';
+        }
+    }
+    if (!filter_options.years.length && filters.year) {
+        filter_options.years = [parseInt(filters.year, 10)];
+    }
+    const yearNum = filters.year ? parseInt(filters.year, 10) : (filter_options.years[0] || 2026);
+    const m = {
+        meta: {
+            year: yearNum,
+            period: periods[periods.length - 1] || 'P09',
+            week: dowWeeks[dowWeeks.length - 1] || '',
+            source: 'sql',
+            filters: Object.fromEntries(Object.entries(filters).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])),
+        },
+        periods,
+        weeks: dowWeeks,
+        kpis,
+        site_kpis,
+        tab_insights: {},
+        filter_options,
+        site_by_period,
+        site_by_period_hrs,
+        category_by_period,
+        category_by_period_hrs,
+        line_by_period,
+        line_by_period_hrs,
+        site_category_by_period,
+        site_category_by_period_hrs,
+        site_line_by_period,
+        site_line_by_period_hrs,
+        period_trend,
+        period_trend_hrs,
+        reasons,
+        dow_by_day_week,
+        dow_by_day_week_hrs,
+        dow_by_shift,
+        dow_by_shift_hrs,
+        top_lines,
+        top_lines_hrs,
+        top_sites_trend,
+        top_sites_trend_hrs,
+        shift_comparison,
+    };
+    m.tab_insights = buildTabInsights(m);
+    return m;
+}
+export { transformDashboard, synthesizeFromTrend };
