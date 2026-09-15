@@ -11,7 +11,11 @@ Two maintained branches serve different architectures. **Neither replaces the ot
 
 ## Flask legacy (`cursor/flask-legacy-e63a`) — you are here
 
-**Purpose:** Preserve the initial uploaded Flask app with zero regression.
+**Purpose:** Preserve the initial Flask dashboard with the same UI, routes, and JSON responses.
+
+**AI backend (updated):** Claude Opus 4.6 via Databricks Model Serving (default).  
+Warehouse SQL supplies live numbers; Opus generates insights using the same prompts/schema.  
+Set `AI_PROVIDER=supervisor` to restore the original Supervisor Agent → Genie path.
 
 | Feature | Status |
 |---------|--------|
