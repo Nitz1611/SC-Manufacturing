@@ -2,8 +2,8 @@
 
 Unplanned downtime (DT %) analytics dashboard for PepsiCo manufacturing operations.
 
-> **This branch (`cursor/flask-react-parity-e63a`)** runs the **exact same React UI and Node API** as the React branch, with a **Python Flask entry point** (`python app.py`).  
-> Live data, filters, MEASURE() KPIs, heatmaps, and Claude summaries are identical — same `client/dist`, same `server/dist`, same SQL files.
+> **This branch (`cursor/flask-react-parity-e63a`)** runs the **exact same React UI** as the React branch with a **pure Python + Flask API** (`python app.py`).  
+> Live data, filters, MEASURE() KPIs, heatmaps, and Claude summaries are ported to `py_server/` — **no Node runtime required** at deploy time.
 
 See [docs/VERSIONS.md](docs/VERSIONS.md) for branch comparison.
 
@@ -11,11 +11,14 @@ See [docs/VERSIONS.md](docs/VERSIONS.md) for branch comparison.
 
 ```
 SC-Manufacturing/
-├── app.py                  # Flask entry (serves React UI + proxies to Node API)
+├── app.py                  # Flask entry (React UI + Python API)
 ├── app.yaml                # Databricks App config (python app.py)
-├── requirements.txt        # Python deps for Flask entry
+├── requirements.txt        # Python deps (Flask, requests, python-dotenv)
+├── py_server/              # Python API (ported from server/)
+│   ├── lib/                # analytics, metrics transform, Claude summaries
+│   └── routes/             # Flask blueprints (/api/*)
 ├── client/                 # React UI → built to client/dist
-├── server/                 # Node.js API → built to server/dist
+├── server/                 # Node.js API (dev reference; not required at runtime)
 ├── config/queries/         # Named SQL queries (*.obo.sql)
 ├── shared/types/           # Shared TypeScript types
 └── docs/ARCHITECTURE.md    # Architecture reference
@@ -23,14 +26,14 @@ SC-Manufacturing/
 
 ## Prerequisites
 
-- **Node.js LTS** (includes npm) — build step only
-- **Python 3.10+** with pip — runtime entry point
+- **Python 3.10+** with pip — runtime (Databricks App target)
+- **Node.js LTS** (includes npm) — build React UI only (`client/dist`)
 
-## Run locally (Flask parity mode)
+## Run locally (Python + Flask)
 
 ```powershell
 npm install
-npm run build
+npm run build --workspace=client   # or: npm run build (includes server for dev)
 pip install -r requirements.txt
 python app.py
 ```
@@ -38,9 +41,16 @@ python app.py
 | Service | URL |
 |---------|-----|
 | Manufacturing Console UI | http://localhost:8000 |
-| API (via Node engine) | http://localhost:8000/api/status |
+| API (Python Flask) | http://localhost:8000/api/status |
 
-Alternative — Node-only dev (same output):
+Deploy bundle (Python, no Node at runtime):
+
+```powershell
+npm run build:deploy:python
+npm run test:deploy:python
+```
+
+Alternative — Node-only dev (same React UI, Node API for comparison):
 
 ```powershell
 npm run dev

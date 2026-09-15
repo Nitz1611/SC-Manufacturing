@@ -9,7 +9,9 @@
     "dev:client": "npm run dev --workspace=client",
     "build": "npm run build --workspace=client && npm run build --workspace=server",
     "build:deploy": "npm run build && bash scripts/build-deploy-bundle.sh",
+    "build:deploy:python": "bash scripts/build-python-deploy-bundle.sh",
     "test:deploy": "bash scripts/test-databricks-build.sh",
+    "test:deploy:python": "bash scripts/test-python-deploy.sh",
     "start": "npm run start --workspace=server"
   },
   "workspaces": [
