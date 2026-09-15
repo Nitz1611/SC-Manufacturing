@@ -81,7 +81,7 @@ async function fetchWithOptionalProxy(url: string, init: RequestInit = {}): Prom
   try {
     const { fetch: undiciFetch, ProxyAgent } = await import('undici');
     const dispatcher = new ProxyAgent(proxy);
-    return undiciFetch(url, { ...init, dispatcher });
+    return undiciFetch(url, { ...(init as Record<string, unknown>), dispatcher } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('Cannot find package') || msg.includes('ERR_MODULE_NOT_FOUND')) {

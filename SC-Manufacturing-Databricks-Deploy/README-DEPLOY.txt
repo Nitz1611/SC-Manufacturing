@@ -49,14 +49,33 @@ RECOMMENDED options (in order):
 
   C) Workspace UI zip import — only if CLI is blocked; re-import failed files via CLI
 
-STEP 2 — INSTALL DEPENDENCIES
------------------------------
+STEP 2 — TEST LOCALLY (same steps Databricks runs)
+-------------------------------------------------
+From the repo root (development machine):
+
+  npm run build:deploy    # build source + refresh this deploy folder
+  npm run test:deploy     # npm install → npm run build → npm start smoke test
+
+Windows PowerShell:
+
+  npm run build
+  .\scripts\build-deploy-bundle.ps1
+  cd SC-Manufacturing-Databricks-Deploy
+  npm install
+  npm run build
+  npm start
+
+If test:deploy passes locally, upload THIS folder to Databricks — do not upload the full repo root
+(unless you include client/src and fix all TypeScript build deps).
+
+STEP 3 — INSTALL DEPENDENCIES IN DATABRICKS
+-------------------------------------------
 In a Databricks notebook terminal or shell on the copied folder:
 
   chmod +x setup.sh
   ./setup.sh
 
-STEP 3 — CONFIGURE ENVIRONMENT
+STEP 4 — CONFIGURE ENVIRONMENT
 ------------------------------
 Set these in Databricks App → Environment variables (or copy .env.example to .env for testing only):
 
@@ -71,14 +90,14 @@ Optional AI summaries:
   SUMMARY_PROVIDER=claude
   CLAUDE_SERVING_ENDPOINT=databricks-claude-opus-4-6
 
-STEP 4 — DEPLOY AS DATABRICKS APP
+STEP 5 — DEPLOY AS DATABRICKS APP
 ---------------------------------
   1. Compute → Apps → Create app
   2. Source: /Workspace/Users/<you>/SC-Manufacturing
   3. Command: npm start  (or use app.yaml)
   4. Deploy → open App URL
 
-STEP 5 — VERIFY
+STEP 6 — VERIFY
 ---------------
   Open: https://<app-url>/api/status
   Expect: "sql_ok": true
@@ -107,10 +126,10 @@ TROUBLESHOOTING
 CRITICAL FILES (must all exist after upload)
 --------------------------------------------
   package.json
-  server/dist/server.js
-  server/dist/lib/config.js
-  server/dist/lib/env.js
-  server/dist/lib/databricksSql.js
+  server/dist/server/server.js
+  server/dist/server/lib/config.js
+  server/dist/server/lib/env.js
+  server/dist/server/lib/databricksSql.js
   config/queries/dashboard_dt_kpis.obo.sql
   config/queries/dashboard_filter_options.obo.sql
   client/dist/index.html

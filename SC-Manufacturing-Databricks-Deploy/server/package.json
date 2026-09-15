@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch server.ts",
     "build": "node -e \"console.log('Pre-built server/dist included — skipping tsc')\"",
-    "start": "node dist/server.js"
+    "start": "node dist/server/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

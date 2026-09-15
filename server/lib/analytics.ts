@@ -187,7 +187,7 @@ export function warmMemoryCacheFromDisk(): number {
       };
       const key = coarseCacheKey(norm);
       if (!memoryCache.has(key)) {
-        memoryCache.set(key, { data: entry.data as MetricsPayload, ts: entry.ts });
+        memoryCache.set(key, { data: entry.data as unknown as MetricsPayload, ts: entry.ts });
         loaded++;
       }
     } catch {

@@ -49,10 +49,26 @@ export function normalizePeriodTrendPct(values, anchor, targetLen = 10) {
 function transformDashboard(dashboard) {
     const kpisRaw = (dashboard.kpis || {});
     const kpis = {
-        downtime_pct: kpisRaw.downtime_pct || { value: '6.2%', delta: '', direction: 'warn' },
-        downtime_hrs: kpisRaw.downtime_hrs || { value: '', delta: '', direction: 'warn' },
-        stops: kpisRaw.stops || { value: '', delta: '', direction: 'warn' },
-        oee: kpisRaw.oee || { value: 'N/A', delta: '', direction: 'warn' },
+        downtime_pct: {
+            value: kpisRaw.downtime_pct?.value ?? '6.2%',
+            delta: kpisRaw.downtime_pct?.delta ?? '',
+            direction: kpisRaw.downtime_pct?.direction ?? 'warn',
+        },
+        downtime_hrs: {
+            value: kpisRaw.downtime_hrs?.value ?? '',
+            delta: kpisRaw.downtime_hrs?.delta ?? '',
+            direction: kpisRaw.downtime_hrs?.direction ?? 'warn',
+        },
+        stops: {
+            value: kpisRaw.stops?.value ?? '',
+            delta: kpisRaw.stops?.delta ?? '',
+            direction: kpisRaw.stops?.direction ?? 'warn',
+        },
+        oee: {
+            value: kpisRaw.oee?.value ?? 'N/A',
+            delta: kpisRaw.oee?.delta ?? '',
+            direction: kpisRaw.oee?.direction ?? 'warn',
+        },
     };
     const dtTrend = (dashboard.downtime_trend || {});
     const anchor = parsePct(kpis.downtime_pct.value);
@@ -311,17 +327,17 @@ function deriveKpisFromSitePeriods(metrics, siteKey) {
         downtime_pct: {
             value: `${dtPct.toFixed(2)}%`,
             delta: base.downtime_pct?.delta || 'vs prior period',
-            direction: dtPct === 0 ? 'neutral' : dtPct >= benchmark * 1.05 ? 'bad' : 'good',
+            direction: dtPct === 0 ? 'warn' : dtPct >= benchmark * 1.05 ? 'bad' : 'good',
         },
         downtime_hrs: {
             value: `${Math.round(dtHrs).toLocaleString()} h`,
             delta: base.downtime_hrs?.delta || '',
-            direction: dtHrs === 0 ? 'neutral' : (base.downtime_hrs?.direction || 'warn'),
+            direction: dtHrs === 0 ? 'warn' : (base.downtime_hrs?.direction || 'warn'),
         },
         stops: {
             value: String(stops || 0),
             delta: base.stops?.delta || '',
-            direction: stops === 0 ? 'neutral' : (base.stops?.direction || 'warn'),
+            direction: stops === 0 ? 'warn' : (base.stops?.direction || 'warn'),
         },
         oee: base.oee || { value: 'N/A', delta: 'Not in metric view', direction: 'warn' },
     };
