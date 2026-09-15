@@ -1,0 +1,5 @@
+SC Manufacturing Console — Databricks deploy bundle
+Version: 2026-09-15-v2
+Build: no root npm run build (pre-built dist only)
+Verify: open package.json — there must be NO "build" script at the root.
+Required: server/dist/server/server.js must exist after upload.
