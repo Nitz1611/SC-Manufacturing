@@ -23,19 +23,53 @@ else:
     print("[app] Using MAS Supervisor mode")
     from supervisor import get_dashboard, ask_question, get_rca
 try:
-    from views import get_all_view_data, validate_views
+    from views import get_all_view_data, validate_views, views_configured
     VIEWS_AVAILABLE = True
-    # Validate views on startup if HTTP_PATH is set
-    import os as _os
-    if _os.getenv("DATABRICKS_HTTP_PATH","").strip():
-        import threading
+    if views_configured():
         threading.Thread(target=validate_views, daemon=True).start()
 except Exception as _ve:
     print(f"[views] import failed: {_ve}")
     VIEWS_AVAILABLE = False
     def get_all_view_data(filters): return {}
     def validate_views(): return {}
+    def views_configured(): return False
 import cache as cache_store
+
+
+def _supervisor_configured() -> bool:
+    return bool(
+        os.getenv("DATABRICKS_SERVER_HOSTNAME") or os.getenv("DATABRICKS_HOST")
+    ) and bool(os.getenv("DATABRICKS_PAT_TOKEN")) and bool(os.getenv("SUPERVISOR_ENDPOINT_NAME"))
+
+
+def _load_dashboard_data(filters: dict) -> dict:
+    """Supervisor first; fall back to direct SQL views when configured."""
+    errors = []
+    if _supervisor_configured():
+        try:
+            return get_dashboard(filters)
+        except Exception as e:
+            errors.append(f"Supervisor: {e}")
+            print(f"[dashboard] Supervisor failed: {e}")
+    elif os.getenv("USE_CLAUDE_DIRECT", "false").lower() != "true":
+        errors.append(
+            "Supervisor not configured — set SUPERVISOR_ENDPOINT_NAME in .env "
+            "(or USE_CLAUDE_DIRECT=true, or configure DATABRICKS_WAREHOUSE_ID for SQL fallback)"
+        )
+
+    if VIEWS_AVAILABLE and views_configured():
+        try:
+            data = get_all_view_data(filters)
+            if data:
+                data["_source"] = "views"
+                return data
+        except Exception as e:
+            errors.append(f"Views: {e}")
+            print(f"[dashboard] Views fallback failed: {e}")
+
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    raise RuntimeError("No data source configured — check sravani-console/.env.example")
 
 PORT    = int(os.getenv("DATABRICKS_APP_PORT", 8000))
 PREWARM = os.getenv("GENIE_INSIGHTS_ON_STARTUP", "true").lower() == "true"
@@ -109,11 +143,12 @@ def _cleanup_old_jobs():
 # ── Background worker ─────────────────────────────────────────────
 def _run_dashboard_job(jid: str, filters: dict, cache_key: str):
     try:
-        print(f"[job {jid[:8]}] Starting Supervisor call…")
-        data = get_dashboard(filters)
+        print(f"[job {jid[:8]}] Loading dashboard data…")
+        data = _load_dashboard_data(filters)
         cache_store.set(cache_key, data)
         _finish_job(jid, data)
-        print(f"[job {jid[:8]}] Done — {len(data.get('key_insights',[]))} insights")
+        src = data.get("_source", "supervisor")
+        print(f"[job {jid[:8]}] Done ({src}) — {len(data.get('key_insights',[]))} insights")
     except Exception as e:
         _fail_job(jid, str(e))
         print(f"[job {jid[:8]}] Failed: {e}")
@@ -134,6 +169,8 @@ def status():
     return jsonify({
         "ok":          True,
         "supervisor":  os.getenv("SUPERVISOR_ENDPOINT_NAME",   "NOT SET"),
+        "supervisor_ok": _supervisor_configured(),
+        "views_ok":    VIEWS_AVAILABLE and views_configured(),
         "hostname":    os.getenv("DATABRICKS_SERVER_HOSTNAME", "NOT SET"),
         "pat_set":     bool(os.getenv("DATABRICKS_PAT_TOKEN")),
         "port":        PORT,
@@ -172,9 +209,8 @@ def load_status():
 @app.route("/api/views", methods=["POST"])
 def views_data():
     """Direct from Databricks views — fast, no Genie needed."""
-    import os
-    if not VIEWS_AVAILABLE or not os.getenv("DATABRICKS_HTTP_PATH","").strip():
-        print("[views] Warehouse ID not set or views unavailable — skipping direct queries")
+    if not VIEWS_AVAILABLE or not views_configured():
+        print("[views] SQL warehouse not configured — skipping direct queries")
         return jsonify({"status":"ok","data":{},"from_cache":False,"skipped":True})
     filters = request.get_json(silent=True) or {}
     cache_key = "views_" + json.dumps(filters, sort_keys=True)
@@ -195,8 +231,7 @@ def views_data():
 @app.route("/api/filters", methods=["GET"])
 def get_filters():
     """Get distinct filter values directly from views — no Genie needed."""
-    import os
-    if not VIEWS_AVAILABLE or not os.getenv("DATABRICKS_HTTP_PATH","").strip():
+    if not VIEWS_AVAILABLE or not views_configured():
         # Return empty — browser will use defaults
         return jsonify({"status":"ok","data":{"sites":[],"regions":[],"markets":[],"years":[]}})
     try:
@@ -366,6 +401,7 @@ if __name__ == "__main__":
     print(f"║  Supervisor : {os.getenv('SUPERVISOR_ENDPOINT_NAME','NOT SET'):<38}║")
     print(f"║  Hostname   : {os.getenv('DATABRICKS_SERVER_HOSTNAME','NOT SET'):<38}║")
     print(f"║  PAT        : {'SET ✓' if os.getenv('DATABRICKS_PAT_TOKEN') else 'NOT SET ⚠':<38}║")
+    print(f"║  SQL views  : {'READY ✓' if VIEWS_AVAILABLE and views_configured() else 'NOT SET ⚠':<38}║")
     print(f"║  Mode       : {os.getenv('SUPERVISOR_QUERY_MODE','minimal'):<38}║")
     print(f"║  Cache TTL  : {os.getenv('INSIGHTS_REFRESH_INTERVAL_HOURS','24')+'h':<38}║")
     print("╚══════════════════════════════════════════════════════╝")

@@ -792,7 +792,13 @@ async function pollJob(jid){
     clearInterval(_poll);_poll=null;
     if(j.status==='done'){
       lsDone(2);lsDone(3);lsDone(4);
-      setTimeout(()=>{hideLoader();if(j.result){renderDashboard(j.result);setPill('live','Fresh from Genie');}},300);
+      setTimeout(()=>{
+        hideLoader();
+        if(j.result){
+          renderDashboard(j.result);
+          setPill(j.result._source==='views'?'cached':'live', j.result._source==='views'?'From SQL views':'Fresh from Genie');
+        }
+      },300);
     }
     if(j.status==='error'){hideLoader();showErr(j.error||'Error');}
     if(j.status==='not_found'){hideLoader();showErr('Job not found — refresh page.');}

@@ -19,9 +19,10 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Copy env from parent repo or Databricks secrets
-cp ../.env.example .env
-# Edit .env with DATABRICKS_* credentials
+# Copy env template and fill in Databricks credentials
+cp .env.example .env
+# Required for AI insights: SUPERVISOR_ENDPOINT_NAME
+# Required for KPI tiles (without Supervisor): DATABRICKS_WAREHOUSE_ID
 
 python app.py
 # Open http://localhost:8000

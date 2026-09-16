@@ -640,7 +640,11 @@ QUESTIONS = {
     '{"text":"[exact WST_TYP] [X]% ([X,XXX]lbs) from [SECRY_AREA] - [diagnostic meaning]","pct":0},'
     '{"text":"[2nd WST_TYP] [X]% ([X,XXX]lbs) - [context]","pct":0},'
     '{"text":"Processing [X]% vs Packaging [X]% - [which area needs focus]","pct":0}],'
-    '"insight":"WHY: [WST_TYP] is X% of waste lbs from [SECRY_AREA] — caused by [over-fill/breakage/rework on specific equipment]. Processing (X%) vs Packaging (X%) indicates upstream process issue. WHEN: [Shift X] generates X% more waste than [Shift Y] — consistent for X weeks. HOW TO FIX: adjust [specific parameter] on [equipment/line] in [SECRY_AREA] — targeting [WST_TYP] alone recovers X.Xpp and saves $X,XXX/month."',
+    '"insight":"WHY: [WST_TYP] is X% of waste lbs from [SECRY_AREA] — caused by [over-fill/breakage/rework on specific equipment]. Processing (X%) vs Packaging (X%) indicates upstream process issue. WHEN: [Shift X] generates X% more waste than [Shift Y] — consistent for X weeks. HOW TO FIX: adjust [specific parameter] on [equipment/line] in [SECRY_AREA] — targeting [WST_TYP] alone recovers X.Xpp and saves $X,XXX/month."}'
+  ),
+
+  "waste_trend": (
+    "pgt_waste_pct_composite_metric_view",
     "ONE QUERY ONLY from pgt_waste_pct_composite_metric_view. "
     "Group by week using STRT_DT. Calculate Waste_Pct = WST_LBS divided by sum of PRODC_LBS and WST_LBS per week. "
     "Get last 6 weeks ordered ascending. Label W1 oldest to W6 newest. "

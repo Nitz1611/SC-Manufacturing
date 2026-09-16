@@ -10,13 +10,18 @@ import os, requests, concurrent.futures
 from dotenv import load_dotenv
 load_dotenv()
 
-HOSTNAME     = os.getenv("DATABRICKS_SERVER_HOSTNAME","").replace("https://","").rstrip("/")
+HOSTNAME     = (os.getenv("DATABRICKS_SERVER_HOSTNAME") or os.getenv("DATABRICKS_HOST") or "").replace("https://","").replace("http://","").rstrip("/")
 PAT          = os.getenv("DATABRICKS_PAT_TOKEN","")
 HTTP_PATH    = os.getenv("DATABRICKS_HTTP_PATH","")
 CATALOG      = os.getenv("DATABRICKS_CATALOG","")
 SCHEMA       = os.getenv("DATABRICKS_SCHEMA","")
-WAREHOUSE_ID = HTTP_PATH.split("/warehouses/")[-1].strip("/") if "/warehouses/" in HTTP_PATH else HTTP_PATH.split("/")[-1]
+WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID","").strip()
+if not WAREHOUSE_ID and HTTP_PATH:
+    WAREHOUSE_ID = HTTP_PATH.split("/warehouses/")[-1].strip("/") if "/warehouses/" in HTTP_PATH else HTTP_PATH.split("/")[-1].strip("/")
 SQL_URL      = f"https://{HOSTNAME}/api/2.0/sql/statements"
+
+def views_configured() -> bool:
+    return bool(HOSTNAME and PAT and WAREHOUSE_ID)
 
 def _qualified(view):
     if CATALOG and SCHEMA: return f"{CATALOG}.{SCHEMA}.{view}"
