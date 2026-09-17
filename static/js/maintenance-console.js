@@ -37,7 +37,15 @@
     custom: 'Prior Range',
   };
 
-  var BAR_COLORS = ['#2563eb', '#ec4899', '#38bdf8', '#10b981', '#f59e0b', '#8b5cf6'];
+  var BAR_COLORS = ['#7c3aed', '#2563eb', '#ec4899', '#f59e0b', '#14b8a6', '#8b5cf6'];
+  var REPORT_BAR_GRADIENTS = [
+    ['#7c3aed', '#a78bfa'],
+    ['#2563eb', '#60a5fa'],
+    ['#db2777', '#f472b6'],
+    ['#ea580c', '#fb923c'],
+    ['#0d9488', '#2dd4bf'],
+  ];
+  var DT_TARGET = 4.5;
   var SCATTER_COLORS = { outlier: '#dc2626', normal: '#eab308' };
   var REGION_OPTIONS = [
     'North America',
@@ -830,15 +838,135 @@
     if (!overlay) return;
     state.reportTab = 'snapshot';
     overlay.classList.add('open');
+    document.body.classList.add('maint-report-open');
     renderReportModal();
   }
 
   function closeMyReport() {
     var overlay = $('#maint-report-modal');
     if (overlay) overlay.classList.remove('open');
+    document.body.classList.remove('maint-report-open');
     Object.keys(state.charts).forEach(function (k) {
       if (k.indexOf('report-') === 0) destroyChart(k);
     });
+  }
+
+  function reportStatCard(label, value, iconSvg) {
+    return (
+      '<div class="maint-stat-card">' +
+      '<div class="maint-stat-card-content">' +
+      '<label>' +
+      esc(label) +
+      '</label>' +
+      '<strong>' +
+      esc(value) +
+      '</strong></div>' +
+      '<div class="maint-stat-icon" aria-hidden="true">' +
+      iconSvg +
+      '</div></div>'
+    );
+  }
+
+  var REPORT_ICONS = {
+    schedule:
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    downtime:
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18h16M6 14l3-6 3 4 3-7 3 9"/><circle cx="18" cy="6" r="2"/></svg>',
+    percent:
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M9 15l6-6"/></svg>',
+  };
+
+  function modernChartBase() {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 750, easing: 'easeOutQuart' },
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a2b4a', padding: 10, cornerRadius: 8 } },
+    };
+  }
+
+  function barGradient(ctx, area, colors) {
+    var g = ctx.createLinearGradient(area.left, 0, area.right, 0);
+    g.addColorStop(0, colors[0]);
+    g.addColorStop(1, colors[1]);
+    return g;
+  }
+
+  function targetLinePlugin(target, label) {
+    return {
+      id: 'targetLine-' + target,
+      afterDraw: function (chart) {
+        var xScale = chart.scales.x;
+        var yScale = chart.scales.y;
+        if (!xScale || !yScale) return;
+        var x = xScale.getPixelForValue(target);
+        var ctx = chart.ctx;
+        ctx.save();
+        ctx.strokeStyle = '#16a34a';
+        ctx.setLineDash([5, 4]);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, yScale.top + 4);
+        ctx.lineTo(x, yScale.bottom - 4);
+        ctx.stroke();
+        ctx.fillStyle = '#16a34a';
+        ctx.font = '600 10px Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(label || 'FLNA Target: ' + target.toFixed(2) + '%', x + 6, yScale.top + 16);
+        ctx.restore();
+      },
+    };
+  }
+
+  function hbarValueLabelsPlugin(rows, formatter) {
+    return {
+      id: 'hbarValueLabels',
+      afterDatasetsDraw: function (chart) {
+        var ctx = chart.ctx;
+        var meta = chart.getDatasetMeta(0);
+        if (!meta || !meta.data) return;
+        meta.data.forEach(function (bar, index) {
+          var row = rows[index];
+          if (!row) return;
+          var text = formatter(row);
+          var x = Math.min(bar.x - 8, chart.chartArea.right - 8);
+          ctx.save();
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '600 11px Inter, sans-serif';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          ctx.shadowColor = 'rgba(0,0,0,0.25)';
+          ctx.shadowBlur = 4;
+          ctx.fillText(text, x, bar.y);
+          ctx.restore();
+        });
+      },
+    };
+  }
+
+  function donutCenterPlugin(mainText, subText) {
+    return {
+      id: 'donutCenterText',
+      afterDraw: function (chart) {
+        var area = chart.chartArea;
+        if (!area) return;
+        var ctx = chart.ctx;
+        var x = (area.left + area.right) / 2;
+        var y = (area.top + area.bottom) / 2;
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#1a2b4a';
+        ctx.font = '800 26px Inter, sans-serif';
+        ctx.fillText(mainText, x, y - 6);
+        if (subText) {
+          ctx.fillStyle = '#64748b';
+          ctx.font = '600 11px Inter, sans-serif';
+          ctx.fillText(subText, x, y + 16);
+        }
+        ctx.restore();
+      },
+    };
   }
 
   function renderReportModal() {
@@ -894,29 +1022,37 @@
   function renderReportSnapshot(kpi, p) {
     var dtHrs = (kpi && kpi.downtime_hours && kpi.downtime_hours.display) || '—';
     var sched = (kpi && kpi.scheduled_hours && kpi.scheduled_hours.display) || '—';
-    var pct =
-      kpi && kpi.scheduled_hours && kpi.downtime_hours
-        ? ((kpi.downtime_hours.value / Math.max(kpi.scheduled_hours.estimate, 1)) * 100).toFixed(2) + '%'
-        : fmtPct(kpi ? kpi.value : 0);
+    var pctVal = kpi ? kpi.value : 0;
+    var pct = fmtPct(pctVal);
+    var target = kpi ? kpi.target : DT_TARGET;
+    var delta = kpi ? Math.abs(kpi.delta_vs_target).toFixed(2) : '0.00';
+    var deltaArrow = kpi && kpi.delta_vs_target > 0 ? '▲' : '▼';
+    var stops = (kpi && kpi.stops && kpi.stops.display) || '—';
 
     return (
-      '<h4 style="margin:0 0 16px;font-size:14px;color:var(--navy)">Total Unplanned Downtime %</h4>' +
+      '<div class="maint-report-section-head">' +
+      '<h4>Total Unplanned Downtime %</h4>' +
+      '<select class="maint-report-metric-select" aria-label="Metric selector">' +
+      '<option>Total DT %</option></select></div>' +
       '<div class="maint-snapshot-grid">' +
-      '<div class="maint-bar-section">' +
+      '<div class="maint-report-donut-card">' +
       '<div class="maint-donut-wrap"><canvas id="report-donut"></canvas></div>' +
-      '<div style="text-align:center;font-size:11px;color:var(--text-muted)">Target <strong>' +
-      fmtPct(kpi ? kpi.target : 4.5) +
-      '</strong></div></div>' +
-      '<div class="maint-stat-stack">' +
-      '<div class="maint-stat-card"><span>Schedule Hours</span><strong>' +
-      esc(sched) +
-      '</strong></div>' +
-      '<div class="maint-stat-card"><span>Unplanned Downtime Hours</span><strong>' +
-      esc(dtHrs) +
-      '</strong></div>' +
-      '<div class="maint-stat-card"><span>Percentage Downtime</span><strong>' +
-      esc(pct) +
+      '<div class="maint-donut-meta">' +
+      '<div class="maint-donut-meta-item">Target <strong>' +
+      fmtPct(target) +
+      '</strong> <span class="bad">' +
+      delta +
+      'pp ' +
+      deltaArrow +
+      '</span></div>' +
+      '<div class="maint-donut-meta-item bad">Total Stops <strong>' +
+      esc(stops) +
       '</strong></div></div></div>' +
+      '<div class="maint-stat-stack">' +
+      reportStatCard('Schedule Hours', sched.replace(' h', ''), REPORT_ICONS.schedule) +
+      reportStatCard('Unplanned Downtime Hours', dtHrs.replace(' h', ''), REPORT_ICONS.downtime) +
+      reportStatCard('Percentage Downtime', pct, REPORT_ICONS.percent) +
+      '</div></div>' +
       '<div class="maint-bar-section"><h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
       '<div class="maint-hbar-chart"><canvas id="report-sites-bar"></canvas></div></div>'
     );
@@ -942,10 +1078,10 @@
       })
       .join('');
     return (
-      '<h4 style="margin:0 0 16px">Total Unplanned Downtime %</h4>' +
-      '<div class="maint-bar-section"><div class="maint-snapshot-grid">' +
+      '<div class="maint-report-section-head"><h4>Total Unplanned Downtime %</h4></div>' +
+      '<div class="maint-bar-section"><div class="maint-drivers-layout">' +
       '<div class="maint-donut-wrap"><canvas id="report-drivers-donut"></canvas></div>' +
-      '<div id="report-drivers-legend" style="font-size:12px;line-height:1.8"></div></div></div>' +
+      '<div class="maint-drivers-legend" id="report-drivers-legend"></div></div></div>' +
       '<div class="maint-insights-panel"><h4>AI Insight</h4><ul>' +
       bullets +
       '</ul></div>'
@@ -962,33 +1098,23 @@
       type: 'doughnut',
       data: {
         labels: ['Unplanned DT', 'Available'],
-        datasets: [{ data: [val, rest], backgroundColor: ['#dc2626', '#e5e7eb'], borderWidth: 0 }],
-      },
-      options: {
-        cutout: '68%',
-        plugins: {
-          legend: { display: false },
-          tooltip: { enabled: false },
-        },
-      },
-      plugins: [
-        {
-          id: 'centerText',
-          afterDraw: function (chart) {
-            var ctx = chart.ctx;
-            var area = chart.chartArea;
-            if (!area) return;
-            var x = (area.left + area.right) / 2;
-            var y = (area.top + area.bottom) / 2;
-            ctx.save();
-            ctx.textAlign = 'center';
-            ctx.fillStyle = '#1a2b4a';
-            ctx.font = '700 22px Inter, sans-serif';
-            ctx.fillText(val.toFixed(1) + '%', x, y);
-            ctx.restore();
+        datasets: [
+          {
+            data: [val, rest],
+            backgroundColor: ['#dc2626', '#eef2f7'],
+            borderWidth: 0,
+            spacing: 2,
+            borderRadius: 6,
+            hoverOffset: 6,
           },
-        },
-      ],
+        ],
+      },
+      options: Object.assign({}, modernChartBase(), {
+        cutout: '72%',
+        layout: { padding: 6 },
+        plugins: Object.assign({}, modernChartBase().plugins, { tooltip: { enabled: false } }),
+      }),
+      plugins: [donutCenterPlugin(val.toFixed(1) + '%', 'Unplanned DT')],
     });
   }
 
@@ -996,37 +1122,63 @@
     destroyChart(id);
     var canvas = document.getElementById(id);
     if (!canvas || typeof Chart === 'undefined' || !sites || !sites.length) return;
+    var rows = sites.slice(0, 5);
+    var ctx = canvas.getContext('2d');
+    var bg = rows.map(function (_, i) {
+      var pair = REPORT_BAR_GRADIENTS[i % REPORT_BAR_GRADIENTS.length];
+      return function (context) {
+        var chart = context.chart;
+        var area = chart.chartArea;
+        if (!area) return pair[0];
+        return barGradient(chart.ctx, area, pair);
+      };
+    });
     state.charts[id] = new Chart(canvas, {
       type: 'bar',
       data: {
-        labels: sites.map(function (s) {
+        labels: rows.map(function (s) {
           return s.site;
         }),
         datasets: [
           {
-            data: sites.map(function (s) {
+            data: rows.map(function (s) {
               return s.dt_pct;
             }),
-            backgroundColor: BAR_COLORS,
-            borderRadius: 4,
+            backgroundColor: bg,
+            borderRadius: { topRight: 8, bottomRight: 8 },
+            borderSkipped: false,
+            barThickness: 28,
           },
         ],
       },
-      options: {
+      options: Object.assign({}, modernChartBase(), {
         indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          annotation: false,
-        },
         scales: {
           x: {
-            max: 40,
-            title: { display: true, text: 'Unplanned Downtime Rate (%)' },
+            max: Math.max(35, Math.max.apply(null, rows.map(function (s) { return s.dt_pct; })) + 5),
+            grid: { color: 'rgba(0,40,85,0.06)', drawBorder: false },
+            ticks: { font: { size: 11, weight: '500' }, color: '#64748b' },
+            title: { display: true, text: 'Unplanned Downtime Rate (%)', font: { size: 11, weight: '600' } },
+          },
+          y: {
+            grid: { display: false },
+            ticks: { font: { size: 12, weight: '700' }, color: '#1a2b4a' },
           },
         },
-      },
+      }),
+      plugins: [
+        targetLinePlugin(DT_TARGET, 'FLNA Target: ' + DT_TARGET.toFixed(2) + '%'),
+        hbarValueLabelsPlugin(rows, function (row) {
+          return (
+            row.dt_pct.toFixed(2) +
+            '% (' +
+            fmtNum(row.hours) +
+            ' Unplanned DT Hrs / ' +
+            fmtNum(row.sched_hrs) +
+            ' Sched Hrs)'
+          );
+        }),
+      ],
     });
   }
 
@@ -1034,29 +1186,47 @@
     destroyChart(id);
     var canvas = document.getElementById(id);
     if (!canvas || typeof Chart === 'undefined' || !lines || !lines.length) return;
+    var rows = lines.slice(0, 5);
     state.charts[id] = new Chart(canvas, {
       type: 'bar',
       data: {
-        labels: lines.map(function (l) {
+        labels: rows.map(function (l) {
           return l.line;
         }),
         datasets: [
           {
-            data: lines.map(function (l) {
+            data: rows.map(function (l) {
               return l.dt_pct;
             }),
-            backgroundColor: ['#991b1b', '#dc2626', '#ea580c', '#f97316', '#fb923c'],
-            borderRadius: 4,
+            backgroundColor: function (context) {
+              var chart = context.chart;
+              var area = chart.chartArea;
+              if (!area) return '#dc2626';
+              return barGradient(chart.ctx, area, ['#991b1b', '#f87171']);
+            },
+            borderRadius: { topRight: 8, bottomRight: 8 },
+            borderSkipped: false,
+            barThickness: 26,
           },
         ],
       },
-      options: {
+      options: Object.assign({}, modernChartBase(), {
         indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { x: { max: 70, title: { display: true, text: 'Unplanned Downtime Rate (%)' } } },
-      },
+        scales: {
+          x: {
+            max: Math.max(70, Math.max.apply(null, rows.map(function (l) { return l.dt_pct; })) + 5),
+            grid: { color: 'rgba(0,40,85,0.06)', drawBorder: false },
+            ticks: { color: '#64748b' },
+            title: { display: true, text: 'Unplanned Downtime Rate (%)', font: { size: 11, weight: '600' } },
+          },
+          y: { grid: { display: false }, ticks: { font: { weight: '700' }, color: '#1a2b4a' } },
+        },
+      }),
+      plugins: [
+        hbarValueLabelsPlugin(rows, function (row) {
+          return row.dt_pct.toFixed(2) + '%';
+        }),
+      ],
     });
   }
 
@@ -1066,6 +1236,9 @@
     if (!canvas || typeof Chart === 'undefined') return;
     var entries = (drivers || []).slice(0, 6);
     if (!entries.length) return;
+    var colors = entries.map(function (_, i) {
+      return BAR_COLORS[i % BAR_COLORS.length];
+    });
     state.charts[id] = new Chart(canvas, {
       type: 'doughnut',
       data: {
@@ -1077,25 +1250,43 @@
             data: entries.map(function (d) {
               return d.pct;
             }),
-            backgroundColor: BAR_COLORS,
+            backgroundColor: colors,
             borderWidth: 0,
+            spacing: 3,
+            borderRadius: 5,
+            hoverOffset: 8,
           },
         ],
       },
-      options: { cutout: '55%', plugins: { legend: { display: false } } },
+      options: Object.assign({}, modernChartBase(), {
+        cutout: '62%',
+        layout: { padding: 8 },
+        plugins: Object.assign({}, modernChartBase().plugins, {
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                return ' ' + ctx.label + ': ' + ctx.parsed.toFixed(1) + '%';
+              },
+            },
+          },
+        }),
+      }),
     });
     var leg = $('#report-drivers-legend');
     if (leg) {
       leg.innerHTML = entries
         .map(function (d, i) {
           return (
-            '<div><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' +
-            BAR_COLORS[i % BAR_COLORS.length] +
-            ';margin-right:6px"></span>' +
+            '<div class="maint-drivers-legend-item">' +
+            '<span class="maint-drivers-legend-swatch" style="background:' +
+            colors[i] +
+            '"></span>' +
+            '<span>' +
             esc(d.reason) +
-            ': ' +
+            '</span>' +
+            '<span class="maint-drivers-legend-value">' +
             d.pct.toFixed(1) +
-            '%</div>'
+            '%</span></div>'
           );
         })
         .join('');
@@ -1358,9 +1549,11 @@
 
     $('#maint-report-close') &&
       $('#maint-report-close').addEventListener('click', closeMyReport);
+    $('#maint-report-backdrop') &&
+      $('#maint-report-backdrop').addEventListener('click', closeMyReport);
     $('#maint-report-modal') &&
       $('#maint-report-modal').addEventListener('click', function (e) {
-        if (e.target.id === 'maint-report-modal') closeMyReport();
+        if (e.target.id === 'maint-report-backdrop') closeMyReport();
       });
     $('#maint-drill-back') &&
       $('#maint-drill-back').addEventListener('click', closeDrillDown);

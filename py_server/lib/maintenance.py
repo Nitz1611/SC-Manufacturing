@@ -209,6 +209,10 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
             },
             "last_shift": shift_delta,
             "direction": dt.get("direction") or ("bad" if dt_pct > target else "good"),
+            "stops": {
+                "value": int(str((kpis.get("stops") or {}).get("value") or "0").replace(",", "") or 0),
+                "display": (kpis.get("stops") or {}).get("value") or "0",
+            },
         },
     }
 
