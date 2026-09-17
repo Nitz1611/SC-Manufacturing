@@ -29,7 +29,7 @@ def resolve_summary_provider() -> SummaryProvider:
 
 def summary_provider_label(provider: SummaryProvider) -> str:
     if provider == 'claude':
-        return 'claude-opus'
+        return 'claude-sonnet'
     if provider == 'supervisor':
         return 'supervisor-agent'
     return 'template-fallback'

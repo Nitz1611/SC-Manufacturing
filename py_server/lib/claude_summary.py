@@ -1,5 +1,5 @@
 """
-Claude Opus summaries via Databricks Model Serving.
+Claude summaries via Databricks Model Serving.
 Default AI path for tab narratives; Supervisor Agent is optional via SUMMARY_PROVIDER=supervisor.
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ def claude_endpoint() -> str:
     return (
         os.getenv('CLAUDE_SERVING_ENDPOINT')
         or os.getenv('DATABRICKS_CLAUDE_ENDPOINT')
-        or 'databricks-claude-opus-4-6'
+        or 'databricks-claude-sonnet-5'
     )
 
 

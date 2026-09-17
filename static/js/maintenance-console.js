@@ -39,6 +39,14 @@
 
   var BAR_COLORS = ['#2563eb', '#ec4899', '#38bdf8', '#10b981', '#f59e0b', '#8b5cf6'];
   var SCATTER_COLORS = { outlier: '#dc2626', normal: '#eab308' };
+  var REGION_OPTIONS = [
+    'North America',
+    'Latin America',
+    'Europe',
+    'Asia Pacific',
+    'Middle East & Africa',
+  ];
+  var SHIFT_OPTIONS = ['All', 'Shift 1', 'Shift 2', 'Shift 3'];
 
   /** Original console-engine navigators — captured before wrapper patch */
   var engineSwitchPage = null;
@@ -60,6 +68,7 @@
     },
     payload: null,
     loading: false,
+    insightsLoading: false,
     insightTab: 'ai-summary',
     reportTab: 'snapshot',
     charts: {},
@@ -130,10 +139,25 @@
   function syncToConsoleFilters() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
-    mc.state.filters.timeframe = state.filters.timeframe === 'ptd' ? 'ptd' : state.filters.timeframe;
+    var tf = state.filters.timeframe;
+    var consoleTf = tf;
+    if (tf === 'ptd' || tf === 'wtd' || tf === 'ytd') consoleTf = 'FY';
+    else if (tf === 'Quarter') consoleTf = 'Quarter';
+    else if (tf === 'Month') consoleTf = 'Month';
+    else if (tf === 'Week') consoleTf = 'Week';
+    else if (tf === 'FY') consoleTf = 'FY';
+    mc.state.filters.timeframe = consoleTf;
     mc.state.filters.year = state.filters.year;
     mc.state.filters.site = state.filters.site;
     mc.state.filters.region = normalizeRegionList(state.filters.region);
+    if (!mc.state.filters.showIn) mc.state.filters.showIn = 'Millions';
+  }
+
+  function reloadConsoleMetrics() {
+    var mc = window.ManufacturingConsole;
+    if (mc && typeof mc.reloadMetrics === 'function') {
+      mc.reloadMetrics(false, { background: state.page !== 'kpi-overview' });
+    }
   }
 
   function buildFilterPayload() {
@@ -171,6 +195,7 @@
         state.payload = data;
         applyFilterOptions(data.filter_options || {});
         renderMaintenance();
+        fetchAiInsights();
       })
       .catch(function (err) {
         console.error('[maintenance]', err);
@@ -187,39 +212,192 @@
       });
   }
 
+  function fetchAiInsights() {
+    if (state.insightsLoading) return;
+    state.insightsLoading = true;
+    return fetch('/api/maintenance/insights', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filters: buildFilterPayload(), allowFallback: true }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data.error || !data.ai_summaries) return;
+        if (state.payload) state.payload.ai_summaries = data.ai_summaries;
+        if (state.insightTab === 'ai-summary') {
+          var el = $('#maint-tab-ai-summary');
+          if (el) el.innerHTML = renderAiSummaries(data.ai_summaries);
+        }
+      })
+      .catch(function (err) {
+        console.warn('[maintenance insights]', err);
+      })
+      .finally(function () {
+        state.insightsLoading = false;
+      });
+  }
+
+  function slicerDisplayValue(id, value) {
+    if (value == null || value === '' || value === 'All') return 'All';
+    if (id === 'region') return regionFilterLabel(value);
+    if (Array.isArray(value)) return value.length ? value.join(', ') : 'All';
+    var match = TIMEFRAME_OPTIONS.filter(function (o) {
+      return o.value === value;
+    })[0];
+    return match ? match.label : String(value);
+  }
+
+  function updateSlicerDisplay(id, value) {
+    var slicer = $('.maint-filter-bar .slicer[data-slicer-id="' + id + '"]');
+    if (!slicer) return;
+    var el = slicer.querySelector('.slicer-value');
+    if (el) el.textContent = slicerDisplayValue(id, value);
+  }
+
+  function closeAllSlicers() {
+    $$('.maint-filter-bar .slicer.open').forEach(function (s) {
+      s.classList.remove('open');
+    });
+  }
+
+  function populateSlicerOptions(id, options, currentValue, multi) {
+    var wrap = $('.maint-filter-bar .slicer-options[data-slicer-options="' + id + '"]');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    var selected = multi ? normalizeRegionList(currentValue) : [currentValue || 'All'];
+
+    (options || []).forEach(function (opt) {
+      var val = typeof opt === 'object' ? opt.value : opt;
+      var lab = typeof opt === 'object' ? opt.label : opt;
+      var isSelected = multi
+        ? val === 'All'
+          ? !selected.length
+          : selected.indexOf(val) >= 0
+        : String(selected[0]) === String(val);
+
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'slicer-option' + (isSelected ? ' selected' : '');
+      btn.dataset.value = val;
+      btn.innerHTML = '<span class="radio-dot"></span><span>' + esc(lab) + '</span>';
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        onSlicerSelect(id, val, multi);
+      });
+      wrap.appendChild(btn);
+    });
+  }
+
+  function onSlicerSelect(id, value, multi) {
+    if (multi) {
+      if (value === 'All') {
+        state.filters.region = 'All';
+      } else {
+        var list = normalizeRegionList(state.filters.region);
+        var idx = list.indexOf(value);
+        if (idx >= 0) list.splice(idx, 1);
+        else list.push(value);
+        state.filters.region = list.length ? list.join(', ') : 'All';
+      }
+      populateSlicerOptions('region', regionSlicerOptions(), state.filters.region, true);
+      updateSlicerDisplay('region', state.filters.region);
+    } else {
+      state.filters[id] = value;
+      updateSlicerDisplay(id, value);
+    }
+    closeAllSlicers();
+    onFilterChange();
+  }
+
+  function regionSlicerOptions() {
+    return [{ value: 'All', label: 'All Regions' }].concat(
+      REGION_OPTIONS.map(function (r) {
+        return { value: r, label: r };
+      })
+    );
+  }
+
+  function createSlicerGroup(id, label, options, currentValue, multi) {
+    var group = document.createElement('div');
+    group.className = 'filter-group maint-filter-group';
+    group.innerHTML = '<span class="filter-label maint-filter-label">' + esc(label) + '</span>';
+
+    var slicer = document.createElement('div');
+    slicer.className = 'slicer';
+    slicer.dataset.slicerId = id;
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'slicer-trigger';
+    trigger.innerHTML =
+      '<span class="slicer-value">' +
+      esc(slicerDisplayValue(id, currentValue)) +
+      '</span><span class="slicer-chevron"></span>';
+
+    var panel = document.createElement('div');
+    panel.className = 'slicer-panel';
+    var optsWrap = document.createElement('div');
+    optsWrap.className = 'slicer-options';
+    optsWrap.dataset.slicerOptions = id;
+    panel.appendChild(optsWrap);
+    slicer.appendChild(trigger);
+    slicer.appendChild(panel);
+    group.appendChild(slicer);
+
+    trigger.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var wasOpen = slicer.classList.contains('open');
+      closeAllSlicers();
+      if (!wasOpen) slicer.classList.add('open');
+    });
+
+    populateSlicerOptions(id, options, currentValue, multi);
+    return group;
+  }
+
+  function createDateGroup(id, label, value) {
+    var group = document.createElement('div');
+    group.className = 'filter-group maint-filter-group';
+    group.innerHTML =
+      '<span class="filter-label maint-filter-label">' +
+      esc(label) +
+      '</span>' +
+      '<input type="date" class="maint-date-input" id="maint-filter-' +
+      id +
+      '" value="' +
+      esc(value || '') +
+      '" />';
+    group.querySelector('input').addEventListener('change', onFilterChange);
+    return group;
+  }
+
   function applyFilterOptions(opts) {
-    var siteSel = $('#maint-filter-site');
-    var lineSel = $('#maint-filter-line');
-    if (siteSel && opts.sites && opts.sites.length) {
-      var cur = state.filters.site;
-      siteSel.innerHTML =
-        '<option value="All">All Plants</option>' +
-        opts.sites
-          .map(function (s) {
-            return '<option value="' + esc(s) + '">' + esc(s) + '</option>';
-          })
-          .join('');
-      siteSel.value = cur;
-    }
-    if (lineSel && opts.lines && opts.lines.length) {
-      var curLine = state.filters.line;
-      lineSel.innerHTML =
-        '<option value="All">All Lines</option>' +
-        opts.lines
-          .map(function (l) {
-            return '<option value="' + esc(l) + '">' + esc(l) + '</option>';
-          })
-          .join('');
-      lineSel.value = curLine;
-    }
-    var yearSel = $('#maint-filter-year');
-    if (yearSel && opts.years && opts.years.length) {
-      yearSel.innerHTML = opts.years
-        .map(function (y) {
-          return '<option value="' + esc(y) + '">' + esc(y) + '</option>';
+    if (opts.sites && opts.sites.length) {
+      var siteOpts = [{ value: 'All', label: 'All Plants' }].concat(
+        opts.sites.map(function (s) {
+          return { value: s, label: s };
         })
-        .join('');
-      yearSel.value = state.filters.year;
+      );
+      populateSlicerOptions('site', siteOpts, state.filters.site, false);
+      updateSlicerDisplay('site', state.filters.site);
+    }
+    if (opts.lines && opts.lines.length) {
+      var lineOpts = [{ value: 'All', label: 'All Lines' }].concat(
+        opts.lines.map(function (l) {
+          return { value: l, label: l };
+        })
+      );
+      populateSlicerOptions('line', lineOpts, state.filters.line, false);
+      updateSlicerDisplay('line', state.filters.line);
+    }
+    if (opts.years && opts.years.length) {
+      var yearOpts = opts.years.map(function (y) {
+        return { value: y, label: y };
+      });
+      populateSlicerOptions('year', yearOpts, state.filters.year, false);
+      updateSlicerDisplay('year', state.filters.year);
     }
   }
 
@@ -249,10 +427,10 @@
     return (
       '<article class="maint-kpi-card primary" data-kpi="primary">' +
       '<div class="maint-kpi-head">' +
-      '<span class="maint-kpi-title">Total Unplanned Downtime %</span>' +
       '<span class="maint-status-dot ' +
       statusDotClass(kpi.value, kpi.target) +
       '" aria-hidden="true"></span>' +
+      '<span class="maint-kpi-title">Total Unplanned Downtime %</span>' +
       '</div>' +
       '<div class="maint-kpi-body">' +
       '<div class="maint-kpi-main">' +
@@ -338,7 +516,7 @@
       ' My Report</button>' +
       '<button type="button" class="maint-action-btn round" data-action="drill-down" aria-label="Drill Down">' +
       '<span class="maint-tooltip">Drill Down</span>' +
-      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.9V17h8v-2.1A7 7 0 0 0 12 2z"/></svg>' +
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>' +
       '</button>' +
       '<button type="button" class="maint-action-btn round" data-action="kpi-overview" aria-label="KPI Overview" onclick="window.__goKpiOverview && window.__goKpiOverview(event)">' +
       '<span class="maint-tooltip">KPI Overview</span>' +
@@ -348,29 +526,36 @@
     );
   }
 
+  function severityLabel(sev) {
+    var map = { critical: 'Critical', high: 'High', medium: 'Medium', info: 'Insight' };
+    return map[String(sev || '').toLowerCase()] || 'Insight';
+  }
+
   function renderAiSummaries(summaries) {
     return (summaries || [])
       .map(function (s, i) {
         return (
-          '<div class="maint-insight-card" style="animation-delay:' +
-          i * 0.06 +
+          '<article class="maint-ai-card" style="animation-delay:' +
+          i * 0.08 +
           's">' +
-          '<div class="maint-insight-head">' +
+          '<div class="ai-summary-icon" aria-hidden="true">✦</div>' +
+          '<div class="maint-ai-content">' +
+          '<div class="maint-ai-head">' +
           '<span class="maint-severity ' +
           esc(s.severity || 'info') +
           '">' +
-          esc((s.category || s.severity || 'Insight').toUpperCase()) +
-          '</span>' +
-          '<span class="maint-insight-title">' +
-          esc(s.title) +
+          esc(severityLabel(s.severity)) +
           '</span>' +
           '<span class="maint-insight-time">' +
           esc(s.timestamp || 'Just now') +
           '</span>' +
           '</div>' +
-          '<p class="maint-insight-body">' +
+          '<div class="ai-summary-label">' +
+          esc(s.title) +
+          '</div>' +
+          '<p class="ai-summary-text">' +
           esc(s.body) +
-          '</p></div>'
+          '</p></div></article>'
         );
       })
       .join('');
@@ -997,63 +1182,68 @@
 
   function buildFilterBar() {
     var bar = $('#maint-filter-bar');
-    if (!bar) return;
+    if (!bar || bar.dataset.built) return;
+    bar.dataset.built = '1';
+    bar.className = 'maint-filter-bar filter-bar';
+    bar.replaceChildren();
 
-    var row1 =
-      '<div class="maint-filter-group"><span class="maint-filter-label">Timeframe</span>' +
-      '<select class="maint-filter-select" id="maint-filter-timeframe">' +
-      TIMEFRAME_OPTIONS.map(function (o) {
-        return (
-          '<option value="' +
-          o.value +
-          '"' +
-          (state.filters.timeframe === o.value ? ' selected' : '') +
-          '>' +
-          o.label +
-          '</option>'
-        );
-      }).join('') +
-      '</select></div>' +
-      '<div class="maint-filter-group"><span class="maint-filter-label">Fiscal Year</span>' +
-      '<select class="maint-filter-select" id="maint-filter-year"><option>2026</option></select></div>' +
-      '<div class="maint-filter-group"><span class="maint-filter-label">Site (Plant)</span>' +
-      '<select class="maint-filter-select" id="maint-filter-site"><option value="All">All Plants</option></select></div>' +
-      '<div class="maint-filter-group"><span class="maint-filter-label">Region</span>' +
-      '<select class="maint-filter-select" id="maint-filter-region">' +
-      '<option value="All">All Regions</option>' +
-      '<option>North America</option><option>Latin America</option><option>Europe</option>' +
-      '<option>Asia Pacific</option><option>Middle East &amp; Africa</option></select></div>';
+    bar.appendChild(
+      createSlicerGroup('timeframe', 'Timeframe', TIMEFRAME_OPTIONS, state.filters.timeframe, false)
+    );
+    bar.appendChild(
+      createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
+    );
+    bar.appendChild(
+      createSlicerGroup(
+        'site',
+        'Site (Plant)',
+        [{ value: 'All', label: 'All Plants' }],
+        state.filters.site,
+        false
+      )
+    );
+    bar.appendChild(
+      createSlicerGroup('region', 'Region', regionSlicerOptions(), state.filters.region, true)
+    );
+    bar.appendChild(
+      createSlicerGroup(
+        'department',
+        'Department',
+        [{ value: 'All', label: 'All Departments' }],
+        state.filters.department,
+        false
+      )
+    );
+    bar.appendChild(
+      createSlicerGroup('line', 'Line', [{ value: 'All', label: 'All Lines' }], state.filters.line, false)
+    );
+    bar.appendChild(
+      createSlicerGroup(
+        'shift',
+        'Shift',
+        SHIFT_OPTIONS.map(function (s) {
+          return { value: s, label: s };
+        }),
+        state.filters.shift,
+        false
+      )
+    );
+    bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
+    bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
 
-    var row2 =
-      '<div class="maint-filter-row-span">' +
-      '<div class="maint-filter-group"><span class="maint-filter-label">Department</span>' +
-      '<select class="maint-filter-select" id="maint-filter-dept"><option value="All">All Departments</option></select></div>' +
-      '<div class="maint-filter-group"><span class="maint-filter-label">Line</span>' +
-      '<select class="maint-filter-select" id="maint-filter-line"><option value="All">All Lines</option></select></div>' +
-      '<div class="maint-filter-group"><span class="maint-filter-label">Shift</span>' +
-      '<select class="maint-filter-select" id="maint-filter-shift">' +
-      '<option value="All">All Shifts</option><option>Shift 1</option><option>Shift 2</option><option>Shift 3</option></select></div>' +
-      '<div class="maint-filter-group"><span class="maint-filter-label">From date</span>' +
-      '<input type="date" class="maint-filter-input" id="maint-filter-from" /></div>' +
-      '<div class="maint-filter-group"><span class="maint-filter-label">To date</span>' +
-      '<input type="date" class="maint-filter-input" id="maint-filter-to" /></div></div>';
-
-    bar.innerHTML = row1 + row2;
-
-    bar.addEventListener('change', onFilterChange);
+    if (!document.body.dataset.maintSlicerCloseBound) {
+      document.body.dataset.maintSlicerCloseBound = '1';
+      document.addEventListener('click', closeAllSlicers);
+    }
   }
 
   function onFilterChange() {
-    state.filters.timeframe = $('#maint-filter-timeframe').value;
-    state.filters.year = $('#maint-filter-year').value;
-    state.filters.site = $('#maint-filter-site').value;
-    state.filters.region = $('#maint-filter-region').value;
-    state.filters.department = $('#maint-filter-dept').value;
-    state.filters.line = $('#maint-filter-line').value;
-    state.filters.shift = $('#maint-filter-shift').value;
-    state.filters.dateFrom = $('#maint-filter-from').value;
-    state.filters.dateTo = $('#maint-filter-to').value;
+    var fromEl = $('#maint-filter-from');
+    var toEl = $('#maint-filter-to');
+    if (fromEl) state.filters.dateFrom = fromEl.value;
+    if (toEl) state.filters.dateTo = toEl.value;
     syncToConsoleFilters();
+    reloadConsoleMetrics();
     fetchMaintenanceData();
   }
 
@@ -1095,7 +1285,6 @@
 
   function updateShellForPage(page) {
     state.page = page;
-    var filterBar = $('#filter-bar');
     var maintFilter = $('#maint-filter-bar');
     var banner = $('#app-banner');
     var subnav = $('#top-nav-secondary');
@@ -1105,8 +1294,7 @@
     document.body.classList.toggle('mode-maintenance', isMaint);
     document.body.classList.toggle('mode-kpi-overview', isKpi);
 
-    filterBar && filterBar.classList.toggle('maint-hidden', isMaint);
-    maintFilter && maintFilter.classList.toggle('maint-hidden', !isMaint);
+    maintFilter && maintFilter.classList.remove('maint-hidden');
     banner && banner.classList.toggle('has-subnav', isKpi);
     subnav && subnav.classList.toggle('visible', isKpi);
     $('#filter-context-bar') && $('#filter-context-bar').classList.toggle('maint-hidden', isMaint);

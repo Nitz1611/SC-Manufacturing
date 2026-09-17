@@ -18,7 +18,9 @@ from py_server.lib.summary_provider import resolve_summary_provider
 bp = Blueprint('maintenance', __name__)
 
 _insights_cache: dict[str, dict[str, Any]] = {}
+_payload_cache: dict[str, dict[str, Any]] = {}
 INSIGHTS_TTL_MS = int(os.getenv('MAINTENANCE_INSIGHTS_TTL_HOURS') or 6) * 3600 * 1000
+PAYLOAD_TTL_MS = int(os.getenv('MAINTENANCE_PAYLOAD_TTL_MINUTES') or 15) * 60 * 1000
 
 
 def _filters_from_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -54,19 +56,25 @@ def _claude_maintenance_insights(
         'tab_insights': tab,
     }
 
-    user = f"""You are a senior maintenance operations analyst.
-Using ONLY the metrics JSON below, write exactly 4 insight cards covering WHEN, WHY, HOW, and OVERVIEW themes.
-Each card: severity (critical|high|medium|info), title (short), body (2-3 sentences with exact numbers).
+    user = f"""You are a senior maintenance operations analyst writing for plant leadership.
+Using ONLY the metrics JSON below, write exactly 4 insight cards focused on business impact.
+Each card must quantify operational and financial exposure (hours lost, capacity risk, fill-rate impact).
+Do NOT use category labels like WHEN, WHY, HOW, or OVERVIEW.
+
+Each card fields:
+- severity: critical|high|medium|info
+- title: concise executive headline (max 12 words)
+- body: 3-4 polished sentences with exact numbers from the data and one actionable recommendation
 
 Metrics:
 {json.dumps(compact, indent=2)}
 
 Return ONLY valid JSON array:
 [
-  {{"category":"WHEN","severity":"...","title":"...","body":"..."}},
-  {{"category":"WHY","severity":"...","title":"...","body":"..."}},
-  {{"category":"HOW","severity":"...","title":"...","body":"..."}},
-  {{"category":"OVERVIEW","severity":"...","title":"...","body":"..."}}
+  {{"severity":"...","title":"...","body":"..."}},
+  {{"severity":"...","title":"...","body":"..."}},
+  {{"severity":"...","title":"...","body":"..."}},
+  {{"severity":"...","title":"...","body":"..."}}
 ]"""
 
     raw = invoke_claude([{'role': 'user', 'content': user}])
@@ -85,8 +93,7 @@ Return ONLY valid JSON array:
         if not isinstance(card, dict):
             continue
         out.append({
-            'id': str(card.get('id') or card.get('category') or f'insight-{i}').lower(),
-            'category': str(card.get('category') or 'INSIGHT').upper(),
+            'id': str(card.get('id') or f'insight-{i}').lower(),
             'severity': str(card.get('severity') or 'info').lower(),
             'title': str(card.get('title') or 'Maintenance insight'),
             'timestamp': now,
@@ -101,15 +108,31 @@ Return ONLY valid JSON array:
 def maintenance_data():
     body = request.get_json(silent=True) or {}
     filters = _filters_from_body(body)
+    force_refresh = bool(body.get('forceRefresh') or body.get('refresh'))
+    cache_key = _insights_cache_key(filters)
+    if not force_refresh:
+        hit = _payload_cache.get(cache_key)
+        if hit and time.time() * 1000 - hit['ts'] < PAYLOAD_TTL_MS:
+            return jsonify({
+                **hit['payload'],
+                '_source': hit.get('source', 'cache'),
+                '_cached': True,
+            })
     try:
         metrics = _metrics_for_request(filters)
         payload = build_maintenance_payload(metrics, filters)
         meta = metrics.get('meta') or {}
-        return jsonify({
+        response = {
             **payload,
             '_source': meta.get('source', 'live'),
             '_cached': meta.get('source') in ('cache', 'demo'),
-        })
+        }
+        _payload_cache[cache_key] = {
+            'payload': payload,
+            'source': meta.get('source', 'live'),
+            'ts': time.time() * 1000,
+        }
+        return jsonify(response)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

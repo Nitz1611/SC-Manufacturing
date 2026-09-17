@@ -247,6 +247,23 @@ def _build_secondary_kpis(metrics: MetricsPayload) -> list[dict[str, Any]]:
     ]
 
 
+def _severity_label(pct: float, target: float = DT_TARGET_PCT) -> str:
+    if pct >= target + 3:
+        return "critical"
+    if pct >= target + 1:
+        return "high"
+    if pct >= target:
+        return "medium"
+    return "info"
+
+
+def _business_impact_hours(dt_pct: float, dt_hrs: float, target: float = DT_TARGET_PCT) -> float:
+    sched = _estimate_sched_hours(dt_hrs, dt_pct)
+    if sched <= 0:
+        return 0.0
+    return max(0.0, sched * (dt_pct - target) / 100.0)
+
+
 def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     kpis = metrics.get("kpis") or {}
@@ -256,96 +273,148 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
     trend = metrics.get("period_trend") or []
     shifts = metrics.get("shift_comparison") or []
     reasons = metrics.get("reasons") or []
-    top_lines = metrics.get("top_lines") or {}
-    tab = build_tab_insights(metrics)
+    site_kpis = _resolve_site_kpis(metrics)
+    sites_at_risk = _build_sites_at_risk(metrics)
+    gap_pts = round(dt_pct - DT_TARGET_PCT, 2)
+    impact_hrs = _business_impact_hours(dt_pct, dt_hrs)
+    sched_hrs = _estimate_sched_hours(dt_hrs, dt_pct)
 
-    when_body = tab.get("dow") or (
-        f"Unplanned DT averages {dt_pct:.2f}% across {len(periods)} periods."
+    cards: list[dict[str, Any]] = []
+
+    overview_body = (
+        f"The network is running at {dt_pct:.2f}% unplanned downtime "
+        f"({_locale_number(dt_hrs)} machine hours lost), "
+        f"{abs(gap_pts):.2f} percentage points {'above' if gap_pts > 0 else 'below'} "
+        f"the {DT_TARGET_PCT:.2f}% operational target. "
+        f"Across an estimated {_locale_number(sched_hrs)} scheduled hours, "
+        f"this gap represents roughly {_locale_number(impact_hrs)} recoverable production hours "
+        f"if performance returns to target — equivalent to sustained capacity risk across the FLNA network."
     )
+    cards.append({
+        "id": "network-impact",
+        "severity": _severity_label(dt_pct),
+        "title": f"Network unplanned downtime at {dt_pct:.2f}% — business exposure",
+        "timestamp": now,
+        "body": overview_body,
+    })
+
+    if sites_at_risk:
+        top = sites_at_risk[0]
+        second = sites_at_risk[1] if len(sites_at_risk) > 1 else None
+        site_body = (
+            f"{top['site']} is the highest-risk site at {top['dt_pct']:.2f}% "
+            f"({_locale_number(top['hours'])} unplanned DT hours on "
+            f"{_locale_number(top['sched_hrs'])} scheduled hours). "
+        )
+        if second:
+            site_body += (
+                f"{second['site']} follows at {second['dt_pct']:.2f}%, "
+                f"and together these sites concentrate a disproportionate share of network loss. "
+            )
+        site_body += (
+            "Prioritizing PM and line stabilization at these sites would yield the fastest "
+            "network-level recovery in unplanned downtime rate."
+        )
+        cards.append({
+            "id": "site-risk",
+            "severity": _severity_label(float(top["dt_pct"])),
+            "title": f"{top['site']} drives network downtime risk",
+            "timestamp": now,
+            "body": site_body,
+        })
+
+    if reasons:
+        top3 = reasons[:3]
+        reason_hrs = sum(float(r["hours"]) for r in top3)
+        reason_body = (
+            f"The top three loss drivers — "
+            + "; ".join(
+                f"{r['reason']} ({_locale_number(r['hours'])} h, {r['pct']:.1f}%)"
+                for r in top3
+            )
+            + f" — account for {_locale_number(reason_hrs)} hours of unplanned downtime. "
+            f"{top3[0]['reason']} alone represents the largest recoverable opportunity; "
+            "targeting repeat failures in this category with root-cause containment "
+            "will reduce both stop frequency and hours lost per event."
+        )
+        cards.append({
+            "id": "root-cause",
+            "severity": _severity_label(dt_pct),
+            "title": f"{top3[0]['reason']} leads network loss profile",
+            "timestamp": now,
+            "body": reason_body,
+        })
+
     if trend and periods:
         peak_i = trend.index(max(trend))
+        trough_i = trend.index(min(trend))
         peak_label = periods[peak_i] if peak_i < len(periods) else f"P{peak_i + 1}"
-        when_body = (
-            f"Peak unplanned DT at {peak_label} ({max(trend):.2f}%). "
-            + when_body
+        trough_label = periods[trough_i] if trough_i < len(periods) else f"P{trough_i + 1}"
+        period_body = (
+            f"Unplanned downtime peaked at {peak_label} ({max(trend):.2f}%) and reached "
+            f"its lowest point at {trough_label} ({min(trend):.2f}%) across the filtered horizon. "
+            f"The {max(trend) - min(trend):.2f} point swing signals uneven maintenance capacity "
+            "and handover effectiveness between periods. Aligning staffing and PM windows ahead of "
+            f"{peak_label} would reduce the amplitude of these swings and protect service levels."
         )
-
-    why_body = tab.get("reason") or tab.get("category") or (
-        "Review downtime reasons to identify root causes."
-    )
-    if reasons:
-        top = reasons[0]
-        why_body = (
-            f"{top['reason']} leads with {_locale_number(top['hours'])} h "
-            f"({top['pct']:.2f}% of loss). {why_body}"
-        )
-
-    how_body = tab.get("line") or tab.get("overview") or (
-        f"Network unplanned DT is {dt_pct:.2f}% vs {DT_TARGET_PCT}% target."
-    )
-    if top_lines:
-        worst_line = max(top_lines.items(), key=lambda item: item[1])
-        how_body = (
-            f"Prioritize {worst_line[0]} ({worst_line[1]:.1f}% line share). {how_body}"
-        )
-
-    overview_body = tab.get("overview") or (
-        f"Unplanned DT is {dt_pct:.2f}% ({_locale_number(dt_hrs)} h) "
-        f"vs {DT_TARGET_PCT}% target."
-    )
-
-    shift_body = ""
-    if shifts:
-        top_shift = max(shifts, key=lambda s: float(s.get("hours") or 0))
+        cards.append({
+            "id": "period-pattern",
+            "severity": _severity_label(max(trend)),
+            "title": f"Period volatility — peak at {peak_label}",
+            "timestamp": now,
+            "body": period_body,
+        })
+    elif shifts:
+        ranked = sorted(shifts, key=lambda s: float(s.get("hours") or 0), reverse=True)
+        top_shift = ranked[0]
+        second = ranked[1] if len(ranked) > 1 else None
         shift_body = (
-            f"{top_shift.get('shift')} accounts for {_locale_number(top_shift.get('hours', 0))} "
-            "unplanned DT hours — align maintenance windows to that shift pattern."
+            f"{top_shift.get('shift')} carries {_locale_number(top_shift.get('hours', 0))} "
+            "unplanned downtime hours in the current view"
         )
-    else:
-        shift_body = how_body
-
-    return [
-        {
-            "id": "when",
-            "category": "WHEN",
-            "severity": _insight_severity(max(trend) if trend else dt_pct),
-            "title": "Timing & period pattern",
-            "timestamp": now,
-            "body": when_body,
-        },
-        {
-            "id": "why",
-            "category": "WHY",
-            "severity": _insight_severity(dt_pct),
-            "title": "Root-cause drivers",
-            "timestamp": now,
-            "body": why_body,
-        },
-        {
-            "id": "how",
-            "category": "HOW",
-            "severity": _insight_severity(dt_pct),
-            "title": "Recommended actions",
-            "timestamp": now,
-            "body": how_body,
-        },
-        {
-            "id": "overview",
-            "category": "OVERVIEW",
-            "severity": _insight_severity(dt_pct),
-            "title": "Network performance snapshot",
-            "timestamp": now,
-            "body": overview_body,
-        },
-        {
-            "id": "shift",
-            "category": "HOW",
-            "severity": "medium" if shifts else "info",
-            "title": "Shift-focused response",
+        if second:
+            delta = round(
+                float(top_shift.get("hours") or 0) - float(second.get("hours") or 0),
+                1,
+            )
+            shift_body += (
+                f", {delta:+.1f} h above {second.get('shift')}. "
+            )
+        shift_body += (
+            "Shift-to-shift gaps in handover discipline and PM coverage are likely amplifying "
+            "losses during this window — rebalancing maintenance crew placement should reduce "
+            "repeat micro-stops and extended recovery time."
+        )
+        cards.append({
+            "id": "shift-pattern",
+            "severity": "medium",
+            "title": f"{top_shift.get('shift')} concentrates downtime hours",
             "timestamp": now,
             "body": shift_body,
-        },
-    ]
+        })
+
+    action_body = (
+        f"Closing the gap from {dt_pct:.2f}% to {DT_TARGET_PCT:.2f}% would recover an estimated "
+        f"{_locale_number(impact_hrs)} machine hours in this filter window. "
+    )
+    if sites_at_risk and reasons:
+        action_body += (
+            f"Immediate actions: (1) deploy targeted containment at {sites_at_risk[0]['site']}, "
+            f"(2) address {reasons[0]['reason']} repeat failures, "
+            "(3) validate PM compliance on assets with highest stop counts. "
+        )
+    action_body += (
+        "These steps protect OEE, reduce overtime burn, and stabilize customer fill rates."
+    )
+    cards.append({
+        "id": "recommended-actions",
+        "severity": _severity_label(dt_pct),
+        "title": "Recommended actions — quantified recovery path",
+        "timestamp": now,
+        "body": action_body,
+    })
+
+    return cards[:5]
 
 
 def _executive_bullets_for_site(
