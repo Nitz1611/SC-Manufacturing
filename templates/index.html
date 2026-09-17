@@ -9,6 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/boot.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/console.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/maintenance.css') }}" />
 </head>
 <body>
   <div id="boot-splash" role="status" aria-live="polite" aria-label="Loading Manufacturing Console">
@@ -61,14 +62,42 @@
   <div class="app-shell">
     <div class="workspace">
       <div class="filter-bar" id="filter-bar" role="toolbar" aria-label="Filters"></div>
+      <div class="maint-filter-bar maint-hidden" id="maint-filter-bar" role="toolbar" aria-label="Maintenance filters"></div>
       <main class="main-content">
+        <section id="page-overview" class="page-panel" aria-label="Overview">
+          <div class="page-hero">
+            <h2>Overview</h2>
+            <p>Executive manufacturing overview — content coming in a future requirement.</p>
+          </div>
+        </section>
+        <section id="page-execute" class="page-panel" aria-label="Execute">
+          <div class="page-hero">
+            <h2>Execute</h2>
+            <p>Production execution workspace — content coming in a future requirement.</p>
+          </div>
+        </section>
+        <section id="page-maintenance" class="page-panel active" aria-label="Maintenance">
+          <div id="maint-root" class="maint-root"></div>
+        </section>
+        <section id="page-quality" class="page-panel" aria-label="Quality">
+          <div class="page-hero">
+            <h2>Quality</h2>
+            <p>Quality analytics workspace — content coming in a future requirement.</p>
+          </div>
+        </section>
+        <section id="page-planning" class="page-panel" aria-label="Planning">
+          <div class="page-hero">
+            <h2>Planning</h2>
+            <p>Planning and scheduling workspace — content coming in a future requirement.</p>
+          </div>
+        </section>
         <section id="page-intel-brief" class="page-panel" aria-label="Intel Brief">
           <div class="page-hero">
             <h2>Intel Brief</h2>
             <p>Executive intelligence summary — content coming in a future requirement.</p>
           </div>
         </section>
-        <section id="page-kpi-overview" class="page-panel active" aria-label="KPI Overview">
+        <section id="page-kpi-overview" class="page-panel" aria-label="KPI Overview">
           <div id="kpi-tab-overview" class="kpi-tab-panel active" data-tab="overview" role="tabpanel"></div>
           <div id="kpi-tab-by-category" class="kpi-tab-panel" data-tab="by-category" role="tabpanel"></div>
           <div id="kpi-tab-by-line" class="kpi-tab-panel" data-tab="by-line" role="tabpanel"></div>
@@ -91,7 +120,39 @@
     </div>
   </div>
 
+  <div class="maint-modal-overlay" id="maint-report-modal" role="dialog" aria-modal="true" aria-labelledby="maint-report-title">
+    <div class="maint-modal">
+      <div class="maint-modal-head">
+        <h2 class="maint-modal-title" id="maint-report-title">My report</h2>
+        <button type="button" class="maint-modal-close" id="maint-report-close" aria-label="Close">✕</button>
+      </div>
+      <div class="maint-modal-body" id="maint-report-body"></div>
+    </div>
+  </div>
+
+  <div class="maint-drill-overlay" id="maint-drill-overlay" role="dialog" aria-modal="true" aria-label="Drill Down">
+    <div class="maint-drill-head">
+      <button type="button" class="maint-drill-back" id="maint-drill-back">← Drill Down</button>
+    </div>
+    <div class="maint-drill-layout">
+      <nav class="maint-drill-nav" aria-label="Drill down views">
+        <button type="button" class="maint-drill-nav-item active">Site Performance</button>
+      </nav>
+      <div class="maint-drill-content">
+        <div>
+          <h3 style="margin:0 0 12px;font-size:15px;color:var(--navy)">Scheduled Hours vs. % Downtime by Site</h3>
+          <div class="maint-scatter-wrap"><canvas id="drill-scatter"></canvas></div>
+        </div>
+        <div class="maint-insights-panel" id="maint-drill-insights"></div>
+      </div>
+    </div>
+  </div>
+
+  <button type="button" class="maint-fab maint-hidden" id="maint-fab" aria-label="AI assistant">✦</button>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
   <script src="{{ url_for('static', filename='js/console-engine.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/maintenance-console.js') }}"></script>
   <script>
     (function () {
       var timer;

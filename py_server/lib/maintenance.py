@@ -213,11 +213,37 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
     }
 
 
-def _build_secondary_kpis() -> list[dict[str, Any]]:
+def _build_secondary_kpis(metrics: MetricsPayload) -> list[dict[str, Any]]:
+    site_kpis = _resolve_site_kpis(metrics)
+    stops_total = sum(int(row.get("stops") or 0) for row in site_kpis.values())
+    dt_hrs = _parse_hours((metrics.get("kpis") or {}).get("downtime_hrs", {}).get("value"))
+    sched = _estimate_sched_hours(
+        dt_hrs,
+        _parse_pct((metrics.get("kpis") or {}).get("downtime_pct", {}).get("value")),
+    )
+    mtbf_hrs = round(sched / max(stops_total, 1), 2) if sched and stops_total else None
     return [
-        {"id": "backlog", "label": "Maintenance Backlog", "value": None, "wip": True},
-        {"id": "mtbf", "label": "MTBF", "value": None, "wip": True},
-        {"id": "planned", "label": "Planned Maintenance", "value": None, "wip": True},
+        {
+            "id": "backlog",
+            "label": "% Backlog Planned Maintenance",
+            "value": None,
+            "target": "< 10.0 %",
+            "wip": True,
+        },
+        {
+            "id": "mtbf",
+            "label": "Mean Time Between Failure (MTBF)",
+            "value": f"{mtbf_hrs:.2f} hrs" if mtbf_hrs else None,
+            "target": "12.00 hrs",
+            "wip": not mtbf_hrs,
+        },
+        {
+            "id": "planned",
+            "label": "Total Planned Downtime %",
+            "value": None,
+            "target": "3.00 %",
+            "wip": True,
+        },
     ]
 
 
@@ -366,6 +392,25 @@ def _executive_bullets_for_site(
     return bullets[:5]
 
 
+def _worst_line_for_site(metrics: MetricsPayload, site: str) -> tuple[str, float]:
+    site_lines = (metrics.get("site_line_by_period") or {}).get(site) or {}
+    if site_lines:
+        ranked = sorted(
+            site_lines.items(),
+            key=lambda item: sum(item[1]) / len(item[1]) if item[1] else 0,
+            reverse=True,
+        )
+        if ranked:
+            name, vals = ranked[0]
+            avg = sum(vals) / len(vals) if vals else 0.0
+            return name, round(avg, 2)
+    top_lines = metrics.get("top_lines") or {}
+    if top_lines:
+        name, pct = max(top_lines.items(), key=lambda item: item[1])
+        return name, float(pct)
+    return "Network", 0.0
+
+
 def _build_alerts(metrics: MetricsPayload) -> list[dict[str, Any]]:
     site_kpis = _resolve_site_kpis(metrics)
     if not site_kpis:
@@ -373,6 +418,9 @@ def _build_alerts(metrics: MetricsPayload) -> list[dict[str, Any]]:
 
     network_avg = _network_avg_dt_pct(site_kpis)
     reasons = metrics.get("reasons") or []
+    shifts = metrics.get("shift_comparison") or []
+    top_shift = max(shifts, key=lambda s: float(s.get("hours") or 0)) if shifts else None
+    shift_label = str(top_shift.get("shift") or "Latest shift") if top_shift else "Latest period"
     alerts: list[dict[str, Any]] = []
 
     for site, row in sorted(
@@ -386,17 +434,31 @@ def _build_alerts(metrics: MetricsPayload) -> list[dict[str, Any]]:
         dt_hrs = float(row.get("downtime_hrs") or 0)
         sched = _estimate_sched_hours(dt_hrs, dt_pct)
         severity = _alert_severity(dt_pct, network_avg)
+        line_name, line_pct = _worst_line_for_site(metrics, site)
+        stops = int(row.get("stops") or 0)
         driver_bars = [
             {
                 "reason": r["reason"],
                 "hours": r["hours"],
                 "pct": r["pct"],
+                "stops": stops,
                 "label": f"{r['reason']} ({r['pct']:.1f}%)",
             }
             for r in reasons[:5]
         ]
+        summary = (
+            f"{site} line {line_name} recorded {dt_pct:.2f}% unplanned downtime, "
+            f"accumulating {_locale_number(dt_hrs)} unplanned downtime hours across "
+            f"{_locale_number(sched)} scheduled hours"
+            + (f", driven by {_locale_number(stops)} line stops" if stops else "")
+            + (f" concentrated in {reasons[0]['reason'].lower()}." if reasons else ".")
+        )
         alerts.append({
             "site": site,
+            "line": line_name,
+            "title": f"Unplanned Downtime % {site} — Line {line_name}",
+            "summary": summary,
+            "timestamp": f"{shift_label} (recent)",
             "severity": severity,
             "dt_pct": dt_pct,
             "downtime_hrs": dt_hrs,
@@ -406,18 +468,35 @@ def _build_alerts(metrics: MetricsPayload) -> list[dict[str, Any]]:
             "expandable": True,
             "detail": {
                 "mini_kpis": [
-                    {"label": "Unplanned DT %", "value": f"{dt_pct:.2f}%"},
-                    {"label": "DT Hours", "value": f"{_locale_number(dt_hrs)} h"},
-                    {"label": "Est. Sched Hrs", "value": f"{_locale_number(sched)} h"},
-                    {"label": "STOPS", "value": _locale_number(row.get("stops") or 0)},
+                    {
+                        "label": "Operational Deficit",
+                        "value": f"{dt_hrs:.2f} hrs",
+                        "sub": f"Unplanned Downtime Hours ({shift_label})",
+                    },
+                    {
+                        "label": "Capacity Share",
+                        "value": f"{line_pct:.2f} %",
+                        "sub": f"Line {line_name} exposure",
+                    },
+                    {
+                        "label": "Line Availability",
+                        "value": f"{max(0, 100 - dt_pct):.2f} %",
+                        "sub": f"-{dt_pct:.2f}% vs {100 - DT_TARGET_PCT:.1f}% target",
+                    },
+                    {
+                        "label": "Failure Frequency",
+                        "value": f"{_locale_number(stops)} Stops" if stops else "—",
+                        "sub": f"MTBF: {round(sched / max(stops, 1), 2)} hrs" if sched else "",
+                    },
                 ],
                 "driver_bars": driver_bars,
+                "chart_title": f"Line {line_name}: Top Downtime Drivers Breakdown ({shift_label})",
                 "executive_bullets": _executive_bullets_for_site(
                     site, row, network_avg, reasons, metrics
                 ),
             },
         })
-    return alerts
+    return alerts[:8]
 
 
 def _build_sites_at_risk(metrics: MetricsPayload) -> list[dict[str, Any]]:
@@ -571,7 +650,7 @@ def build_maintenance_payload(
     return {
         "meta": metrics.get("meta") or {},
         "kpis": _build_kpis(metrics, effective_filters),
-        "secondary_kpis": _build_secondary_kpis(),
+        "secondary_kpis": _build_secondary_kpis(metrics),
         "filter_options": _build_filter_options(metrics),
         "ai_summaries": _build_ai_summaries(metrics),
         "alerts": _build_alerts(metrics),
