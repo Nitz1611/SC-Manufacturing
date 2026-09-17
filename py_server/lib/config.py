@@ -257,10 +257,15 @@ def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
     timeframe = str(raw.get("timeframe") or raw.get("timeframe_mode") or "Week")
     tf_map = {
         "week": "week",
+        "wtd": "week",
         "month": "month",
+        "mtd": "month",
         "quarter": "quarter",
+        "qtd": "quarter",
         "fy": "fiscal_year",
         "year": "fiscal_year",
+        "ytd": "fiscal_year",
+        "ptd": "period",
     }
     period = tf_map.get(timeframe.lower(), timeframe.lower())
     year_val = raw.get("year")

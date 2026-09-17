@@ -7,6 +7,7 @@ from py_server.lib.cache import cache_info
 
 from .analytics import bp as analytics_bp
 from .jobs import bp as jobs_bp
+from .maintenance import bp as maintenance_bp
 from .summaries import bp as summaries_bp
 
 cache_bp = Blueprint('cache', __name__)
@@ -20,6 +21,7 @@ def cache_info_route():
 BLUEPRINTS: list[Blueprint] = [
     analytics_bp,
     jobs_bp,
+    maintenance_bp,
     summaries_bp,
     cache_bp,
 ]
@@ -36,6 +38,8 @@ ROUTE_MAP: list[dict[str, str]] = [
     {'method': 'POST', 'path': '/summaries/batch', 'endpoint': 'summaries.batch_summaries'},
     {'method': 'GET', 'path': '/preload/status', 'endpoint': 'summaries.preload_status'},
     {'method': 'POST', 'path': '/console-data', 'endpoint': 'summaries.console_data'},
+    {'method': 'POST', 'path': '/maintenance/data', 'endpoint': 'maintenance.maintenance_data'},
+    {'method': 'POST', 'path': '/maintenance/insights', 'endpoint': 'maintenance.maintenance_insights'},
     {'method': 'GET', 'path': '/cache/info', 'endpoint': 'cache.cache_info_route'},
 ]
 
