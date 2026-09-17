@@ -220,6 +220,21 @@ def _schedule_next_run() -> None:
     _next_run_timer.start()
 
 
+def stop_preload_scheduler() -> None:
+    """Cancel scheduled preload cycles and prevent new ones until restart."""
+    global _scheduler_started, _next_run_timer
+
+    if _next_run_timer:
+        _next_run_timer.cancel()
+        _next_run_timer = None
+
+    _scheduler_started = False
+    with _status_lock:
+        _status['enabled'] = False
+        _status['nextRunAt'] = None
+    print('[preload] scheduler stopped', flush=True)
+
+
 def start_preload_scheduler() -> None:
     global _scheduler_started
 
