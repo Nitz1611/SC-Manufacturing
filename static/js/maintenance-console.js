@@ -14,27 +14,19 @@
   ];
 
   var TIMEFRAME_OPTIONS = [
-    { value: 'ptd', label: 'PTD' },
-    { value: 'wtd', label: 'WTD' },
-    { value: 'ytd', label: 'YTD' },
-    { value: 'FY', label: 'FY' },
-    { value: 'Quarter', label: 'Quarter' },
-    { value: 'Month', label: 'Month' },
-    { value: 'Week', label: 'Week' },
-    { value: 'shift', label: 'Last Completed Shift' },
-    { value: 'custom', label: 'Custom Date Range' },
+    { value: 'shift', label: 'Shift (Last Completed)', short: 'Shift' },
+    { value: 'wtd', label: 'WTD (Week to Date)', short: 'WTD' },
+    { value: 'ptd', label: 'PTD (Period to Date)', short: 'PTD' },
+    { value: 'ytd', label: 'YTD (Year to Date)', short: 'YTD' },
+    { value: 'custom', label: 'Custom Range', short: 'Custom Range' },
   ];
 
   var PERIOD_LABELS = {
-    ptd: 'Last Period',
-    wtd: 'Prior Week',
-    ytd: 'Prior Year',
-    FY: 'Last Fiscal Year',
-    Quarter: 'Prior Quarter',
-    Month: 'Prior Month',
-    Week: 'Prior Week',
-    shift: 'Prior Shift',
-    custom: 'Prior Range',
+    ptd: 'Current Period',
+    wtd: 'Current Week',
+    ytd: 'Current Year',
+    shift: 'Last Completed Shift',
+    custom: 'Custom Range',
   };
 
   /* KPI Overview chart palette — keep identical across Maintenance + KPI Overview */
@@ -63,6 +55,7 @@
     'Middle East & Africa',
   ];
   var SHIFT_OPTIONS = ['All', 'Shift 1', 'Shift 2', 'Shift 3'];
+  var SELECT_ALL = { value: 'All', label: 'Select All' };
 
   /** Original console-engine navigators — captured before wrapper patch */
   var engineSwitchPage = null;
@@ -155,15 +148,16 @@
   function syncToConsoleFilters() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
-    var tf = state.filters.timeframe;
-    var consoleTf = tf;
-    if (tf === 'ptd' || tf === 'wtd' || tf === 'ytd') consoleTf = 'FY';
-    else if (tf === 'Quarter') consoleTf = 'Quarter';
-    else if (tf === 'Month') consoleTf = 'Month';
-    else if (tf === 'Week') consoleTf = 'Week';
-    else if (tf === 'FY') consoleTf = 'FY';
-    mc.state.filters.timeframe = consoleTf;
-    mc.state.filters.year = state.filters.year;
+    var tf = String(state.filters.timeframe || 'ptd').toLowerCase();
+    var consoleTfMap = {
+      ptd: 'Month',
+      wtd: 'Week',
+      ytd: 'FY',
+      shift: 'Week',
+      custom: 'Week',
+    };
+    mc.state.filters.timeframe = consoleTfMap[tf] || 'Month';
+    mc.state.filters.year = state.filters.year === 'All' ? '2026' : state.filters.year;
     mc.state.filters.site = state.filters.site;
     mc.state.filters.region = normalizeRegionList(state.filters.region);
     if (!mc.state.filters.showIn) mc.state.filters.showIn = 'Millions';
@@ -231,6 +225,30 @@
       });
   }
 
+  function isCustomTimeframe() {
+    return String(state.filters.timeframe || '').toLowerCase() === 'custom';
+  }
+
+  function updateDateFilterVisibility() {
+    var show = isCustomTimeframe();
+    $$('.maint-date-filter').forEach(function (el) {
+      el.classList.toggle('maint-hidden', !show);
+    });
+  }
+
+  function withSelectAllOption(options) {
+    var opts = (options || []).slice();
+    var allIdx = opts.findIndex(function (o) {
+      var v = typeof o === 'object' ? o.value : o;
+      return v === 'All';
+    });
+    if (allIdx >= 0) {
+      opts[allIdx] = SELECT_ALL;
+      return opts;
+    }
+    return [SELECT_ALL].concat(opts);
+  }
+
   function fetchAiInsights() {
     if (state.insightsLoading) return;
     state.insightsLoading = true;
@@ -259,13 +277,20 @@
   }
 
   function slicerDisplayValue(id, value) {
-    if (value == null || value === '' || value === 'All') return 'All';
-    if (id === 'region') return regionFilterLabel(value);
-    if (Array.isArray(value)) return value.length ? value.join(', ') : 'All';
+    if (value == null || value === '' || value === 'All') return 'Select All';
+    if (id === 'region') return regionFilterLabel(value) === 'All' ? 'Select All' : regionFilterLabel(value);
+    if (Array.isArray(value)) return value.length ? value.join(', ') : 'Select All';
+    if (id === 'timeframe') {
+      var tfMatch = TIMEFRAME_OPTIONS.filter(function (o) {
+        return o.value === value;
+      })[0];
+      return tfMatch ? tfMatch.short || tfMatch.label : String(value);
+    }
     var match = TIMEFRAME_OPTIONS.filter(function (o) {
       return o.value === value;
     })[0];
-    return match ? match.label : String(value);
+    if (match) return match.short || match.label;
+    return String(value);
   }
 
   function updateSlicerDisplay(id, value) {
@@ -285,9 +310,10 @@
     var wrap = $('.maint-filter-bar .slicer-options[data-slicer-options="' + id + '"]');
     if (!wrap) return;
     wrap.innerHTML = '';
+    var normalized = withSelectAllOption(options);
     var selected = multi ? normalizeRegionList(currentValue) : [currentValue || 'All'];
 
-    (options || []).forEach(function (opt) {
+    normalized.forEach(function (opt) {
       var val = typeof opt === 'object' ? opt.value : opt;
       var lab = typeof opt === 'object' ? opt.label : opt;
       var isSelected = multi
@@ -329,17 +355,18 @@
         state.filters.line = 'All';
         updateSlicerDisplay('line', 'All');
       }
+      if (id === 'timeframe') {
+        updateDateFilterVisibility();
+      }
     }
     closeAllSlicers();
     onFilterChange();
   }
 
   function regionSlicerOptions() {
-    return [{ value: 'All', label: 'All Regions' }].concat(
-      REGION_OPTIONS.map(function (r) {
-        return { value: r, label: r };
-      })
-    );
+    return REGION_OPTIONS.map(function (r) {
+      return { value: r, label: r };
+    });
   }
 
   function createSlicerGroup(id, label, options, currentValue, multi, searchable) {
@@ -382,6 +409,7 @@
     var optsWrap = document.createElement('div');
     optsWrap.className = 'slicer-options';
     optsWrap.dataset.slicerOptions = id;
+
     panel.appendChild(optsWrap);
     slicer.appendChild(trigger);
     slicer.appendChild(panel);
@@ -412,27 +440,30 @@
 
   function createDateGroup(id, label, value) {
     var group = document.createElement('div');
-    group.className = 'filter-group maint-filter-group';
+    group.className = 'filter-group maint-filter-group maint-date-filter';
     group.innerHTML =
       '<span class="filter-label maint-filter-label">' +
       esc(label) +
       '</span>' +
+      '<div class="slicer maint-date-slicer">' +
+      '<label class="slicer-trigger maint-date-trigger">' +
       '<input type="date" class="maint-date-input" id="maint-filter-' +
       id +
       '" value="' +
       esc(value || '') +
-      '" />';
+      '" aria-label="' +
+      esc(label) +
+      '" />' +
+      '</label></div>';
     group.querySelector('input').addEventListener('change', onFilterChange);
     return group;
   }
 
   function applyFilterOptions(opts) {
     if (opts.sites && opts.sites.length) {
-      var siteOpts = [{ value: 'All', label: 'All Plants' }].concat(
-        opts.sites.map(function (s) {
-          return { value: s, label: s };
-        })
-      );
+      var siteOpts = opts.sites.map(function (s) {
+        return { value: s, label: s };
+      });
       populateSlicerOptions('site', siteOpts, state.filters.site, false);
       updateSlicerDisplay('site', state.filters.site);
     }
@@ -447,31 +478,25 @@
       updateSlicerDisplay('year', state.filters.year);
     }
     if (opts.shifts && opts.shifts.length) {
-      var shiftOpts = [{ value: 'All', label: 'All Shifts' }].concat(
-        opts.shifts.map(function (s) {
-          return { value: s, label: s };
-        })
-      );
+      var shiftOpts = opts.shifts.map(function (s) {
+        return { value: s, label: s };
+      });
       populateSlicerOptions('shift', shiftOpts, state.filters.shift, false);
       updateSlicerDisplay('shift', state.filters.shift);
     }
     if (opts.departments && opts.departments.length) {
-      var deptOpts = [{ value: 'All', label: 'All Departments' }].concat(
-        opts.departments.map(function (d) {
-          return { value: d, label: d };
-        })
-      );
+      var deptOpts = opts.departments.map(function (d) {
+        return { value: d, label: d };
+      });
       populateSlicerOptions('department', deptOpts, state.filters.department, false);
       updateSlicerDisplay('department', state.filters.department);
     }
   }
 
   function updateLineSlicerOptions(lines) {
-    var lineOpts = [{ value: 'All', label: 'All Lines' }].concat(
-      lines.map(function (l) {
-        return { value: l, label: l };
-      })
-    );
+    var lineOpts = lines.map(function (l) {
+      return { value: l, label: l };
+    });
     populateSlicerOptions('line', lineOpts, state.filters.line, false);
     updateSlicerDisplay('line', state.filters.line);
   }
@@ -1461,51 +1486,16 @@
     bar.appendChild(
       createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
     );
-    bar.appendChild(
-      createSlicerGroup(
-        'site',
-        'Site (Plant)',
-        [{ value: 'All', label: 'All Plants' }],
-        state.filters.site,
-        false,
-        true
-      )
-    );
+    bar.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, false, true));
     bar.appendChild(
       createSlicerGroup('region', 'Region', regionSlicerOptions(), state.filters.region, true)
     );
-    bar.appendChild(
-      createSlicerGroup(
-        'department',
-        'Department',
-        [{ value: 'All', label: 'All Departments' }],
-        state.filters.department,
-        false,
-        true
-      )
-    );
-    bar.appendChild(
-      createSlicerGroup(
-        'line',
-        'Line',
-        [{ value: 'All', label: 'All Lines' }],
-        state.filters.line,
-        false,
-        true
-      )
-    );
-    bar.appendChild(
-      createSlicerGroup(
-        'shift',
-        'Shift',
-        [{ value: 'All', label: 'All Shifts' }],
-        state.filters.shift,
-        false,
-        false
-      )
-    );
+    bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
+    bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
+    bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
     bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
     bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
+    updateDateFilterVisibility();
 
     if (!document.body.dataset.maintSlicerCloseBound) {
       document.body.dataset.maintSlicerCloseBound = '1';
@@ -1618,6 +1608,7 @@
     var toEl = $('#maint-filter-to');
     if (fromEl) fromEl.value = state.filters.dateFrom;
     if (toEl) toEl.value = state.filters.dateTo;
+    updateDateFilterVisibility();
   }
 
   function bindGlobalEvents() {

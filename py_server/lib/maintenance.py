@@ -21,6 +21,8 @@ PERIOD_DELTA_MAP: Dict[str, tuple[str, str]] = {
     "month": ("vs prior month", "Month to date"),
     "quarter": ("vs prior quarter", "Quarter to date"),
     "year": ("vs prior year", "Year to date"),
+    "shift": ("vs prior shift", "Last completed shift"),
+    "custom": ("vs prior range", "Custom range"),
 }
 
 

@@ -252,6 +252,17 @@ def bind_sql_params(sql: str, params: dict[str, str | None]) -> str:
     return sql.replace("{{region_filter}}", region_filter)
 
 
+def _optional_filter_value(raw: dict, *keys: str) -> str | None:
+    for key in keys:
+        val = raw.get(key)
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text and text.lower() != "all":
+            return text
+    return None
+
+
 def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
     raw = raw or {}
     timeframe = str(raw.get("timeframe") or raw.get("timeframe_mode") or "Week")
@@ -266,6 +277,8 @@ def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
         "year": "fiscal_year",
         "ytd": "fiscal_year",
         "ptd": "period",
+        "shift": "shift",
+        "custom": "custom",
     }
     period = tf_map.get(timeframe.lower(), timeframe.lower())
     year_val = raw.get("year")
@@ -284,6 +297,11 @@ def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
         "site": site,
         "timeframe": timeframe,
         "regions": regions,
+        "line": _optional_filter_value(raw, "line"),
+        "department": _optional_filter_value(raw, "department"),
+        "shift_filter": _optional_filter_value(raw, "shift"),
+        "date_from": _optional_filter_value(raw, "dateFrom", "date_from"),
+        "date_to": _optional_filter_value(raw, "dateTo", "date_to"),
     }
 
 
@@ -294,9 +312,15 @@ def console_demo_mode() -> bool:
 def coarse_cache_key(params: dict[str, str | None]) -> str:
     payload = {
         "period": params.get("period") or "week",
+        "timeframe": params.get("timeframe"),
         "year": params.get("year") or "2026",
         "site": params.get("site"),
         "regions": params.get("regions"),
+        "line": params.get("line"),
+        "department": params.get("department"),
+        "shift_filter": params.get("shift_filter"),
+        "date_from": params.get("date_from"),
+        "date_to": params.get("date_to"),
     }
     return f"metrics_v3_{json.dumps(payload, separators=(',', ':'))}"
 

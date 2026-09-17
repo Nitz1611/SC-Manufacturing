@@ -39,7 +39,17 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 .maint-filter-group { display: flex; flex-direction: column; gap: 5px; min-width: 118px; }
 .maint-filter-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
+.maint-date-slicer { min-width: 128px; }
+.maint-date-trigger {
+  display: flex;
+  align-items: center;
+  min-width: 128px;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
 .maint-date-input {
+  width: 100%;
   min-width: 128px;
   padding: 8px 12px;
   background: var(--white);
@@ -49,8 +59,16 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
   font-size: 13px;
   color: var(--text);
   transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s;
+  cursor: pointer;
 }
-.maint-date-input:hover { border-color: var(--blue-accent); transform: translateY(-1px); }
+.maint-date-input:hover,
+.maint-date-trigger:hover .maint-date-input { border-color: var(--blue-accent); transform: translateY(-1px); }
+.maint-date-input:focus {
+  outline: none;
+  border-color: var(--blue-accent);
+  box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.12);
+}
+.maint-date-filter.maint-hidden { display: none !important; }
 .maint-filter-bar .slicer-option {
   border: none;
   background: transparent;
