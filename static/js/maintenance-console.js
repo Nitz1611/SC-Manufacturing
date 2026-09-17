@@ -305,6 +305,9 @@
     $$('.maint-filter-bar .slicer.open').forEach(function (s) {
       s.classList.remove('open');
     });
+    $$('.maint-filter-bar .maint-filter-group-open').forEach(function (g) {
+      g.classList.remove('maint-filter-group-open');
+    });
   }
 
   function populateSlicerOptions(id, options, currentValue, multi) {
@@ -422,6 +425,7 @@
       closeAllSlicers();
       if (!wasOpen) {
         slicer.classList.add('open');
+        group.classList.add('maint-filter-group-open');
         if (searchable) {
           var input = panel.querySelector('.slicer-search');
           if (input) {

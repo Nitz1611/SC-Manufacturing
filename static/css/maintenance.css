@@ -30,6 +30,7 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
   position: sticky;
   top: var(--header-h);
   z-index: 100;
+  overflow: visible;
 }
 
 .maint-filter-row-span {
@@ -79,8 +80,10 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 }
 
 .maint-filter-bar .filter-group { position: relative; z-index: 1; }
-.maint-filter-bar .slicer.open { z-index: 520; }
-.maint-filter-bar .slicer-panel { z-index: 530; min-width: 260px; }
+.maint-filter-bar .filter-group.maint-filter-group-open,
+.maint-filter-bar .filter-group:has(.slicer.open) { z-index: 620; }
+.maint-filter-bar .slicer.open { z-index: 1; }
+.maint-filter-bar .slicer-panel { z-index: 2; min-width: 260px; }
 
 .maint-filter-bar .slicer-options { max-height: 240px; }
 

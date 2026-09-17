@@ -95,12 +95,21 @@ body:not(.app-ready) .app-bg-glow { display: none !important; }
   height: 56px;
   margin: 0 auto 20px;
   border-radius: 50%;
-  background: conic-gradient(from 210deg, #0066cc, #00a896, #004080, #0066cc);
+  background: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   box-shadow: 0 0 30px rgba(0, 102, 204, 0.55);
-  animation: bootLogoSpin 8s linear infinite;
+}
+
+.boot-logo-img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  object-position: center;
+  transform: scale(2.05);
+  transform-origin: center center;
 }
 
 .boot-logo-inner {
