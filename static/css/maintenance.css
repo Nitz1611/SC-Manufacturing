@@ -1,5 +1,19 @@
 /* Maintenance console — extends console.css theme */
 
+body.mode-maintenance #filter-bar { display: none !important; }
+body.mode-maintenance #maint-filter-bar { display: grid !important; }
+body.mode-maintenance #page-maintenance { display: block !important; }
+body.mode-maintenance #page-kpi-overview { display: none !important; }
+
+body.mode-kpi-overview #maint-filter-bar { display: none !important; }
+body.mode-kpi-overview #filter-bar { display: flex !important; }
+body.mode-kpi-overview #page-maintenance { display: none !important; }
+body.mode-kpi-overview #page-kpi-overview { display: block !important; }
+body.mode-kpi-overview #app-banner.has-subnav,
+body.mode-kpi-overview .app-banner.has-subnav { --header-h: calc(var(--header-brand-h) + var(--top-nav-secondary-h)); }
+body.mode-kpi-overview #top-nav-secondary.visible,
+body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
+
 .maint-hidden { display: none !important; }
 
 .maint-root { padding: 0 0 80px; }

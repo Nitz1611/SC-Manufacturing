@@ -43,6 +43,7 @@
   /** Original console-engine navigators — captured before wrapper patch */
   var engineSwitchPage = null;
   var engineSwitchKpiTab = null;
+  var engineEnterKpiOverview = null;
 
   var state = {
     page: 'maintenance',
@@ -96,6 +97,26 @@
     }
   }
 
+  function normalizeRegionList(value) {
+    if (!value || value === 'All') return [];
+    if (Array.isArray(value)) {
+      return value.map(function (r) {
+        return String(r).trim();
+      }).filter(Boolean);
+    }
+    return String(value)
+      .split(',')
+      .map(function (r) {
+        return r.trim();
+      })
+      .filter(Boolean);
+  }
+
+  function regionFilterLabel(value) {
+    var list = normalizeRegionList(value);
+    return list.length ? list.join(', ') : 'All';
+  }
+
   function syncFromConsoleFilters() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state || !mc.state.filters) return;
@@ -103,8 +124,7 @@
     if (f.timeframe) state.filters.timeframe = String(f.timeframe).toLowerCase() === 'fy' ? 'FY' : f.timeframe;
     if (f.year) state.filters.year = f.year;
     if (f.site) state.filters.site = f.site;
-    if (Array.isArray(f.region) && f.region.length) state.filters.region = f.region.join(', ');
-    else if (f.region) state.filters.region = f.region;
+    state.filters.region = regionFilterLabel(f.region);
   }
 
   function syncToConsoleFilters() {
@@ -113,13 +133,7 @@
     mc.state.filters.timeframe = state.filters.timeframe === 'ptd' ? 'ptd' : state.filters.timeframe;
     mc.state.filters.year = state.filters.year;
     mc.state.filters.site = state.filters.site;
-    if (state.filters.region && state.filters.region !== 'All') {
-      mc.state.filters.region = state.filters.region.split(',').map(function (r) {
-        return r.trim();
-      });
-    } else {
-      mc.state.filters.region = [];
-    }
+    mc.state.filters.region = normalizeRegionList(state.filters.region);
   }
 
   function buildFilterPayload() {
@@ -128,7 +142,8 @@
       timeframe: f.timeframe,
       year: f.year === 'All' ? null : f.year,
       site: f.site === 'All' ? null : f.site,
-      region: f.region === 'All' ? null : f.region,
+      region:
+        normalizeRegionList(f.region).join(',') || null,
       department: f.department === 'All' ? null : f.department,
       line: f.line === 'All' ? null : f.line,
       shift: f.shift === 'All' ? null : f.shift,
@@ -325,7 +340,7 @@
       '<span class="maint-tooltip">Drill Down</span>' +
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.9V17h8v-2.1A7 7 0 0 0 12 2z"/></svg>' +
       '</button>' +
-      '<button type="button" class="maint-action-btn round" data-action="kpi-overview" aria-label="KPI Overview">' +
+      '<button type="button" class="maint-action-btn round" data-action="kpi-overview" aria-label="KPI Overview" onclick="window.__goKpiOverview && window.__goKpiOverview(event)">' +
       '<span class="maint-tooltip">KPI Overview</span>' +
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>' +
       '</button>' +
@@ -588,48 +603,38 @@
     });
   }
 
-  function enforceKpiOverviewVisible() {
-    document.querySelectorAll('.page-panel').forEach(function (panel) {
-      panel.classList.remove('active', 'leaving');
-    });
-    var kpiPage = document.getElementById('page-kpi-overview');
-    if (kpiPage) kpiPage.classList.add('active');
-
-    var filterBar = document.getElementById('filter-bar');
-    var maintFilter = document.getElementById('maint-filter-bar');
-    var banner = document.getElementById('app-banner');
-    var subnav = document.getElementById('top-nav-secondary');
-    if (filterBar) filterBar.classList.remove('maint-hidden');
-    if (maintFilter) maintFilter.classList.add('maint-hidden');
-    if (banner) banner.classList.add('has-subnav');
-    if (subnav) subnav.classList.add('visible');
-
-    var ctxBar = document.getElementById('filter-context-bar');
-    var statusBar = document.getElementById('data-status-bar');
-    if (ctxBar) ctxBar.classList.remove('maint-hidden');
-    if (statusBar) statusBar.classList.remove('maint-hidden');
-
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  function handleKnowMoreAction(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn || !btn.closest('.maint-know-actions')) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    var action = btn.getAttribute('data-action');
+    if (action === 'my-report') openMyReport();
+    else if (action === 'drill-down') openDrillDown();
+    else if (action === 'kpi-overview') goToKpiOverview();
+    return true;
   }
 
   function goToKpiOverview() {
     var mc = window.ManufacturingConsole;
     if (!mc) return;
 
-    syncToConsoleFilters();
-    state.page = 'kpi-overview';
-    updateShellForPage('kpi-overview');
-    enforceKpiOverviewVisible();
-
-    if (engineSwitchPage) {
-      engineSwitchPage('kpi-overview', true);
-    } else if (mc.switchPage) {
-      mc.switchPage('kpi-overview', true);
+    try {
+      syncToConsoleFilters();
+    } catch (err) {
+      console.warn('[maintenance] filter sync skipped:', err);
     }
-    if (engineSwitchKpiTab) {
+
+    state.page = 'kpi-overview';
+    document.body.classList.remove('mode-maintenance');
+    document.body.classList.add('mode-kpi-overview');
+    updateShellForPage('kpi-overview');
+
+    if (typeof engineEnterKpiOverview === 'function') {
+      engineEnterKpiOverview(true);
+    } else if (engineSwitchPage && engineSwitchKpiTab) {
+      engineSwitchPage('kpi-overview', true);
       engineSwitchKpiTab('overview', true);
-    } else if (mc.switchKpiTab) {
-      mc.switchKpiTab('overview', true);
     }
 
     reflowDashboardCharts();
@@ -1097,6 +1102,9 @@
     var isMaint = page === 'maintenance';
     var isKpi = page === 'kpi-overview';
 
+    document.body.classList.toggle('mode-maintenance', isMaint);
+    document.body.classList.toggle('mode-kpi-overview', isKpi);
+
     filterBar && filterBar.classList.toggle('maint-hidden', isMaint);
     maintFilter && maintFilter.classList.toggle('maint-hidden', !isMaint);
     banner && banner.classList.toggle('has-subnav', isKpi);
@@ -1149,19 +1157,15 @@
   }
 
   function bindGlobalEvents() {
+    if (!document.body.dataset.maintEventsBound) {
+      document.body.dataset.maintEventsBound = '1';
+      document.addEventListener('click', handleKnowMoreAction, true);
+    }
+
     var root = document.getElementById('maint-root');
     if (root && !root.dataset.delegateBound) {
       root.dataset.delegateBound = '1';
-      root.addEventListener('click', function (e) {
-        var btn = e.target.closest('.maint-know-actions [data-action]');
-        if (!btn) return;
-        e.preventDefault();
-        e.stopPropagation();
-        var action = btn.getAttribute('data-action');
-        if (action === 'my-report') openMyReport();
-        else if (action === 'drill-down') openDrillDown();
-        else if (action === 'kpi-overview') goToKpiOverview();
-      });
+      root.addEventListener('click', handleKnowMoreAction);
     }
 
     $('#maint-report-close') &&
@@ -1191,6 +1195,7 @@
     var mc = window.ManufacturingConsole;
     engineSwitchPage = mc.switchPage;
     engineSwitchKpiTab = mc.switchKpiTab;
+    engineEnterKpiOverview = mc.enterKpiOverview || null;
 
     mc.switchPage = function (page, force) {
       if (PRIMARY_NAV.some(function (item) { return item.id === page; })) {
@@ -1221,9 +1226,18 @@
     init();
   }
 
+  window.__goKpiOverview = function (e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    goToKpiOverview();
+  };
+
   window.MaintenanceConsole = {
     refresh: fetchMaintenanceData,
     state: state,
     switchPage: switchSectionPage,
+    goToKpiOverview: goToKpiOverview,
   };
 })();
