@@ -163,6 +163,14 @@ def _build_filter_options(metrics: MetricsPayload) -> dict[str, Any]:
         "years": fo.get("years") or [],
         "lines": line_keys,
         "site_regions": fo.get("site_regions") or {},
+        "shifts": sorted(
+            {
+                str(s.get("shift"))
+                for s in (metrics.get("shift_comparison") or [])
+                if s.get("shift")
+            }
+        ),
+        "departments": sorted((metrics.get("category_by_period") or {}).keys()),
     }
 
 

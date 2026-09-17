@@ -37,14 +37,22 @@
     custom: 'Prior Range',
   };
 
-  var BAR_COLORS = ['#7c3aed', '#2563eb', '#ec4899', '#f59e0b', '#14b8a6', '#8b5cf6'];
-  var REPORT_BAR_GRADIENTS = [
-    ['#7c3aed', '#a78bfa'],
-    ['#2563eb', '#60a5fa'],
-    ['#db2777', '#f472b6'],
-    ['#ea580c', '#fb923c'],
-    ['#0d9488', '#2dd4bf'],
+  /* KPI Overview chart palette — keep identical across Maintenance + KPI Overview */
+  var CHART_COLORS = [
+    '#002855',
+    '#004080',
+    '#0066cc',
+    '#0088cc',
+    '#00a896',
+    '#5c6bc0',
+    '#9e9e9e',
+    '#ffb74d',
+    '#ff9800',
+    '#e53935',
   ];
+  var DONUT_DT_COLOR = '#e53935';
+  var DONUT_TRACK_COLOR = '#e8eef5';
+  var BAR_COLORS = CHART_COLORS;
   var DT_TARGET = 4.5;
   var SCATTER_COLORS = { outlier: '#dc2626', normal: '#eab308' };
   var REGION_OPTIONS = [
@@ -204,6 +212,9 @@
         applyFilterOptions(data.filter_options || {});
         renderMaintenance();
         fetchAiInsights();
+        if ($('#maint-report-modal') && $('#maint-report-modal').classList.contains('open')) {
+          renderReportModal();
+        }
       })
       .catch(function (err) {
         console.error('[maintenance]', err);
@@ -314,6 +325,10 @@
     } else {
       state.filters[id] = value;
       updateSlicerDisplay(id, value);
+      if (id === 'site') {
+        state.filters.line = 'All';
+        updateSlicerDisplay('line', 'All');
+      }
     }
     closeAllSlicers();
     onFilterChange();
@@ -327,7 +342,7 @@
     );
   }
 
-  function createSlicerGroup(id, label, options, currentValue, multi) {
+  function createSlicerGroup(id, label, options, currentValue, multi, searchable) {
     var group = document.createElement('div');
     group.className = 'filter-group maint-filter-group';
     group.innerHTML = '<span class="filter-label maint-filter-label">' + esc(label) + '</span>';
@@ -346,6 +361,24 @@
 
     var panel = document.createElement('div');
     panel.className = 'slicer-panel';
+
+    if (searchable) {
+      var searchWrap = document.createElement('div');
+      searchWrap.className = 'slicer-search-wrap';
+      var searchInput = document.createElement('input');
+      searchInput.type = 'text';
+      searchInput.className = 'slicer-search';
+      searchInput.placeholder = 'Search…';
+      searchInput.addEventListener('input', function (e) {
+        filterSlicerOptions(id, e.target.value);
+      });
+      searchInput.addEventListener('click', function (e) {
+        e.stopPropagation();
+      });
+      searchWrap.appendChild(searchInput);
+      panel.appendChild(searchWrap);
+    }
+
     var optsWrap = document.createElement('div');
     optsWrap.className = 'slicer-options';
     optsWrap.dataset.slicerOptions = id;
@@ -358,7 +391,19 @@
       e.stopPropagation();
       var wasOpen = slicer.classList.contains('open');
       closeAllSlicers();
-      if (!wasOpen) slicer.classList.add('open');
+      if (!wasOpen) {
+        slicer.classList.add('open');
+        if (searchable) {
+          var input = panel.querySelector('.slicer-search');
+          if (input) {
+            input.value = '';
+            filterSlicerOptions(id, '');
+            setTimeout(function () {
+              input.focus();
+            }, 50);
+          }
+        }
+      }
     });
 
     populateSlicerOptions(id, options, currentValue, multi);
@@ -392,21 +437,131 @@
       updateSlicerDisplay('site', state.filters.site);
     }
     if (opts.lines && opts.lines.length) {
-      var lineOpts = [{ value: 'All', label: 'All Lines' }].concat(
-        opts.lines.map(function (l) {
-          return { value: l, label: l };
-        })
-      );
-      populateSlicerOptions('line', lineOpts, state.filters.line, false);
-      updateSlicerDisplay('line', state.filters.line);
+      updateLineSlicerOptions(opts.lines);
     }
     if (opts.years && opts.years.length) {
       var yearOpts = opts.years.map(function (y) {
-        return { value: y, label: y };
+        return { value: String(y), label: String(y) };
       });
       populateSlicerOptions('year', yearOpts, state.filters.year, false);
       updateSlicerDisplay('year', state.filters.year);
     }
+    if (opts.shifts && opts.shifts.length) {
+      var shiftOpts = [{ value: 'All', label: 'All Shifts' }].concat(
+        opts.shifts.map(function (s) {
+          return { value: s, label: s };
+        })
+      );
+      populateSlicerOptions('shift', shiftOpts, state.filters.shift, false);
+      updateSlicerDisplay('shift', state.filters.shift);
+    }
+    if (opts.departments && opts.departments.length) {
+      var deptOpts = [{ value: 'All', label: 'All Departments' }].concat(
+        opts.departments.map(function (d) {
+          return { value: d, label: d };
+        })
+      );
+      populateSlicerOptions('department', deptOpts, state.filters.department, false);
+      updateSlicerDisplay('department', state.filters.department);
+    }
+  }
+
+  function updateLineSlicerOptions(lines) {
+    var lineOpts = [{ value: 'All', label: 'All Lines' }].concat(
+      lines.map(function (l) {
+        return { value: l, label: l };
+      })
+    );
+    populateSlicerOptions('line', lineOpts, state.filters.line, false);
+    updateSlicerDisplay('line', state.filters.line);
+  }
+
+  function filterSlicerOptions(id, query) {
+    var wrap = $('.maint-filter-bar .slicer-options[data-slicer-options="' + id + '"]');
+    if (!wrap) return;
+    query = String(query || '').toLowerCase();
+    wrap.querySelectorAll('.slicer-option').forEach(function (btn) {
+      var text = btn.textContent.toLowerCase();
+      btn.style.display = !query || text.indexOf(query) >= 0 ? '' : 'none';
+    });
+  }
+
+  function renderRankedExposureTable(rows, options) {
+    options = options || {};
+    if (!rows || !rows.length) {
+      return '<p class="maint-empty-note">No data for the current filter selection.</p>';
+    }
+    var valueKey = options.valueKey || 'dt_pct';
+    var nameKey = options.nameKey || 'site';
+    var maxVal = options.maxValue;
+    if (!maxVal) {
+      maxVal = Math.max.apply(
+        null,
+        rows.map(function (r) {
+          return Number(r[valueKey]) || 0;
+        }).concat([DT_TARGET, 12])
+      );
+    }
+    var targetTick = Math.min(100, (DT_TARGET / maxVal) * 100);
+    var tbody = rows
+      .map(function (row, i) {
+        var val = Number(row[valueKey]) || 0;
+        var width = Math.max(4, (val / maxVal) * 100);
+        var color = CHART_COLORS[i % CHART_COLORS.length];
+        var detail = options.detailFn ? options.detailFn(row) : '';
+        return (
+          '<tr>' +
+          '<td class="reason-rank-col">' +
+          (i + 1) +
+          '</td>' +
+          '<td class="reason-name-col">' +
+          esc(row[nameKey]) +
+          (detail ? '<div class="maint-ranked-detail">' + esc(detail) + '</div>' : '') +
+          '</td>' +
+          '<td class="reason-bar-cell">' +
+          '<div class="reason-bar-track">' +
+          '<span class="maint-target-tick" style="left:' +
+          targetTick +
+          '%" title="Target ' +
+          DT_TARGET.toFixed(2) +
+          '%"></span>' +
+          '<div class="reason-bar" style="width:' +
+          width +
+          '%;background-color:' +
+          color +
+          '"></div></div>' +
+          (options.barValueFn
+            ? '<span class="reason-hours-val">' + esc(options.barValueFn(row)) + '</span>'
+            : '') +
+          '</td>' +
+          '<td class="reason-pct-col">' +
+          val.toFixed(2) +
+          ' %</td></tr>'
+        );
+      })
+      .join('');
+
+    return (
+      '<div class="maint-ranked-table-wrap">' +
+      '<div class="table-scroll reason-table-scroll maint-ranked-scroll">' +
+      '<table class="data-table reason-table maint-ranked-table">' +
+      '<thead><tr>' +
+      '<th class="reason-rank-col">#</th>' +
+      '<th class="reason-name-col">' +
+      esc(options.nameHeader || 'Site') +
+      '</th>' +
+      '<th class="reason-bar-col">' +
+      esc(options.barHeader || 'Unplanned DT Exposure') +
+      '</th>' +
+      '<th class="reason-pct-col">' +
+      esc(options.pctHeader || 'Unplanned DT %') +
+      '</th></tr></thead><tbody>' +
+      tbody +
+      '</tbody></table></div>' +
+      '<div class="maint-target-legend">FLNA Target: ' +
+      DT_TARGET.toFixed(2) +
+      '% <span class="maint-target-swatch"></span></div></div>'
+    );
   }
 
   function renderLoading() {
@@ -1009,13 +1164,38 @@
     requestAnimationFrame(function () {
       if (state.reportTab === 'snapshot') {
         drawDonut('report-donut', kpi);
-        drawSitesBar('report-sites-bar', p.sites_at_risk);
-      } else if (state.reportTab === 'sites') {
-        drawSitesBar('report-sites-bar2', p.sites_at_risk);
-        drawLinesBar('report-lines-bar', p.site_lines);
       } else if (state.reportTab === 'drivers') {
         drawDriversDonut('report-drivers-donut', p.downtime_drivers);
       }
+    });
+  }
+
+  function siteTableDetail(row) {
+    return (
+      fmtNum(row.hours) +
+      ' Unplanned DT Hrs / ' +
+      fmtNum(row.sched_hrs) +
+      ' Sched Hrs'
+    );
+  }
+
+  function siteExposureTable(sites) {
+    return renderRankedExposureTable((sites || []).slice(0, 5), {
+      nameHeader: 'Site',
+      barHeader: 'Unplanned DT Exposure Rate',
+      detailFn: siteTableDetail,
+      barValueFn: function (row) {
+        return fmtNum(row.hours) + ' h';
+      },
+    });
+  }
+
+  function lineExposureTable(lines) {
+    return renderRankedExposureTable((lines || []).slice(0, 5), {
+      nameKey: 'line',
+      nameHeader: 'Line',
+      barHeader: 'Unplanned DT Rate',
+      maxValue: 70,
     });
   }
 
@@ -1053,20 +1233,28 @@
       reportStatCard('Unplanned Downtime Hours', dtHrs.replace(' h', ''), REPORT_ICONS.downtime) +
       reportStatCard('Percentage Downtime', pct, REPORT_ICONS.percent) +
       '</div></div>' +
-      '<div class="maint-bar-section"><h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
-      '<div class="maint-hbar-chart"><canvas id="report-sites-bar"></canvas></div></div>'
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
+      siteExposureTable(p.sites_at_risk) +
+      '</div>'
     );
   }
 
   function renderReportSites(p) {
     var topSite = (p.sites_at_risk && p.sites_at_risk[0] && p.sites_at_risk[0].site) || 'Top Site';
     return (
-      '<div class="maint-bar-section"><h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
-      '<div class="maint-hbar-chart"><canvas id="report-sites-bar2"></canvas></div></div>' +
-      '<div class="maint-bar-section"><h4>' +
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
+      siteExposureTable(p.sites_at_risk) +
+      '</div>' +
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<div class="maint-report-section-head" style="margin-bottom:10px">' +
+      '<h4 style="margin:0">' +
       esc(topSite) +
-      ' — Top 5 Lines by Unplanned Downtime Hours <span class="maint-severity critical" style="float:right">HIGH LOSS</span></h4>' +
-      '<div class="maint-hbar-chart"><canvas id="report-lines-bar"></canvas></div></div>'
+      ' — Top 5 Lines by Unplanned Downtime Hours</h4>' +
+      '<span class="maint-severity critical">HIGH LOSS</span></div>' +
+      lineExposureTable(p.site_lines) +
+      '</div>'
     );
   }
 
@@ -1079,10 +1267,11 @@
       .join('');
     return (
       '<div class="maint-report-section-head"><h4>Total Unplanned Downtime %</h4></div>' +
-      '<div class="maint-bar-section"><div class="maint-drivers-layout">' +
-      '<div class="maint-donut-wrap"><canvas id="report-drivers-donut"></canvas></div>' +
-      '<div class="maint-drivers-legend" id="report-drivers-legend"></div></div></div>' +
-      '<div class="maint-insights-panel"><h4>AI Insight</h4><ul>' +
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<div class="donut-chart-layout maint-drivers-donut-layout">' +
+      '<div class="donut-canvas-wrap maint-donut-wrap"><canvas id="report-drivers-donut"></canvas></div>' +
+      '<div class="donut-legend maint-drivers-legend" id="report-drivers-legend"></div></div></div>' +
+      '<div class="maint-insights-panel maint-insights-panel-compact"><h4>AI Insight</h4><ul>' +
       bullets +
       '</ul></div>'
     );
@@ -1101,132 +1290,20 @@
         datasets: [
           {
             data: [val, rest],
-            backgroundColor: ['#dc2626', '#eef2f7'],
+            backgroundColor: [DONUT_DT_COLOR, DONUT_TRACK_COLOR],
             borderWidth: 0,
-            spacing: 2,
-            borderRadius: 6,
-            hoverOffset: 6,
+            spacing: 3,
+            borderRadius: 4,
+            hoverOffset: 8,
           },
         ],
       },
       options: Object.assign({}, modernChartBase(), {
-        cutout: '72%',
-        layout: { padding: 6 },
+        cutout: '68%',
+        layout: { padding: 8 },
         plugins: Object.assign({}, modernChartBase().plugins, { tooltip: { enabled: false } }),
       }),
       plugins: [donutCenterPlugin(val.toFixed(1) + '%', 'Unplanned DT')],
-    });
-  }
-
-  function drawSitesBar(id, sites) {
-    destroyChart(id);
-    var canvas = document.getElementById(id);
-    if (!canvas || typeof Chart === 'undefined' || !sites || !sites.length) return;
-    var rows = sites.slice(0, 5);
-    var ctx = canvas.getContext('2d');
-    var bg = rows.map(function (_, i) {
-      var pair = REPORT_BAR_GRADIENTS[i % REPORT_BAR_GRADIENTS.length];
-      return function (context) {
-        var chart = context.chart;
-        var area = chart.chartArea;
-        if (!area) return pair[0];
-        return barGradient(chart.ctx, area, pair);
-      };
-    });
-    state.charts[id] = new Chart(canvas, {
-      type: 'bar',
-      data: {
-        labels: rows.map(function (s) {
-          return s.site;
-        }),
-        datasets: [
-          {
-            data: rows.map(function (s) {
-              return s.dt_pct;
-            }),
-            backgroundColor: bg,
-            borderRadius: { topRight: 8, bottomRight: 8 },
-            borderSkipped: false,
-            barThickness: 28,
-          },
-        ],
-      },
-      options: Object.assign({}, modernChartBase(), {
-        indexAxis: 'y',
-        scales: {
-          x: {
-            max: Math.max(35, Math.max.apply(null, rows.map(function (s) { return s.dt_pct; })) + 5),
-            grid: { color: 'rgba(0,40,85,0.06)', drawBorder: false },
-            ticks: { font: { size: 11, weight: '500' }, color: '#64748b' },
-            title: { display: true, text: 'Unplanned Downtime Rate (%)', font: { size: 11, weight: '600' } },
-          },
-          y: {
-            grid: { display: false },
-            ticks: { font: { size: 12, weight: '700' }, color: '#1a2b4a' },
-          },
-        },
-      }),
-      plugins: [
-        targetLinePlugin(DT_TARGET, 'FLNA Target: ' + DT_TARGET.toFixed(2) + '%'),
-        hbarValueLabelsPlugin(rows, function (row) {
-          return (
-            row.dt_pct.toFixed(2) +
-            '% (' +
-            fmtNum(row.hours) +
-            ' Unplanned DT Hrs / ' +
-            fmtNum(row.sched_hrs) +
-            ' Sched Hrs)'
-          );
-        }),
-      ],
-    });
-  }
-
-  function drawLinesBar(id, lines) {
-    destroyChart(id);
-    var canvas = document.getElementById(id);
-    if (!canvas || typeof Chart === 'undefined' || !lines || !lines.length) return;
-    var rows = lines.slice(0, 5);
-    state.charts[id] = new Chart(canvas, {
-      type: 'bar',
-      data: {
-        labels: rows.map(function (l) {
-          return l.line;
-        }),
-        datasets: [
-          {
-            data: rows.map(function (l) {
-              return l.dt_pct;
-            }),
-            backgroundColor: function (context) {
-              var chart = context.chart;
-              var area = chart.chartArea;
-              if (!area) return '#dc2626';
-              return barGradient(chart.ctx, area, ['#991b1b', '#f87171']);
-            },
-            borderRadius: { topRight: 8, bottomRight: 8 },
-            borderSkipped: false,
-            barThickness: 26,
-          },
-        ],
-      },
-      options: Object.assign({}, modernChartBase(), {
-        indexAxis: 'y',
-        scales: {
-          x: {
-            max: Math.max(70, Math.max.apply(null, rows.map(function (l) { return l.dt_pct; })) + 5),
-            grid: { color: 'rgba(0,40,85,0.06)', drawBorder: false },
-            ticks: { color: '#64748b' },
-            title: { display: true, text: 'Unplanned Downtime Rate (%)', font: { size: 11, weight: '600' } },
-          },
-          y: { grid: { display: false }, ticks: { font: { weight: '700' }, color: '#1a2b4a' } },
-        },
-      }),
-      plugins: [
-        hbarValueLabelsPlugin(rows, function (row) {
-          return row.dt_pct.toFixed(2) + '%';
-        }),
-      ],
     });
   }
 
@@ -1237,7 +1314,7 @@
     var entries = (drivers || []).slice(0, 6);
     if (!entries.length) return;
     var colors = entries.map(function (_, i) {
-      return BAR_COLORS[i % BAR_COLORS.length];
+      return CHART_COLORS[i % CHART_COLORS.length];
     });
     state.charts[id] = new Chart(canvas, {
       type: 'doughnut',
@@ -1259,7 +1336,7 @@
         ],
       },
       options: Object.assign({}, modernChartBase(), {
-        cutout: '62%',
+        cutout: '68%',
         layout: { padding: 8 },
         plugins: Object.assign({}, modernChartBase().plugins, {
           tooltip: {
@@ -1277,14 +1354,14 @@
       leg.innerHTML = entries
         .map(function (d, i) {
           return (
-            '<div class="maint-drivers-legend-item">' +
-            '<span class="maint-drivers-legend-swatch" style="background:' +
+            '<div class="donut-legend-item">' +
+            '<span class="donut-legend-swatch" style="background:' +
             colors[i] +
             '"></span>' +
-            '<span>' +
+            '<span class="donut-legend-label">' +
             esc(d.reason) +
             '</span>' +
-            '<span class="maint-drivers-legend-value">' +
+            '<span class="donut-legend-value">' +
             d.pct.toFixed(1) +
             '%</span></div>'
           );
@@ -1390,7 +1467,8 @@
         'Site (Plant)',
         [{ value: 'All', label: 'All Plants' }],
         state.filters.site,
-        false
+        false,
+        true
       )
     );
     bar.appendChild(
@@ -1402,20 +1480,27 @@
         'Department',
         [{ value: 'All', label: 'All Departments' }],
         state.filters.department,
-        false
+        false,
+        true
       )
     );
     bar.appendChild(
-      createSlicerGroup('line', 'Line', [{ value: 'All', label: 'All Lines' }], state.filters.line, false)
+      createSlicerGroup(
+        'line',
+        'Line',
+        [{ value: 'All', label: 'All Lines' }],
+        state.filters.line,
+        false,
+        true
+      )
     );
     bar.appendChild(
       createSlicerGroup(
         'shift',
         'Shift',
-        SHIFT_OPTIONS.map(function (s) {
-          return { value: s, label: s };
-        }),
+        [{ value: 'All', label: 'All Shifts' }],
         state.filters.shift,
+        false,
         false
       )
     );
