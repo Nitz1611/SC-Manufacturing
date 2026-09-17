@@ -40,6 +40,10 @@
   var BAR_COLORS = ['#2563eb', '#ec4899', '#38bdf8', '#10b981', '#f59e0b', '#8b5cf6'];
   var SCATTER_COLORS = { outlier: '#dc2626', normal: '#eab308' };
 
+  /** Original console-engine navigators — captured before wrapper patch */
+  var engineSwitchPage = null;
+  var engineSwitchKpiTab = null;
+
   var state = {
     page: 'maintenance',
     filters: {
@@ -549,16 +553,6 @@
   }
 
   function bindMaintenanceEvents() {
-    $$('.maint-know-actions [data-action]').forEach(function (btn) {
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        var action = btn.getAttribute('data-action');
-        if (action === 'my-report') openMyReport();
-        else if (action === 'drill-down') openDrillDown();
-        else if (action === 'kpi-overview') goToKpiOverview();
-      });
-    });
-
     $$('.maint-tab[data-tab]').forEach(function (tab) {
       tab.addEventListener('click', function () {
         state.insightTab = tab.getAttribute('data-tab');
@@ -585,22 +579,60 @@
     });
   }
 
-  function goToKpiOverview() {
-    syncToConsoleFilters();
-    updateShellForPage('kpi-overview');
-    var mc = window.ManufacturingConsole;
-    if (mc && mc.switchPage) {
-      mc.switchPage('kpi-overview', true);
-    }
-    if (mc && mc.switchKpiTab) {
-      mc.switchKpiTab('overview', true);
-    }
+  function reflowDashboardCharts() {
     requestAnimationFrame(function () {
       window.dispatchEvent(new Event('resize'));
       document.querySelectorAll('canvas').forEach(function (el) {
         el.dispatchEvent(new Event('chart:reflow', { bubbles: true }));
       });
     });
+  }
+
+  function enforceKpiOverviewVisible() {
+    document.querySelectorAll('.page-panel').forEach(function (panel) {
+      panel.classList.remove('active', 'leaving');
+    });
+    var kpiPage = document.getElementById('page-kpi-overview');
+    if (kpiPage) kpiPage.classList.add('active');
+
+    var filterBar = document.getElementById('filter-bar');
+    var maintFilter = document.getElementById('maint-filter-bar');
+    var banner = document.getElementById('app-banner');
+    var subnav = document.getElementById('top-nav-secondary');
+    if (filterBar) filterBar.classList.remove('maint-hidden');
+    if (maintFilter) maintFilter.classList.add('maint-hidden');
+    if (banner) banner.classList.add('has-subnav');
+    if (subnav) subnav.classList.add('visible');
+
+    var ctxBar = document.getElementById('filter-context-bar');
+    var statusBar = document.getElementById('data-status-bar');
+    if (ctxBar) ctxBar.classList.remove('maint-hidden');
+    if (statusBar) statusBar.classList.remove('maint-hidden');
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function goToKpiOverview() {
+    var mc = window.ManufacturingConsole;
+    if (!mc) return;
+
+    syncToConsoleFilters();
+    state.page = 'kpi-overview';
+    updateShellForPage('kpi-overview');
+    enforceKpiOverviewVisible();
+
+    if (engineSwitchPage) {
+      engineSwitchPage('kpi-overview', true);
+    } else if (mc.switchPage) {
+      mc.switchPage('kpi-overview', true);
+    }
+    if (engineSwitchKpiTab) {
+      engineSwitchKpiTab('overview', true);
+    } else if (mc.switchKpiTab) {
+      mc.switchKpiTab('overview', true);
+    }
+
+    reflowDashboardCharts();
   }
 
   function openMyReport() {
@@ -1117,6 +1149,21 @@
   }
 
   function bindGlobalEvents() {
+    var root = document.getElementById('maint-root');
+    if (root && !root.dataset.delegateBound) {
+      root.dataset.delegateBound = '1';
+      root.addEventListener('click', function (e) {
+        var btn = e.target.closest('.maint-know-actions [data-action]');
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var action = btn.getAttribute('data-action');
+        if (action === 'my-report') openMyReport();
+        else if (action === 'drill-down') openDrillDown();
+        else if (action === 'kpi-overview') goToKpiOverview();
+      });
+    }
+
     $('#maint-report-close') &&
       $('#maint-report-close').addEventListener('click', closeMyReport);
     $('#maint-report-modal') &&
@@ -1142,25 +1189,26 @@
     bindGlobalEvents();
 
     var mc = window.ManufacturingConsole;
-    var origSwitch = mc.switchPage;
-    var origSwitchKpiTab = mc.switchKpiTab;
+    engineSwitchPage = mc.switchPage;
+    engineSwitchKpiTab = mc.switchKpiTab;
+
     mc.switchPage = function (page, force) {
-      if (page === 'kpi-overview') {
-        updateShellForPage('kpi-overview');
-        return origSwitch.call(mc, page, force);
-      }
       if (PRIMARY_NAV.some(function (item) { return item.id === page; })) {
         updateShellForPage(page);
         if (page === 'maintenance') fetchMaintenanceData();
         return;
       }
-      return origSwitch.call(mc, page, force);
+      if (page === 'kpi-overview') {
+        goToKpiOverview();
+        return;
+      }
+      return engineSwitchPage.call(mc, page, force);
     };
     mc.switchKpiTab = function (tab, force) {
       if (state.page === 'kpi-overview' || mc.state.page === 'kpi-overview') {
         updateShellForPage('kpi-overview');
       }
-      return origSwitchKpiTab.call(mc, tab, force);
+      return engineSwitchKpiTab.call(mc, tab, force);
     };
 
     updateShellForPage('maintenance');
