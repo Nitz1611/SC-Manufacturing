@@ -204,6 +204,7 @@
         if (data.error) throw new Error(data.error);
         state.payload = data;
         applyFilterOptions(data.filter_options || {});
+        updateDateFilterVisibility();
         renderMaintenance();
         fetchAiInsights();
         if ($('#maint-report-modal') && $('#maint-report-modal').classList.contains('open')) {
@@ -491,6 +492,7 @@
       populateSlicerOptions('department', deptOpts, state.filters.department, false);
       updateSlicerDisplay('department', state.filters.department);
     }
+    updateDateFilterVisibility();
   }
 
   function updateLineSlicerOptions(lines) {
