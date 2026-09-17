@@ -586,13 +586,21 @@
   }
 
   function goToKpiOverview() {
-    switchSectionPage('kpi-overview');
+    syncToConsoleFilters();
+    updateShellForPage('kpi-overview');
     var mc = window.ManufacturingConsole;
     if (mc && mc.switchPage) {
       mc.switchPage('kpi-overview', true);
-      if (mc.switchKpiTab) mc.switchKpiTab('overview', true);
     }
-    updateShellForPage('kpi-overview');
+    if (mc && mc.switchKpiTab) {
+      mc.switchKpiTab('overview', true);
+    }
+    requestAnimationFrame(function () {
+      window.dispatchEvent(new Event('resize'));
+      document.querySelectorAll('canvas').forEach(function (el) {
+        el.dispatchEvent(new Event('chart:reflow', { bubbles: true }));
+      });
+    });
   }
 
   function openMyReport() {
@@ -1042,11 +1050,9 @@
   function updateNavActive() {
     $$('.top-nav-item').forEach(function (btn) {
       var page = btn.dataset.page;
-      var active =
-        page === state.page ||
-        (state.page === 'kpi-overview' && page === 'maintenance');
-      btn.classList.toggle('active', active && page !== 'kpi-overview');
-      if (page === 'maintenance') btn.classList.toggle('active', state.page === 'maintenance');
+      var active = page === state.page && state.page !== 'kpi-overview';
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
     });
   }
 
@@ -1065,6 +1071,8 @@
     subnav && subnav.classList.toggle('visible', isKpi);
     $('#filter-context-bar') && $('#filter-context-bar').classList.toggle('maint-hidden', isMaint);
     $('#data-status-bar') && $('#data-status-bar').classList.toggle('maint-hidden', isMaint);
+    var fab = $('#maint-fab');
+    if (fab) fab.classList.toggle('maint-hidden', page !== 'maintenance');
 
     $$('.page-panel').forEach(function (panel) {
       panel.classList.remove('active', 'leaving');
@@ -1135,22 +1143,28 @@
 
     var mc = window.ManufacturingConsole;
     var origSwitch = mc.switchPage;
+    var origSwitchKpiTab = mc.switchKpiTab;
     mc.switchPage = function (page, force) {
       if (page === 'kpi-overview') {
         updateShellForPage('kpi-overview');
         return origSwitch.call(mc, page, force);
       }
+      if (PRIMARY_NAV.some(function (item) { return item.id === page; })) {
+        updateShellForPage(page);
+        if (page === 'maintenance') fetchMaintenanceData();
+        return;
+      }
       return origSwitch.call(mc, page, force);
+    };
+    mc.switchKpiTab = function (tab, force) {
+      if (state.page === 'kpi-overview' || mc.state.page === 'kpi-overview') {
+        updateShellForPage('kpi-overview');
+      }
+      return origSwitchKpiTab.call(mc, tab, force);
     };
 
     updateShellForPage('maintenance');
-    var fab = $('#maint-fab');
-    if (fab) fab.classList.remove('maint-hidden');
     fetchMaintenanceData();
-
-    requestAnimationFrame(function () {
-      updateShellForPage('maintenance');
-    });
   }
 
   if (document.readyState === 'loading') {
