@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Manufacturing Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -92,5 +92,23 @@
   </div>
 
   <script src="{{ url_for('static', filename='js/console-engine.js') }}"></script>
+  <script>
+    (function () {
+      var timer;
+      function reflowCharts() {
+        document.querySelectorAll('canvas').forEach(function (el) {
+          el.dispatchEvent(new Event('chart:reflow', { bubbles: true }));
+        });
+        window.dispatchEvent(new Event('resize'));
+      }
+      window.addEventListener('resize', function () {
+        clearTimeout(timer);
+        timer = setTimeout(reflowCharts, 150);
+      });
+      window.addEventListener('orientationchange', function () {
+        setTimeout(reflowCharts, 300);
+      });
+    })();
+  </script>
 </body>
 </html>
