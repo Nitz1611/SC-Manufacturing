@@ -41,20 +41,22 @@ def get(key: str) -> dict | None:
     if not entry:
         return None
     age = time.time() - entry.get("ts", 0)
-    if age > CACHE_TTL:
-        print(f"[cache] EXPIRED — {int(age/3600)}h old (TTL={CACHE_TTL//3600}h)")
+    ttl = entry.get("ttl", CACHE_TTL)   # use per-entry TTL if stored, else global
+    if age > ttl:
+        print(f"[cache] EXPIRED — {int(age/3600)}h old (TTL={ttl//3600}h)")
         return None
     age_min = int(age / 60)
-    print(f"[cache] HIT — {age_min}m old, TTL={CACHE_TTL//3600}h, expires in {int((CACHE_TTL-age)/60)}m")
+    print(f"[cache] HIT — {age_min}m old, TTL={ttl//3600}h, expires in {int((ttl-age)/60)}m")
     return entry.get("data")
 
 
-def set(key: str, data: dict):
-    """Save data to cache with current timestamp."""
+def set(key: str, data: dict, ttl_hours: int = None):
+    """Save data to cache with current timestamp. ttl_hours overrides global TTL for this entry."""
     store = _load_file()
-    store[key] = {"data": data, "ts": time.time()}
+    ttl = (ttl_hours * 3600) if ttl_hours else CACHE_TTL
+    store[key] = {"data": data, "ts": time.time(), "ttl": ttl}
     _save_file(store)
-    print(f"[cache] SAVED — key={key[:40]}, TTL={CACHE_TTL//3600}h")
+    print(f"[cache] SAVED — key={key[:40]}, TTL={ttl//3600}h")
 
 
 def clear():

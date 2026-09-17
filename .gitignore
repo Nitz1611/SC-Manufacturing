@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+cache.json
+node_modules/
+client/
+package.json
+package-lock.json
+
+# Source used only to rebuild static/js/console-engine.js (optional)
+# scripts/console-entry.ts is kept; run scripts/bundle-console.sh if engine changes

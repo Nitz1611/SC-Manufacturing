@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Manufacturing Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/sravani-theme.css') }}" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+
+</head>
+<body>
+<div class="app-bg-glow" aria-hidden="true"></div>
+
+<!-- LOADER -->
+<div id="loader">
+  <div class="spin"></div>
+  <div style="text-align:center;">
+    <div style="font-size:20px;font-weight:700;color:#1A2B4A;">Contacting Supervisor Agent</div>
+    <div style="font-size:13px;color:#9CA3AF;margin-top:4px;" id="loader-sub">Querying your Genie metric views…</div>
+  </div>
+  <div class="loader-steps">
+    <div class="ls active" id="ls1"><span class="ls-icon">🔗</span>Connecting to Supervisor MAS endpoint</div>
+    <div class="ls pending" id="ls2"><span class="ls-icon">🔍</span>Supervisor querying Genie views</div>
+    <div class="ls pending" id="ls3"><span class="ls-icon">📊</span>Synthesising dashboard insights</div>
+    <div class="ls pending" id="ls4"><span class="ls-icon">✅</span>Rendering dashboard</div>
+  </div>
+</div>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="header-logo-wrap">
+      <img src="{{ url_for('static', filename='img/pepsico-logo.gif') }}" alt="PepsiCo" class="header-logo" decoding="async" />
+    </div>
+    <div class="logo-text"><span class="word-manufacturing">Manufacturing</span><span class="word-console">Console</span></div>
+  </div>
+  <nav class="nav">
+    <button class="nav-btn">Overview</button>
+    <button class="nav-btn">Execute</button>
+    <button class="nav-btn active">Maintenance</button>
+    <button class="nav-btn">Quality</button>
+    <button class="nav-btn">Planning</button>
+  </nav>
+  <div class="user-avatar" id="user-init">PM</div>
+</header>
+
+<!-- FILTER BAR -->
+<div class="filter-bar">
+  <div class="fg"><label>Show In</label><select id="f-unit"><option value="M">Millions (M)</option><option value="K">Thousands (K)</option></select></div>
+  <div class="fg"><label>Timeframe</label><select id="f-tf"><option>PTD</option><option>FY</option><option>QTD</option><option>MTD</option><option>WTD</option></select></div>
+  <div class="fg"><label>Year</label><select id="f-yr"><option>2026</option><option>2025</option></select></div>
+  <div class="fg"><label>Site</label><select id="f-site"><option value="All">All</option></select></div>
+  <div class="fg"><label>Region</label><select id="f-region"><option value="All">All</option></select></div>
+  <div class="fg"><label>Market</label><select id="f-market"><option value="All">All</option></select></div>
+  <div class="fg"><label>From date</label><input type="date" id="f-from"/></div>
+  <div class="fg"><label>To date</label><input type="date" id="f-to"/></div>
+  <div class="filter-actions">
+    <button class="btn-reset" onclick="resetFilters()">Reset</button>
+    <button class="btn-apply" onclick="applyFilters()">Apply</button>
+    <div id="status-pill" class="status-pill loading">● Loading</div>
+  </div>
+</div>
+
+<!-- KPI ROW -->
+<div class="kpi-row">
+  <div class="kpi-tile" id="tile-dt" onclick="openSidebar('downtime')">
+    <div class="kpi-tile-head">
+      <div class="kpi-label">Total Unplanned<br>Downtime %</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div style="width:28px;height:28px;border-radius:50%;background:#FEE2E2;display:flex;align-items:center;justify-content:center;font-size:14px;">🚛</div>
+        <div class="kpi-badge wip" id="badge-dt">—</div>
+      </div>
+    </div>
+    <div class="kpi-value red" id="val-dt">—</div>
+    <div class="kpi-footer">
+      <div class="kpi-target">Tgt <b>5.00%</b></div>
+      <div class="kpi-vs" id="vs-dt">—</div>
+    </div>
+    <div class="kpi-bar"><div class="kpi-bar-fill" id="bar-dt" style="background:#DC2626;width:0%;"></div></div>
+  </div>
+  <div class="kpi-tile" id="tile-wst" onclick="openSidebar('waste')">
+    <div class="kpi-tile-head">
+      <div class="kpi-label">% Backlog Planned<br>Maintenance</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div style="width:28px;height:28px;border-radius:50%;background:#FEF3C7;display:flex;align-items:center;justify-content:center;font-size:14px;">📊</div>
+        <div class="kpi-badge wip" id="badge-wst">—</div>
+      </div>
+    </div>
+    <div class="kpi-value amber" id="val-wst">—</div>
+    <div class="kpi-footer">
+      <div class="kpi-target">Tgt <b>10.0%</b></div>
+      <div class="kpi-vs" id="vs-wst">—</div>
+    </div>
+    <div class="kpi-bar"><div class="kpi-bar-fill" id="bar-wst" style="background:#D97706;width:0%;"></div></div>
+  </div>
+  <div class="kpi-tile" onclick="openSidebar('mtbf')">
+    <div class="kpi-tile-head">
+      <div class="kpi-label">Mean Time Between<br>Failure (MTBF)</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div style="width:28px;height:28px;border-radius:50%;background:#DCFCE7;display:flex;align-items:center;justify-content:center;font-size:14px;">⏱️</div>
+        <div class="kpi-badge wip">WIP</div>
+      </div>
+    </div>
+    <div class="kpi-value gray" id="val-mtbf">—</div>
+    <div class="kpi-footer"><div class="kpi-target">Tgt <b>12.00</b></div><div class="kpi-vs warn">WIP</div></div>
+    <div class="kpi-bar"><div class="kpi-bar-fill" style="background:#94A3B8;width:0%;"></div></div>
+  </div>
+  <div class="kpi-tile" onclick="openSidebar('planned')">
+    <div class="kpi-tile-head">
+      <div class="kpi-label">Total Planned<br>Downtime %</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div style="width:28px;height:28px;border-radius:50%;background:#FEF3C7;display:flex;align-items:center;justify-content:center;font-size:14px;">🕐</div>
+        <div class="kpi-badge wip">WIP</div>
+      </div>
+    </div>
+    <div class="kpi-value gray">—</div>
+    <div class="kpi-footer"><div class="kpi-target">Tgt <b>3.00%</b></div><div class="kpi-vs warn">WIP</div></div>
+    <div class="kpi-bar"><div class="kpi-bar-fill" style="background:#94A3B8;width:0%;"></div></div>
+  </div>
+  <div class="kpi-tile" onclick="openSidebar('spend')">
+    <div class="kpi-tile-head">
+      <div class="kpi-label">Repair & Maintenance<br>Spend / lb</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+        <div style="width:28px;height:28px;border-radius:50%;background:#FEF3C7;display:flex;align-items:center;justify-content:center;font-size:14px;">🔧</div>
+        <div class="kpi-badge wip">WIP</div>
+      </div>
+    </div>
+    <div class="kpi-value gray">—</div>
+    <div class="kpi-footer"><div class="kpi-target">Tgt <b>$0.032</b></div><div class="kpi-vs warn">WIP</div></div>
+    <div class="kpi-bar"><div class="kpi-bar-fill" style="background:#94A3B8;width:0%;"></div></div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="content">
+    <div id="err"></div>
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab(this,'ai')">✦ AI Summary</button>
+      <button class="tab-btn" onclick="switchTab(this,'alerts')">Alerts <span class="badge" id="alerts-badge">0</span></button>
+    </div>
+    <div id="tab-ai" style="display:flex;flex-direction:column;gap:10px;">
+      <div style="color:#9CA3AF;font-size:13px;padding:20px 0;" id="ai-placeholder">Loading insights from Genie…</div>
+    </div>
+    <div id="tab-alerts" style="display:none;flex-direction:column;gap:8px;"></div>
+  </div>
+</div>
+
+<!-- SIDEBAR -->
+<div class="overlay" id="overlay" onclick="closeSidebar()"></div>
+<div class="sidebar" id="sidebar">
+  <div class="sb-head">
+    <div class="sb-title" id="sb-title">My report</div>
+    <button class="sb-close" onclick="closeSidebar()">✕</button>
+  </div>
+  <div class="sb-tabs">
+    <button class="sb-tab active" onclick="setSbTab(this,'snapshot')">KPI Snapshot</button>
+    <button class="sb-tab" onclick="setSbTab(this,'sites')">Sites at Risk</button>
+    <button class="sb-tab" onclick="setSbTab(this,'drivers')">Top Downtime Drivers</button>
+  </div>
+  <div class="sb-body">
+    <div id="sb-snapshot">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="font-size:14px;font-weight:600;color:#1A2B4A;" id="sb-kpi-title">Total Unplanned Downtime %</div>
+        <select style="border:1px solid #E8ECF4;border-radius:6px;padding:3px 8px;font-size:11px;font-family:inherit;color:#6B7280;" id="sb-kpi-sel" onchange="switchSbKpi(this.value)">
+          <option value="dt">Total DT %</option>
+          <option value="waste">Waste %</option>
+        </select>
+      </div>
+      <!-- Donut + right-side stats (matching image 1) -->
+      <div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:14px;">
+        <!-- Left: Donut fixed size -->
+        <div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;width:120px;">
+          <div style="position:relative;width:100px;height:100px;">
+            <canvas id="sb-donut" width="100" height="100" style="width:100px!important;height:100px!important;"></canvas>
+            <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;">
+              <div style="font-size:18px;font-weight:900;letter-spacing:-0.5px;" id="sb-donut-val">—</div>
+            </div>
+          </div>
+          <div style="margin-top:6px;font-size:10px;color:#9CA3AF;text-align:center;">Target <b style="color:#374151;">5%</b></div>
+          <div style="font-size:11px;font-weight:700;margin-top:2px;" id="sb-gap">—</div>
+          <div style="margin-top:4px;font-size:10px;color:#6B7280;text-align:center;">Stops <b style="color:#1A2B4A;" id="sb-stops">—</b></div>
+        </div>
+        <!-- Right: Key stats with icons -->
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px;">
+          <div style="background:#F8F9FC;border-radius:8px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;">
+            <div style="min-width:0;">
+              <div style="font-size:10px;color:#9CA3AF;margin-bottom:1px;white-space:nowrap;" id="sb-stat1-label">Schedule Hours</div>
+              <div style="font-size:15px;font-weight:800;color:#1A2B4A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" id="sb-stat1-val">—</div>
+            </div>
+            <div style="width:28px;height:28px;border-radius:50%;background:#EEF2FF;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;margin-left:6px;">🕐</div>
+          </div>
+          <div style="background:#F8F9FC;border-radius:8px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;">
+            <div style="min-width:0;">
+              <div style="font-size:10px;color:#9CA3AF;margin-bottom:1px;white-space:nowrap;" id="sb-stat2-label">Unplanned DT Hours</div>
+              <div style="font-size:15px;font-weight:800;color:#1A2B4A;" id="sb-stat2-val">—</div>
+            </div>
+            <div style="width:28px;height:28px;border-radius:50%;background:#FEE2E2;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;margin-left:6px;">📉</div>
+          </div>
+          <div style="background:#F8F9FC;border-radius:8px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;">
+            <div style="min-width:0;">
+              <div style="font-size:10px;color:#9CA3AF;margin-bottom:1px;white-space:nowrap;" id="sb-stat3-label">Percentage Downtime</div>
+              <div style="font-size:15px;font-weight:800;color:#1A2B4A;" id="sb-stat3-val">—</div>
+            </div>
+            <div style="width:28px;height:28px;border-radius:50%;background:#FEF3C7;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;margin-left:6px;">📊</div>
+          </div>
+        </div>
+      </div>
+      <div class="sb-section">AI Insight</div>
+      <div id="sb-insight-text" style="font-size:13px;color:#374151;line-height:1.7;"></div>
+    </div>
+    <div id="sb-sites" style="display:none;">
+      <div style="font-size:13px;font-weight:600;color:#1A2B4A;margin-bottom:4px;" id="sb-trend-title">Total Unplanned Downtime %</div>
+      <div style="font-size:11px;color:#9CA3AF;margin-bottom:12px;">Trend (6 Weeks)</div>
+      <div style="height:180px;position:relative;"><canvas id="sb-trend-chart"></canvas></div>
+      <div class="sb-section">AI Insight</div>
+      <div id="sb-trend-insight" style="font-size:13px;color:#374151;line-height:1.7;"></div>
+    </div>
+    <div id="sb-drivers" style="display:none;">
+      <div style="font-size:13px;font-weight:600;color:#1A2B4A;margin-bottom:12px;" id="sb-drivers-title">Waste Contribution View</div>
+      <div style="height:180px;position:relative;"><canvas id="sb-waste-donut"></canvas></div>
+      <div class="sb-section">Top Drivers</div>
+      <div id="sb-drivers-list"></div>
+      <div class="sb-section">AI Insight</div>
+      <div id="sb-drivers-insight" style="font-size:13px;color:#374151;line-height:1.7;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- RCA MODAL -->
+<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <button class="modal-back" onclick="closeModal()">← Back</button>
+      <div class="modal-nav">
+        <button class="modal-nav-btn active" onclick="setModalTab(this,'insights')">AI Insights</button>
+        <button class="modal-nav-btn" onclick="setModalTab(this,'rca')">Root Cause Analysis</button>
+      </div>
+      <button onclick="closeModal()" style="margin-left:auto;background:none;border:none;cursor:pointer;color:#9CA3AF;font-size:20px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="modal-insights" style="display:flex;flex-wrap:wrap;gap:12px;"></div>
+      <div id="modal-rca" style="display:none;flex-direction:column;gap:14px;">
+        <div style="display:flex;align-items:center;gap:10px;padding-bottom:10px;border-bottom:1px solid #F0F2F8;flex-wrap:wrap;">
+          <label style="font-size:12px;color:#6B7280;font-weight:500;">KPI Focus:</label>
+          <select id="rca-sel" onchange="onRcaChange()" style="border:1px solid #E8ECF4;border-radius:6px;padding:5px 12px;font-size:13px;font-family:inherit;color:#1A2B4A;">
+            <option value="auto">Auto-detect</option>
+          </select>
+        </div>
+        <div style="background:white;border-radius:10px;border:1px solid #E8ECF4;padding:14px 18px;">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+            <div><div style="font-size:10px;color:#9CA3AF;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px;">Issue Identified</div>
+            <div style="font-size:18px;font-weight:800;color:#1A2B4A;" id="rca-issue">—</div></div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;">
+              <div style="text-align:center;"><div style="font-size:10px;color:#9CA3AF;margin-bottom:2px;">Severity</div><div id="rca-sev" style="font-size:13px;font-weight:700;color:#DC2626;">—</div></div>
+              <div style="text-align:center;"><div style="font-size:10px;color:#9CA3AF;margin-bottom:2px;">Confidence</div><div id="rca-conf" style="font-size:13px;font-weight:700;color:#1A2B4A;">—</div></div>
+              <div style="text-align:center;"><div style="font-size:10px;color:#9CA3AF;margin-bottom:2px;">Detected</div><div id="rca-det" style="font-size:13px;font-weight:700;color:#1A2B4A;">—</div></div>
+            </div>
+          </div>
+          <div style="font-size:13px;color:#374151;line-height:1.7;" id="rca-summary">Analysing root causes…</div>
+        </div>
+        <div style="background:white;border-radius:10px;border:1px solid #E8ECF4;padding:14px 18px;">
+          <div style="font-size:10px;color:#9CA3AF;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px;">Key Findings</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;" id="rca-findings"></div>
+        </div>
+        <div style="background:white;border-radius:10px;border:1px solid #E8ECF4;padding:14px 18px;" id="rca-camap-wrap">
+          <div style="font-size:10px;color:#9CA3AF;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px;">Root Cause → Action</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;" id="rca-camap"></div>
+        </div>
+        <div style="background:white;border-radius:10px;border:1px solid #E8ECF4;padding:14px 18px;">
+          <div style="font-size:10px;color:#9CA3AF;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px;">Root Cause Ranking</div>
+          <div id="rca-ranking"></div>
+        </div>
+        <div style="background:white;border-radius:10px;border:1px solid #E8ECF4;padding:14px 18px;" id="rca-impact-wrap">
+          <div style="font-size:10px;color:#9CA3AF;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px;">Estimated Impact if Actions Taken</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;" id="rca-impact"></div>
+        </div>
+        <div style="background:white;border-radius:10px;border:1px solid #E8ECF4;padding:14px 18px;">
+          <div style="font-size:10px;color:#9CA3AF;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:10px;">Recommended Actions</div>
+          <table class="actions-table">
+            <thead><tr><th>#</th><th>Recommendation</th><th>Addresses</th><th>Expected Impact</th><th>Priority</th></tr></thead>
+            <tbody id="rca-actions"></tbody>
+          </table>
+        </div>
+        <div style="background:white;border-radius:10px;border:1px solid #E8ECF4;padding:12px 18px;" id="rca-detail-wrap">
+          <div style="display:flex;flex-wrap:wrap;gap:0;" id="rca-detail"></div>
+        </div>
+        <div class="rca-section"><div class="rca-section-title">Root Causes</div><div id="rca-causes"></div></div>
+        <div class="rca-section"><div class="rca-section-title">Recommended Actions</div>
+          <table class="actions-table"><thead><tr><th>#</th><th>Action</th><th>Owner</th><th>Deadline</th><th>Expected Impact</th><th>Status</th></tr></thead>
+          <tbody id="rca-actions"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- FLOATING ASK BUTTON -->
+<button onclick="toggleAsk()" style="position:fixed;bottom:20px;right:20px;width:50px;height:50px;border-radius:50%;background:#0F2044;color:white;border:none;cursor:pointer;font-size:20px;box-shadow:0 4px 16px rgba(0,0,0,0.25);z-index:399;">✦</button>
+
+<script>
+// ── State ──────────────────────────────────────────────────────
+let _data=null, _poll=null, _rcaPoll=null, _rcaLoaded=false, _rcaSite='';
+let _sbDonut=null, _sbTrend=null, _sbWasteDonut=null;
+
+// ── Format WHY/WHEN/HOW as badges ──────────────────────────────
+function fmt(text){
+  if(!text) return '';
+  // Executive-style: replace WHY/WHEN/HOW with professional section labels
+  return text
+    .replace(/WHY:/g,'<div style="display:flex;align-items:center;gap:6px;margin:8px 0 3px;"><span style="width:12px;height:2px;background:#DC2626;display:inline-block;border-radius:1px;"></span><span style="font-size:10px;font-weight:700;color:#DC2626;text-transform:uppercase;letter-spacing:0.6px;">Root Cause</span></div>')
+    .replace(/WHEN:/g,'<div style="display:flex;align-items:center;gap:6px;margin:8px 0 3px;"><span style="width:12px;height:2px;background:#D97706;display:inline-block;border-radius:1px;"></span><span style="font-size:10px;font-weight:700;color:#D97706;text-transform:uppercase;letter-spacing:0.6px;">Trend & Pattern</span></div>')
+    .replace(/HOW TO FIX:/g,'<div style="display:flex;align-items:center;gap:6px;margin:8px 0 3px;"><span style="width:12px;height:2px;background:#059669;display:inline-block;border-radius:1px;"></span><span style="font-size:10px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.6px;">Recommended Action</span></div>')
+    .replace(/HOW:/g,'<div style="display:flex;align-items:center;gap:6px;margin:8px 0 3px;"><span style="width:12px;height:2px;background:#059669;display:inline-block;border-radius:1px;"></span><span style="font-size:10px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.6px;">Recommended Action</span></div>');
+}
+
+// ── Loader ─────────────────────────────────────────────────────
+function lsDone(n){
+  const el=document.getElementById('ls'+n);
+  if(!el)return;
+  el.className='ls done';
+  el.querySelector('.ls-icon').textContent='✓';
+  const nx=document.getElementById('ls'+(n+1));
+  if(nx){nx.className='ls active';}
+}
+function hideLoader(){document.getElementById('loader').classList.add('hidden');}
+function setPill(state,text){const p=document.getElementById('status-pill');p.className='status-pill '+state;p.textContent=(state!=='wip'?'● ':'')+text;}
+function showErr(msg){const el=document.getElementById('err');el.textContent='Failed: '+msg;el.classList.add('show');}
+
+// ── Filters ────────────────────────────────────────────────────
+function getFilters(){
+  return {unit:document.getElementById('f-unit').value,timeframe:document.getElementById('f-tf').value,year:document.getElementById('f-yr').value,site:document.getElementById('f-site').value,region:document.getElementById('f-region').value};
+}
+function cleanFilters(f){return Object.fromEntries(Object.entries(f).filter(([k,v])=>v&&v!=='All'));}
+function resetFilters(){['f-unit','f-tf','f-yr','f-site','f-region','f-market'].forEach(id=>{const el=document.getElementById(id);if(el)el.selectedIndex=0;});}
+function applyFilters(){_data=null;_rcaLoaded=false;document.getElementById('loader').classList.remove('hidden');document.getElementById('ls1').className='ls active';fetch('/api/cache/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dashboard_only:true})}).finally(()=>setTimeout(()=>loadDashboard(),300));}
+
+// ── Tabs ───────────────────────────────────────────────────────
+function switchTab(btn,tab){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
+  document.getElementById('tab-ai').style.display=tab==='ai'?'flex':'none';
+  document.getElementById('tab-alerts').style.display=tab==='alerts'?'flex':'none';
+  if(tab==='ai')document.getElementById('tab-ai').style.flexDirection='column';
+  if(tab==='alerts')document.getElementById('tab-alerts').style.flexDirection='column';
+}
+
+// ── Render KPIs ────────────────────────────────────────────────
+function renderKPIs(d){
+  const k=d.kpis||{}, ex=d._extra||{};
+  const dt=k.downtime_pct||{}, wst=k.waste_pct||{};
+  const dtV=parseFloat((dt.value||'0'))||0;
+  const wstV=parseFloat((wst.value||'0'))||0;
+
+  document.getElementById('val-dt').textContent=dt.value||'—';
+  document.getElementById('vs-dt').textContent=dt.delta||'—';
+  document.getElementById('vs-dt').className='kpi-vs '+(dt.direction==='bad'?'bad':dt.direction==='good'?'good':'warn');
+  document.getElementById('bar-dt').style.width=Math.min(dtV/20*100,100)+'%';
+  const dtb=dtV>5?'critical':dtV>3?'warning':'good';
+  document.getElementById('badge-dt').textContent=dtb==='critical'?'⚠ Critical':dtb==='warning'?'⚠ Warning':'✓ Good';
+  document.getElementById('badge-dt').className='kpi-badge '+dtb;
+
+  document.getElementById('val-wst').textContent=wst.value||'—';
+  document.getElementById('vs-wst').textContent=wst.delta||'—';
+  document.getElementById('vs-wst').className='kpi-vs '+(wst.direction==='bad'?'bad':wst.direction==='good'?'good':'warn');
+  document.getElementById('bar-wst').style.width=Math.min(wstV/20*100,100)+'%';
+  const wstb=wstV>5?'critical':wstV>3?'warning':'good';
+  document.getElementById('badge-wst').textContent=wstb==='critical'?'⚠ Critical':wstb==='warning'?'⚠ Warning':'✓ Good';
+  document.getElementById('badge-wst').className='kpi-badge '+wstb;
+
+  if(ex.mtbf) document.getElementById('val-mtbf').textContent=ex.mtbf;
+}
+
+// ── Render AI Summary ──────────────────────────────────────────
+function renderAI(items){
+  document.getElementById('ai-placeholder').style.display='none';
+  if(!items||!items.length){document.getElementById('ai-placeholder').style.display='block';document.getElementById('ai-placeholder').textContent='No insights available yet.';return;}
+
+  const cmap={red:'#DC2626',amber:'#D97706',blue:'#3B6FD4',green:'#16A34A'};
+  const abg={downtime:'#FFF8F8',waste:'#FFFDF0',opportunities:'#F0FDF4',general:'#F6F8FF'};
+  const albl={downtime:'⚡ Downtime',waste:'♻ Waste',opportunities:'💡 Opportunities',general:'📊 General'};
+
+  const groups={};
+  items.forEach(i=>{
+    const a=i.kpi_area||(i.color==='red'?'downtime':i.color==='amber'?'waste':i.color==='green'?'opportunities':'general');
+    if(!groups[a])groups[a]=[];
+    groups[a].push(i);
+  });
+  if(groups.general&&Object.keys(groups).length===1){
+    const u=[...groups.general];delete groups.general;
+    u.forEach(i=>{const a=i.color==='red'?'downtime':i.color==='amber'?'waste':i.color==='green'?'opportunities':'general';if(!groups[a])groups[a]=[];groups[a].push(i);});
+  }
+
+  const tab=document.getElementById('tab-ai');
+  tab.innerHTML='';
+  ['downtime','waste','opportunities','general'].filter(a=>groups[a]).forEach(area=>{
+    const items=groups[area];
+    const col=cmap[items[0].color]||'#3B6FD4';
+    const first=items[0].text;
+    const rest=items.slice(1);
+    const card=document.createElement('div');
+    card.className='ai-card';
+    card.style.borderLeft=`4px solid ${col}`;
+    card.style.background=abg[area]||'white';
+    card.innerHTML=`
+      <div class="ai-card-top">
+        <div class="ai-card-dot" style="background:${col};"></div>
+        <div class="ai-card-area" style="color:${col};">${albl[area]||area}</div>
+      </div>
+      <div class="ai-card-text">${fmt(first)}</div>
+      ${rest.length?`<div class="ai-card-body">${rest.map(i=>`<div style="margin-bottom:8px;padding-left:10px;border-left:2px solid ${col};">${fmt(i.text)}</div>`).join('')}</div>
+      <div style="margin-top:6px;"><span style="font-size:11.5px;color:#6B7280;cursor:pointer;font-weight:500;" onclick="this.closest('.ai-card').classList.toggle('open')">+ ${rest.length} more insight${rest.length>1?'s':''} ▾</span></div>`:''}
+    `;
+    tab.appendChild(card);
+  });
+}
+
+// ── Render Alerts ──────────────────────────────────────────────
+function renderAlerts(d){
+  const alerts=d.alerts||[];
+  document.getElementById('alerts-badge').textContent=alerts.length;
+  const tab=document.getElementById('tab-alerts');
+  if(!alerts.length){tab.innerHTML='<div style="color:#9CA3AF;font-size:13px;padding:20px 0;">No sites above national average — all KPIs within target.</div>';return;}
+
+  tab.innerHTML=alerts.map((a,i)=>{
+    const sev=a.severity||'Medium';
+    const sevColor=sev==='Critical'?'#DC2626':sev==='High'?'#D97706':'#4338CA';
+    const sevBg=sev==='Critical'?'#FEE2E2':sev==='High'?'#FEF3C7':'#EEF2FF';
+    // Clean insight preview - strip labels, first sentence only
+    const cleanInsight=(a.ai_insight||'').replace(/Root Cause:|Trend & Pattern:|Recommended Action:|WHY:|WHEN:|HOW TO FIX:|HOW:/gi,'').replace(/\s+/g,' ').trim().split('.')[0]+'.';
+    const contribs=a.contributors||[];
+    return `<div class="alert-row" id="ar-${i}">
+      <div class="alert-row-head" onclick="toggleAlert(${i})">
+        <div class="sev ${sev}">${sev}</div>
+        <div class="alert-kpi-name">${a.kpi||'—'}</div>
+        <span style="font-size:12px;color:#6B7280;margin:0 6px;">Current Value</span>
+        <span style="font-size:13px;font-weight:700;color:#1A2B4A;min-width:60px;">${a.current_value||'—'}</span>
+        <span style="font-size:12px;color:#9CA3AF;margin:0 6px;">|</span>
+        <span style="font-size:12px;color:#6B7280;margin-right:4px;">AI Insights</span>
+        <span class="alert-insight-preview" style="color:#3B6FD4;">${cleanInsight}</span>
+        <div class="alert-chevron">▼</div>
+      </div>
+      <div class="alert-body">
+        <p style="font-size:13px;color:#374151;line-height:1.65;margin-bottom:14px;">${(a.ai_insight||'No analysis available.').replace(/Root Cause:|Trend & Pattern:|Recommended Action:|WHY:|WHEN:|HOW TO FIX:|HOW:/gi,'').replace(/\s+/g,' ').trim()}</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+          <div class="alert-metric"><div class="alert-metric-label">Current Value</div><div class="alert-metric-value" style="color:#DC2626;">${a.current_value||'—'}</div><div class="alert-metric-sub">vs Target 5%</div></div>
+          <div class="alert-metric"><div class="alert-metric-label">National Average</div><div class="alert-metric-value">${a.national_avg||'—'}</div></div>
+          <div class="alert-metric"><div class="alert-metric-label">Gap Above Average</div><div class="alert-metric-value" style="color:#DC2626;">${a.gap||'—'}</div><div class="alert-metric-sub">Above national avg</div></div>
+          <div class="alert-metric"><div class="alert-metric-label">Severity</div><div class="alert-metric-value" style="color:${sev==='Critical'?'#DC2626':sev==='High'?'#D97706':'#4338CA'};">${sev}</div></div>
+        </div>
+        ${contribs.length?`<div style="margin-bottom:12px;">
+          <div style="font-size:11px;font-weight:600;color:#6B7280;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.4px;">Top Contributors</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">${contribs.map(c=>`
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:white;border:1px solid #E8ECF4;border-radius:6px;">
+              <span style="font-size:12px;color:#374151;">${c.name||'—'}</span>
+              <span style="font-size:12px;font-weight:700;color:#DC2626;">${c.pct!=null?c.pct+'%':c.value||'—'}</span>
+            </div>`).join('')}</div>
+        </div>`:''}
+        <div class="exec-box">
+          <div class="exec-box-title">✦ AI Executive Summary</div>
+          <div class="exec-box-text">${a.ai_insight||'No analysis available.'}</div>
+          <button class="exec-box-btn" onclick="openRCA(event,'${(a.kpi||'').replace(/'/g,'')}','${(a.site||'').replace(/'/g,'')}')">Open Full Analysis →</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggleAlert(i){document.getElementById('ar-'+i).classList.toggle('open');}
+
+// ── Render Dashboard ───────────────────────────────────────────
+function renderDashboard(d){
+  if(!d)return;
+  _data=d;
+  renderKPIs(d);
+  renderAI(d.key_insights||[]);
+  renderAlerts(d);
+  const sel=document.getElementById('rca-sel');
+  if(sel&&sel.options.length===1&&d.kpis){
+    [{k:'downtime_pct',l:'Total Unplanned Downtime %'},{k:'waste_pct',l:'Waste %'},{k:'stops',l:'Total Stops'}].forEach(({k,l})=>{
+      if(d.kpis[k]){const o=document.createElement('option');o.value=l;o.textContent=l+(d.kpis[k].value?' — '+d.kpis[k].value:'');sel.appendChild(o);}
+    });
+  }
+}
+
+// ── Sidebar ────────────────────────────────────────────────────
+function openSidebar(kpi){
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('sidebar').classList.add('open');
+  if(_data) populateSidebar(kpi);
+}
+function closeSidebar(){document.getElementById('overlay').classList.remove('show');document.getElementById('sidebar').classList.remove('open');}
+function setSbTab(btn,tab){
+  document.querySelectorAll('.sb-tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
+  ['sb-snapshot','sb-sites','sb-drivers'].forEach(id=>document.getElementById(id).style.display='none');
+  document.getElementById('sb-'+tab).style.display='block';
+}
+
+function switchSbKpi(val){if(_data)populateSidebar(val==='waste'?'waste':'downtime');}
+
+function populateSidebar(kpi){
+  if(!_data)return;
+  const d=_data, k=d.kpis||{}, ex=d._extra||{};
+  const isWaste=kpi==='waste';
+  const color=isWaste?'#D97706':'#DC2626';
+  const val=isWaste?k.waste_pct?.value||'—':k.downtime_pct?.value||'—';
+  const valN=parseFloat((val||'0').replace('%',''))||0;
+  const exData=d._extra_data||d._extra||ex||{};
+
+  const sel=document.getElementById('sb-kpi-sel');
+  if(sel) sel.value=isWaste?'waste':'dt';
+
+  // Donut
+  document.getElementById('sb-kpi-title').textContent=isWaste?'Waste %':'Total Unplanned Downtime %';
+  document.getElementById('sb-donut-val').textContent=val;
+  document.getElementById('sb-donut-val').style.color=color;
+  document.getElementById('sb-gap').textContent=(isWaste?k.waste_pct:k.downtime_pct)?.delta||'—';
+  document.getElementById('sb-gap').style.color=color;
+  document.getElementById('sb-stops').textContent=k.stops?.value||'—';
+
+  if(_sbDonut){_sbDonut.destroy();_sbDonut=null;}
+  const ctx=document.getElementById('sb-donut').getContext('2d');
+  _sbDonut=new Chart(ctx,{type:'doughnut',data:{datasets:[{data:[valN,Math.max(100-valN,0)],backgroundColor:[color,'#F0F0F0'],borderWidth:0,cutout:'78%'}]},options:{responsive:false,maintainAspectRatio:false,animation:{duration:600},plugins:{legend:{display:false},tooltip:{enabled:false}}}});ctx.canvas.style.width='100px';ctx.canvas.style.height='100px';
+
+  // Right stats
+  if(isWaste){
+    document.getElementById('sb-stat1-label').textContent='Waste Lbs';
+    document.getElementById('sb-stat1-val').textContent=exData.waste_lbs||'—';
+    document.getElementById('sb-stat2-label').textContent='Waste Cost';
+    document.getElementById('sb-stat2-val').textContent=exData.waste_cost||'—';
+    document.getElementById('sb-stat3-label').textContent='WoW Delta';
+    document.getElementById('sb-stat3-val').textContent=k.waste_pct?.delta||'—';
+  } else {
+    document.getElementById('sb-stat1-label').textContent='Schedule Hours';
+    document.getElementById('sb-stat1-val').textContent=exData.scheduled_hours||'—';
+    document.getElementById('sb-stat2-label').textContent='Unplanned Downtime Hours';
+    document.getElementById('sb-stat2-val').textContent=exData.unplanned_hours||'—';
+    document.getElementById('sb-stat3-label').textContent='Percentage Downtime';
+    document.getElementById('sb-stat3-val').textContent=exData.dt_pct||k.downtime_pct?.value||'—';
+  }
+
+  // All insights for this KPI area
+  const kpiArea=isWaste?'waste':'downtime';
+  const kpiColor=isWaste?'amber':'red';
+  const allIns=(d.key_insights||[]).filter(i=>(i.kpi_area||'')=== kpiArea||(i.color===kpiColor));
+
+  function cleanInsight(text){
+    // Split into WHY/WHEN/HOW sections and render as professional sections
+    const parts=text
+      .replace(/WHY:/g,'|||ROOT CAUSE|||')
+      .replace(/WHEN:/g,'|||TREND & PATTERN|||')
+      .replace(/HOW TO FIX:|HOW:/g,'|||RECOMMENDED ACTION|||')
+      .replace(/Root Cause:/g,'|||ROOT CAUSE|||')
+      .replace(/Trend & Pattern:/g,'|||TREND & PATTERN|||')
+      .replace(/Recommended Action:/g,'|||RECOMMENDED ACTION|||')
+      .split('|||').filter(p=>p.trim());
+    if(parts.length<=1) return `<p style="margin:0;line-height:1.65;">${text}</p>`;
+    return parts.map(p=>{
+      const labels={'ROOT CAUSE':'#DC2626','TREND & PATTERN':'#D97706','RECOMMENDED ACTION':'#059669'};
+      for(const [lbl,col] of Object.entries(labels)){
+        if(p===lbl) return `<div style="display:flex;align-items:center;gap:6px;margin:8px 0 3px;"><span style="width:10px;height:2px;background:${col};display:inline-block;border-radius:1px;"></span><span style="font-size:9px;font-weight:700;color:${col};text-transform:uppercase;letter-spacing:0.7px;">${lbl}</span></div>`;
+      }
+      return `<p style="margin:0 0 4px;font-size:12.5px;line-height:1.6;color:#374151;">${p.trim()}</p>`;
+    }).join('');
+  }
+
+  // Tab 1: KPI Snapshot — first insight (root cause focus)
+  const snap1=allIns.slice(0,1);
+  document.getElementById('sb-insight-text').innerHTML=snap1.length
+    ? snap1.map(i=>`<div class="sb-insight">${cleanInsight(i.text)}</div>`).join('')
+    :'<div style="color:#9CA3AF;font-size:13px;">No insights yet.</div>';
+
+  // Tab 2: Sites at Risk (trend)
+  document.getElementById('sb-trend-title').textContent=isWaste?'Waste %':'Total Unplanned Downtime %';
+  const trend=isWaste?d.waste_trend:d.downtime_trend;
+  if(_sbTrend){_sbTrend.destroy();_sbTrend=null;}
+  if(trend?.labels?.length){
+    const ctx2=document.getElementById('sb-trend-chart').getContext('2d');
+    _sbTrend=new Chart(ctx2,{type:'line',data:{labels:trend.labels,datasets:[{data:trend.data,borderColor:color,backgroundColor:color+'22',fill:true,tension:0.4,pointRadius:3,pointBackgroundColor:color,borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{grid:{color:'#F0F2F8'},ticks:{font:{size:10}}},x:{grid:{display:false},ticks:{font:{size:10}}}}}});
+  }
+  // Sites at risk insight — site-level alerts
+  const siteAlerts=(d.alerts||[]).filter(a=>isWaste?a.kpi?.toLowerCase().includes('waste'):a.kpi?.toLowerCase().includes('downtime'));
+  // Tab 2: Sites at Risk — site cards + trend insight
+  document.getElementById('sb-trend-insight').innerHTML=
+    (siteAlerts.length
+      ? siteAlerts.map(a=>`<div class="sb-insight" style="border-color:${color};margin-bottom:8px;padding:10px 12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-weight:600;font-size:13px;">${a.site||'—'}</span>
+            <span class="sev ${a.severity||'Medium'}" style="font-size:10px;">${a.severity||'Medium'}</span>
+          </div>
+          <div style="display:flex;gap:12px;font-size:11px;color:#6B7280;">
+            <span>Current: <b style="color:${color};">${a.current_value||'—'}</b></span>
+            <span>Avg: <b>${a.national_avg||'—'}</b></span>
+            <span>Gap: <b style="color:${color};">${a.gap||'—'}</b></span>
+          </div>
+        </div>`).join('')
+      :'<div style="color:#9CA3AF;font-size:13px;">No sites above average.</div>')
+    + (allIns.length>2?`<div class="sb-section">Trend Insight</div><div class="sb-insight">${cleanInsight(allIns[2].text)}</div>`:'');
+
+  // Tab 3: Top Drivers
+  document.getElementById('sb-drivers-title').textContent=isWaste?'Waste Contribution View':'Downtime Contribution View';
+  const bullets=isWaste?d.waste_bullets||[]:d.downtime_bullets||[];
+  const dColors=['#DC2626','#F5A623','#3B6FD4','#16A34A','#9CA3AF'];
+  if(_sbWasteDonut){_sbWasteDonut.destroy();_sbWasteDonut=null;}
+  if(bullets.length){
+    const ctx3=document.getElementById('sb-waste-donut').getContext('2d');
+    _sbWasteDonut=new Chart(ctx3,{type:'doughnut',data:{labels:bullets.map(b=>b.text.split('—')[0].trim()),datasets:[{data:bullets.map(b=>b.pct||0),backgroundColor:dColors.slice(0,bullets.length),borderWidth:2,borderColor:'white',cutout:'60%'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:11},boxWidth:12,padding:8}}}}});
+  }
+  document.getElementById('sb-drivers-list').innerHTML=bullets.map((b,i)=>`<div class="driver-row">
+    <div class="driver-top"><div class="driver-name">${b.text}</div><div class="driver-pct" style="color:${dColors[i]||'#9CA3AF'};">${b.pct}%</div></div>
+    <div class="driver-bar"><div class="driver-bar-fill" style="width:${b.pct}%;background:${dColors[i]||'#9CA3AF'};"></div></div>
+  </div>`).join('')||'<div style="color:#9CA3AF;font-size:13px;">No driver data yet.</div>';
+  // Tab 3: Top Drivers — second insight (action/opportunities focus)
+  const drv3=allIns.slice(1,3);
+  document.getElementById('sb-drivers-insight').innerHTML=drv3.length
+    ? drv3.map(i=>`<div class="sb-insight">${cleanInsight(i.text)}</div>`).join('')
+    :'<div style="color:#9CA3AF;font-size:13px;">No insights yet.</div>';
+}
+
+// ── RCA Modal ──────────────────────────────────────────────────
+function openRCA(e,kpi,site){
+  e.stopPropagation();
+  document.getElementById('modal').classList.add('open');
+  if(_data){const mi=document.getElementById('modal-insights');mi.innerHTML=(_data.key_insights||[]).map(i=>`<div style="flex:1 1 calc(50% - 12px);min-width:220px;border-radius:10px;padding:13px 15px;font-size:13px;line-height:1.6;border-left:4px solid ${i.color==='red'?'#DC2626':i.color==='amber'?'#D97706':i.color==='green'?'#16A34A':'#3B6FD4'};background:${i.color==='red'?'#FFF8F8':i.color==='amber'?'#FFFDF0':i.color==='green'?'#F0FDF4':'#F6F8FF'};">${fmt(i.text)}</div>`).join('');}
+  document.querySelectorAll('.modal-nav-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.modal-nav-btn').forEach(b=>{if(b.textContent.includes('Root Cause'))b.classList.add('active');});
+  document.getElementById('modal-insights').style.display='none';
+  document.getElementById('modal-rca').style.display='flex';
+  if(kpi){const sel=document.getElementById('rca-sel');if(sel)for(const o of sel.options)if(o.value.toLowerCase().includes(kpi.toLowerCase().split('(')[0].trim())){sel.value=o.value;break;}}
+  _rcaSite=site||''; _rcaLoaded=false; loadRCA(true);
+}
+function closeModal(){document.getElementById('modal').classList.remove('open');}
+function setModalTab(btn,tab){
+  document.querySelectorAll('.modal-nav-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');
+  document.getElementById('modal-insights').style.display=tab==='insights'?'flex':'none';
+  document.getElementById('modal-rca').style.display=tab==='rca'?'flex':'none';
+  if(tab==='rca'&&!_rcaLoaded)loadRCA();
+}
+function onRcaChange(){_rcaLoaded=false;_rcaSite='';loadRCA();}
+async function loadRCA(force=false){
+  _rcaLoaded=true;
+  const kpiFocus=document.getElementById('rca-sel')?.value||'auto';
+  document.getElementById('rca-issue').textContent=(kpiFocus==='auto'?'Detecting…':kpiFocus)+(_rcaSite?` — ${_rcaSite}`:'');
+  document.getElementById('rca-summary').textContent='Supervisor analysing root causes…';
+  document.getElementById('rca-causes').innerHTML='<div style="color:#9CA3AF;font-size:13px;">Querying Genie…</div>';
+  document.getElementById('rca-actions').innerHTML='<tr><td colspan="6" style="color:#9CA3AF;font-size:13px;padding:16px 0;">Loading…</td></tr>';
+  const filters=cleanFilters(getFilters());
+  if(_rcaSite)filters.site=_rcaSite;
+  try{
+    const res=await(await fetch('/api/rca',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kpi_focus:kpiFocus,filters,force})})).json();
+    if(res._cached&&res.issue){renderRCA(res);return;}
+    const jid=res._job_id||res.job_id;
+    if(jid){
+      console.log('[rca] polling job', jid);
+      _rcaPoll=setInterval(async()=>{
+        try{
+          const r=await fetch('/api/job/'+jid);const j=await r.json();
+          console.log('[rca] poll status:', j.status, j.elapsed);
+          if(j.status==='running'){document.getElementById('rca-summary').textContent='Supervisor analysing… '+(j.elapsed||0)+'s';return;}
+          clearInterval(_rcaPoll);_rcaPoll=null;
+          if(j.status==='done'&&j.result)renderRCA(j.result);
+          else if(j.status==='error')document.getElementById('rca-summary').textContent='Error: '+j.error;
+          else if(j.status==='not_found')document.getElementById('rca-summary').textContent='Job not found — try again.';
+        }catch(e){console.error('[rca] poll error',e);}
+      },3000);
+    } else if(res.issue){
+      // Returned inline (no job) 
+      renderRCA(res);
+    } else {
+      document.getElementById('rca-summary').textContent='No response from server.';
+    }
+  }catch(e){document.getElementById('rca-summary').textContent='Failed: '+e.message;}
+}
+function renderRCA(d){
+  if(!d)return;
+  console.log('[rca] rendering:', Object.keys(d));
+
+  // Header
+  document.getElementById('rca-issue').textContent=d.issue||'—';
+  document.getElementById('rca-summary').textContent=d.summary||'—';
+  document.getElementById('rca-sev').textContent=d.severity||'—';
+  document.getElementById('rca-sev').style.color=d.severity==='Critical'?'#DC2626':d.severity==='High'?'#D97706':'#374151';
+  document.getElementById('rca-conf').textContent=d.confidence||'—';
+  document.getElementById('rca-det').textContent=d.detected||'—';
+
+  // Key findings
+  const f=d.findings||{};
+  const findings=[
+    {l:'Primary Contributor',v:f.primary_contributor||'—'},
+    {l:'Contribution',v:f.primary_pct||'—'},
+    {l:'Impacted Asset',v:f.impacted_asset||'—'},
+    {l:'Highest Shift',v:f.highest_shift||'—'},
+    {l:'Largest Category',v:f.largest_category||'—'},
+    {l:'Observed Since',v:f.observed_since||'—'},
+  ].filter(x=>x.v&&x.v!=='—');
+  document.getElementById('rca-findings').innerHTML=findings.map(x=>`
+    <div style="background:#F8F9FC;border-radius:8px;padding:10px 12px;">
+      <div style="font-size:10px;color:#9CA3AF;margin-bottom:3px;">${x.l}</div>
+      <div style="font-size:13px;font-weight:700;color:#1A2B4A;">${x.v}</div>
+    </div>`).join('');
+
+  // Cause → action map
+  const cam=d.cause_action_map||[];
+  const camWrap=document.getElementById('rca-camap-wrap');
+  if(cam.length){
+    camWrap.style.display='block';
+    document.getElementById('rca-camap').innerHTML=cam.map(x=>`
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:160px;">
+        <div style="background:#FEF3C7;color:#92400E;border-radius:7px;padding:7px 12px;font-size:12px;font-weight:600;text-align:center;width:100%;">${x.cause||'—'}</div>
+        <div style="font-size:11px;color:#9CA3AF;">↓</div>
+        <div style="background:#EEF2FF;color:#3730A3;border-radius:7px;padding:7px 12px;font-size:12px;text-align:center;width:100%;">${x.action||'—'}</div>
+      </div>`).join('');
+  } else { camWrap.style.display='none'; }
+
+  // Ranking
+  const rnk=d.ranking||[];
+  const colors=['#DC2626','#D97706','#3B6FD4','#6B7280','#9CA3AF'];
+  document.getElementById('rca-ranking').innerHTML=rnk.length
+    ? rnk.map((r,i)=>`<div style="border:1px solid ${i===0?'#3B6FD4':'#E8ECF4'};border-radius:8px;padding:10px 12px;margin-bottom:8px;background:${i===0?'#F0F4FF':'white'};">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <div style="width:20px;height:20px;border-radius:50%;background:${colors[i]||'#9CA3AF'};color:white;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;">${i+1}</div>
+          <div style="flex:1;font-size:13px;font-weight:600;color:#1A2B4A;">${r.cause||'—'}</div>
+          <div style="font-size:13px;font-weight:700;color:${colors[i]||'#9CA3AF'};">${r.pct||'—'}</div>
+        </div>
+        <div style="height:3px;background:#F0F0F0;border-radius:2px;overflow:hidden;">
+          <div style="height:100%;background:${colors[i]||'#9CA3AF'};width:${r.pct||'0%'};border-radius:2px;"></div>
+        </div>
+      </div>`).join('')
+    : '<div style="color:#9CA3AF;font-size:13px;">No ranking data.</div>';
+
+  // Impact
+  const imp=d.impact||{};
+  const impWrap=document.getElementById('rca-impact-wrap');
+  const impKeys=Object.keys(imp).filter(k=>k!=='actions_pending');
+  if(impKeys.length){
+    impWrap.style.display='block';
+    const impItems=[];
+    for(let i=0;i<impKeys.length;i+=2){
+      const lk=impKeys[i], vk=impKeys[i+1];
+      if(lk&&lk.endsWith('_label')&&vk&&vk.endsWith('_value')){
+        impItems.push({l:imp[lk],v:imp[vk]});
+      }
+    }
+    document.getElementById('rca-impact').innerHTML=impItems.map(x=>`
+      <div style="background:#F0FDF4;border-radius:8px;padding:10px 12px;border:1px solid #BBF7D0;">
+        <div style="font-size:10px;color:#6B7280;margin-bottom:3px;">${x.l}</div>
+        <div style="font-size:15px;font-weight:800;color:#059669;">${x.v}</div>
+      </div>`).join('');
+    if(imp.actions_pending) document.getElementById('rca-impact').innerHTML+=`<div style="background:#EEF2FF;border-radius:8px;padding:10px 12px;border:1px solid #C7D2FE;"><div style="font-size:10px;color:#6B7280;margin-bottom:3px;">Actions Pending</div><div style="font-size:15px;font-weight:800;color:#4338CA;">${imp.actions_pending}</div></div>`;
+  } else { impWrap.style.display='none'; }
+
+  // Actions table
+  const actions=d.actions||d.recommended_actions||[];
+  document.getElementById('rca-actions').innerHTML=actions.length
+    ? actions.map((a,i)=>`<tr>
+        <td style="color:#9CA3AF;">${i+1}</td>
+        <td style="font-weight:500;color:#1A2B4A;">${a.recommendation||a.action||'—'}</td>
+        <td style="color:#6B7280;font-size:12px;">${a.addresses||a.owner||'—'}</td>
+        <td style="color:#059669;font-weight:600;">${a.impact||a.expected_impact||'—'}</td>
+        <td><span style="border-radius:20px;padding:2px 9px;font-size:10px;font-weight:700;background:${a.status==='High'?'#FEE2E2':a.status==='Medium'?'#FEF3C7':'#DCFCE7'};color:${a.status==='High'?'#DC2626':a.status==='Medium'?'#D97706':'#15803D'};">${a.status||'Open'}</span></td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" style="color:#9CA3AF;font-size:13px;padding:16px 0;">No actions yet.</td></tr>';
+
+  // Detail strip
+  const det=d.detail||{};
+  const detWrap=document.getElementById('rca-detail-wrap');
+  const detKeys=Object.keys(det);
+  if(detKeys.length){
+    detWrap.style.display='block';
+    document.getElementById('rca-detail').innerHTML=detKeys.map(k=>`
+      <div style="padding:8px 16px 8px 0;margin-right:16px;border-right:1px solid #F0F2F8;">
+        <div style="font-size:10px;color:#9CA3AF;margin-bottom:1px;">${k}</div>
+        <div style="font-size:12.5px;font-weight:600;color:#1A2B4A;">${det[k]}</div>
+      </div>`).join('');
+  } else { detWrap.style.display='none'; }
+}
+
+// ── Poll job ───────────────────────────────────────────────────
+async function pollJob(jid){
+  try{
+    const r=await fetch('/api/job/'+jid);
+    const j=await r.json();
+    if(j.status==='running'){
+      const el=j.elapsed||0;
+      document.getElementById('loader-sub').textContent='Querying Genie views… '+el+'s elapsed';
+      setPill('loading','Querying… '+el+'s');
+      if(el>5)lsDone(2);
+      if(el>30)lsDone(3);
+      return;
+    }
+    clearInterval(_poll);_poll=null;
+    if(j.status==='done'){
+      lsDone(2);lsDone(3);lsDone(4);
+      setTimeout(()=>{
+        hideLoader();
+        if(j.result){
+          renderDashboard(j.result);
+          setPill(j.result._source==='views'?'cached':'live', j.result._source==='views'?'From SQL views':'Fresh from Genie');
+        }
+      },300);
+    }
+    if(j.status==='error'){hideLoader();showErr(j.error||'Error');}
+    if(j.status==='not_found'){hideLoader();showErr('Job not found — refresh page.');}
+  }catch(e){
+    window._pe=(window._pe||0)+1;
+    if(window._pe>10){clearInterval(_poll);_poll=null;hideLoader();showErr('Connection lost.');}
+  }
+}
+
+// ── Load Dashboard ─────────────────────────────────────────────
+async function loadDashboard(){
+  const cf=cleanFilters(getFilters());
+  try{
+    const res=await(await fetch('/api/dashboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filters:cf,force:false})})).json();
+    console.log('[dash]',res._cached,!!res.kpis,res._job_id);
+    lsDone(1);
+    if(res._cached&&res.kpis){
+      lsDone(2);lsDone(3);lsDone(4);
+      hideLoader();renderDashboard(res);setPill('cached','From cache');
+      return;
+    }
+    const jid=res._job_id||res.job_id;
+    if(jid){lsDone(2);window._pe=0;_poll=setInterval(()=>pollJob(jid),3000);}
+    else{hideLoader();showErr('No job returned.');}
+  }catch(e){hideLoader();showErr(e.message);}
+}
+
+// ── Load Filters ───────────────────────────────────────────────
+async function loadFilters(){
+  try{
+    const r=await(await fetch('/api/filters')).json();
+    const d=r.data||{};
+    ['sites','regions'].forEach((key,i)=>{
+      const el=document.getElementById(['f-site','f-region'][i]);
+      if(!el)return;
+      (d[key]||[]).forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;el.appendChild(o);});
+    });
+  }catch(e){}
+}
+
+// ── Ask Panel ──────────────────────────────────────────────────
+function toggleAsk(){
+  let p=document.getElementById('ask-panel');
+  if(p){p.remove();return;}
+  p=document.createElement('div');p.id='ask-panel';
+  p.style.cssText='position:fixed;bottom:80px;right:20px;width:360px;background:white;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.2);z-index:400;overflow:hidden;border:1px solid #E8ECF4;display:flex;flex-direction:column;';
+  p.innerHTML=`<div style="background:#0F2044;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;"><span style="color:white;font-weight:700;font-size:14px;">✦ Ask Pep</span><button onclick="document.getElementById('ask-panel').remove()" style="background:none;border:none;color:rgba(255,255,255,0.6);cursor:pointer;font-size:18px;">✕</button></div><div id="ask-msgs" style="height:200px;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px;"><div style="color:#9CA3AF;font-size:12px;text-align:center;margin-top:30px;">Ask anything about manufacturing data…</div></div><div style="border-top:1px solid #E8ECF4;padding:10px 12px;display:flex;gap:8px;"><input id="ask-in" style="flex:1;border:1px solid #E8ECF4;border-radius:7px;padding:6px 10px;font-size:12px;font-family:inherit;outline:none;" placeholder="Ask…" onkeydown="if(event.key==='Enter')sendAsk()"/><button onclick="sendAsk()" style="background:#0F2044;color:white;border:none;border-radius:7px;padding:6px 14px;font-size:12px;cursor:pointer;">Send</button></div>`;
+  document.body.appendChild(p);
+  document.getElementById('ask-in').focus();
+}
+async function sendAsk(){
+  const inp=document.getElementById('ask-in');const q=(inp?.value||'').trim();
+  if(!q)return;inp.value='';
+  const msgs=document.getElementById('ask-msgs');
+  msgs.innerHTML+=`<div style="background:#EEF2FF;border-radius:8px;padding:8px 10px;font-size:12px;align-self:flex-end;color:#1A2B4A;">${q}</div><div id="thinking" style="color:#9CA3AF;font-size:12px;">Thinking…</div>`;
+  msgs.scrollTop=msgs.scrollHeight;
+  try{
+    const res=await(await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,filters:getFilters()})})).json();
+    const jid=res._job_id||res.job_id;
+    if(jid){
+      const t=setInterval(async()=>{
+        const jr=await fetch('/api/job/'+jid);const j=await jr.json();
+        if(j.status==='running')return;clearInterval(t);
+        document.getElementById('thinking')?.remove();
+        if(j.status==='done')msgs.innerHTML+=`<div style="background:#F8F9FC;border-radius:8px;padding:8px 10px;font-size:12px;color:#374151;line-height:1.6;">${j.result?.narrative||JSON.stringify(j.result)}</div>`;
+        msgs.scrollTop=msgs.scrollHeight;
+      },2000);
+    }
+  }catch(e){document.getElementById('thinking')?.remove();msgs.innerHTML+=`<div style="color:#DC2626;font-size:12px;">Error: ${e.message}</div>`;}
+}
+
+// ── Init ───────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',()=>{
+  loadFilters();
+  loadDashboard();
+});
+</script>
+</body>
+</html>

@@ -11,13 +11,95 @@ Open: http://localhost:8000
 import os, json, time, uuid, threading
 from flask import Flask, request, jsonify, render_template
 from dotenv import load_dotenv
-from supervisor import get_dashboard, ask_question, get_rca
+
+# ── Load .env FIRST before any getenv calls ───────────────────────
+load_dotenv()
+
+# Toggle: set USE_CLAUDE_DIRECT=true in .env to bypass MAS Supervisor
+if os.getenv("USE_CLAUDE_DIRECT","false").lower() == "true":
+    print("[app] Using Claude direct mode (bypassing MAS Supervisor)")
+    from claude_supervisor import get_dashboard, ask_question, get_rca
+else:
+    print("[app] Using MAS Supervisor mode")
+    from supervisor import get_dashboard, ask_question, get_rca
+try:
+    from views import get_all_view_data, validate_views, views_configured
+    VIEWS_AVAILABLE = True
+    if views_configured():
+        threading.Thread(target=validate_views, daemon=True).start()
+except Exception as _ve:
+    print(f"[views] import failed: {_ve}")
+    VIEWS_AVAILABLE = False
+    def get_all_view_data(filters): return {}
+    def validate_views(): return {}
+    def views_configured(): return False
 import cache as cache_store
 
-load_dotenv()
+
+def _supervisor_configured() -> bool:
+    return bool(
+        os.getenv("DATABRICKS_SERVER_HOSTNAME") or os.getenv("DATABRICKS_HOST")
+    ) and bool(os.getenv("DATABRICKS_PAT_TOKEN")) and bool(os.getenv("SUPERVISOR_ENDPOINT_NAME"))
+
+
+def _load_dashboard_data(filters: dict) -> dict:
+    """Supervisor first; fall back to direct SQL views when configured."""
+    errors = []
+    if _supervisor_configured():
+        try:
+            return get_dashboard(filters)
+        except Exception as e:
+            errors.append(f"Supervisor: {e}")
+            print(f"[dashboard] Supervisor failed: {e}")
+    elif os.getenv("USE_CLAUDE_DIRECT", "false").lower() != "true":
+        errors.append(
+            "Supervisor not configured — set SUPERVISOR_ENDPOINT_NAME in .env "
+            "(or USE_CLAUDE_DIRECT=true, or configure DATABRICKS_WAREHOUSE_ID for SQL fallback)"
+        )
+
+    if VIEWS_AVAILABLE and views_configured():
+        try:
+            data = get_all_view_data(filters)
+            if data:
+                data["_source"] = "views"
+                return data
+        except Exception as e:
+            errors.append(f"Views: {e}")
+            print(f"[dashboard] Views fallback failed: {e}")
+
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    raise RuntimeError("No data source configured — check sravani-console/.env.example")
 
 PORT    = int(os.getenv("DATABRICKS_APP_PORT", 8000))
 PREWARM = os.getenv("GENIE_INSIGHTS_ON_STARTUP", "true").lower() == "true"
+REFRESH_MINUTES = int(os.getenv("INSIGHTS_REFRESH_INTERVAL_MINUTES", "30"))
+
+
+def _background_refresh_loop():
+    """Refresh dashboard cache every N minutes so users always get instant data."""
+    import time as _t
+    default_filters = {}
+    key = json.dumps(default_filters, sort_keys=True)
+    while True:
+        _t.sleep(REFRESH_MINUTES * 60)
+        with _jobs_lock:
+            already = any(
+                j["status"] == "running" and j.get("filter_key") == key
+                for j in _jobs.values()
+            )
+        if already:
+            print(f"[auto-refresh] Job running — skipping")
+            continue
+        print(f"[auto-refresh] Refreshing cache (interval={REFRESH_MINUTES}m)…")
+        jid = _new_job()
+        with _jobs_lock:
+            _jobs[jid]["filter_key"] = key
+        threading.Thread(
+            target=_run_dashboard_job,
+            args=(jid, default_filters, key),
+            daemon=True,
+        ).start()
 
 app = Flask(__name__)
 
@@ -61,11 +143,12 @@ def _cleanup_old_jobs():
 # ── Background worker ─────────────────────────────────────────────
 def _run_dashboard_job(jid: str, filters: dict, cache_key: str):
     try:
-        print(f"[job {jid[:8]}] Starting Supervisor call…")
-        data = get_dashboard(filters)
+        print(f"[job {jid[:8]}] Loading dashboard data…")
+        data = _load_dashboard_data(filters)
         cache_store.set(cache_key, data)
         _finish_job(jid, data)
-        print(f"[job {jid[:8]}] Done — {len(data.get('key_insights',[]))} insights")
+        src = data.get("_source", "supervisor")
+        print(f"[job {jid[:8]}] Done ({src}) — {len(data.get('key_insights',[]))} insights")
     except Exception as e:
         _fail_job(jid, str(e))
         print(f"[job {jid[:8]}] Failed: {e}")
@@ -74,14 +157,27 @@ def _run_dashboard_job(jid: str, filters: dict, cache_key: str):
 # ── GET /api/status ───────────────────────────────────────────────
 @app.route("/api/status")
 def status():
+    # Check if we have cached dashboard data to serve immediately
+    filters  = request.args.to_dict() or {}
+    key      = json.dumps(filters, sort_keys=True)
+    cached   = cache_store.get(key)
+    # Also try empty filter key (most common)
+    if not cached:
+        cached = cache_store.get("{}")
+    if not cached:
+        cached = cache_store.get("")
     return jsonify({
-        "ok":        True,
-        "supervisor": os.getenv("SUPERVISOR_ENDPOINT_NAME",   "NOT SET"),
-        "hostname":   os.getenv("DATABRICKS_SERVER_HOSTNAME", "NOT SET"),
-        "pat_set":    bool(os.getenv("DATABRICKS_PAT_TOKEN")),
-        "port":       PORT,
-        "cache":      cache_store.info(),
+        "ok":          True,
+        "supervisor":  os.getenv("SUPERVISOR_ENDPOINT_NAME",   "NOT SET"),
+        "supervisor_ok": _supervisor_configured(),
+        "views_ok":    VIEWS_AVAILABLE and views_configured(),
+        "hostname":    os.getenv("DATABRICKS_SERVER_HOSTNAME", "NOT SET"),
+        "pat_set":     bool(os.getenv("DATABRICKS_PAT_TOKEN")),
+        "port":        PORT,
+        "cache":       cache_store.info(),
         "active_jobs": len([j for j in _jobs.values() if j["status"] == "running"]),
+        "cache_hit":   bool(cached),
+        "cached_data": cached,
     })
 
 
@@ -102,12 +198,55 @@ def load_status():
         return jsonify({"state": "loading", "step": step,
                         "message": f"Querying Genie views… {elapsed}s elapsed"})
     if done:
-        return jsonify({"state": "done", "step": 4, "message": "Ready"})
+        # Return step 3 only — browser job poller handles step 4 + hideLoader
+        return jsonify({"state": "done", "step": 3, "message": "Ready"})
     if error:
         return jsonify({"state": "error", "step": 0, "message": error[0].get("error","")})
     return jsonify({"state": "idle", "step": 1, "message": ""})
 
 # ── POST /api/dashboard ───────────────────────────────────────────
+
+@app.route("/api/views", methods=["POST"])
+def views_data():
+    """Direct from Databricks views — fast, no Genie needed."""
+    if not VIEWS_AVAILABLE or not views_configured():
+        print("[views] SQL warehouse not configured — skipping direct queries")
+        return jsonify({"status":"ok","data":{},"from_cache":False,"skipped":True})
+    filters = request.get_json(silent=True) or {}
+    cache_key = "views_" + json.dumps(filters, sort_keys=True)
+    cached = cache_store.get(cache_key)
+    if cached:
+        print("[views] Cache HIT")
+        return jsonify({"status":"ok","data":cached,"from_cache":True})
+    try:
+        data = get_all_view_data(filters)
+        if data:
+            cache_store.set(cache_key, data, ttl_hours=1)
+        return jsonify({"status":"ok","data":data,"from_cache":False})
+    except Exception as e:
+        print(f"[views] Error: {e}")
+        return jsonify({"status":"ok","data":{},"error":str(e)})
+
+
+@app.route("/api/filters", methods=["GET"])
+def get_filters():
+    """Get distinct filter values directly from views — no Genie needed."""
+    if not VIEWS_AVAILABLE or not views_configured():
+        # Return empty — browser will use defaults
+        return jsonify({"status":"ok","data":{"sites":[],"regions":[],"markets":[],"years":[]}})
+    try:
+        from views import _run_sql, _qualified
+        sites_sql   = f"SELECT DISTINCT Site FROM {_qualified('pgt_plnt_prodtn_metric_view')} WHERE Site IS NOT NULL GROUP BY ALL ORDER BY Site LIMIT 100"
+        regions_sql = f"SELECT DISTINCT Region FROM {_qualified('pgt_plnt_prodtn_metric_view')} WHERE Region IS NOT NULL GROUP BY ALL ORDER BY Region LIMIT 50"
+        years_sql   = f"SELECT DISTINCT YEAR(`Production Date`) as yr FROM {_qualified('pgt_plnt_prodtn_metric_view')} WHERE `Production Date` IS NOT NULL GROUP BY ALL ORDER BY yr DESC LIMIT 5"
+        sites   = [r.get("Site","")   for r in _run_sql(sites_sql)   if r.get("Site")]
+        regions = [r.get("Region","") for r in _run_sql(regions_sql) if r.get("Region")]
+        years   = [str(r.get("yr","")) for r in _run_sql(years_sql)  if r.get("yr")]
+        return jsonify({"status":"ok","data":{"sites":sites,"regions":regions,"years":years}})
+    except Exception as e:
+        print(f"[filters] Error: {e}")
+        return jsonify({"status":"ok","data":{"sites":[],"regions":[],"markets":[],"years":[]}})
+
 @app.route("/api/dashboard", methods=["POST"])
 def dashboard():
     body    = request.get_json(silent=True) or {}
@@ -115,18 +254,33 @@ def dashboard():
     force   = body.get("force", False)
     key     = json.dumps(filters, sort_keys=True)
 
-    # Return from cache immediately if fresh
     if not force:
+        # Try exact key first
         cached = cache_store.get(key)
+        # Fall back to any cached dashboard data (pre-warm may have different key)
+        if not cached:
+            for fallback_key in ["{}", '{"period": "week"}', '']:
+                cached = cache_store.get(fallback_key)
+                if cached:
+                    print(f"[server] Cache HIT (fallback key)")
+                    break
         if cached:
-            print(f"[server] Cache HIT")
+            print(f"[server] Cache HIT — serving immediately")
             return jsonify({**cached, "_cached": True, "_job_id": None})
 
-    # Start background job — return job_id immediately
-    # Browser will poll /api/job/<id> until done
+    # Reuse any running job (not just same filter key)
+    with _jobs_lock:
+        for jid_existing, job in _jobs.items():
+            if job["status"] == "running":
+                print(f"[server] Reusing running job {jid_existing[:8]}")
+                return jsonify({"_job_id": jid_existing, "_cached": False, "status": "running"})
+
+    # Start new job
     _cleanup_old_jobs()
     jid = _new_job()
-    t   = threading.Thread(target=_run_dashboard_job, args=(jid, filters, key), daemon=True)
+    with _jobs_lock:
+        _jobs[jid]["filter_key"] = key
+    t = threading.Thread(target=_run_dashboard_job, args=(jid, filters, key), daemon=True)
     t.start()
     print(f"[server] Started background job {jid[:8]} for filters={filters}")
 
@@ -175,7 +329,7 @@ def rca():
     def _rca_job():
         try:
             data = get_rca(filters, kpi_focus)
-            cache_store.set(key, data)
+            cache_store.set(key, data, ttl_hours=4)
             _finish_job(jid, data)
             print(f"[rca {jid[:8]}] Done — issue: {data.get('issue','?')}")
         except Exception as e:
@@ -211,8 +365,24 @@ def ask():
 # ── POST /api/cache/clear ─────────────────────────────────────────
 @app.route("/api/cache/clear", methods=["POST"])
 def cache_clear():
-    cache_store.clear()
-    return jsonify({"ok": True})
+    body = request.get_json(silent=True) or {}
+    if body.get("rca_only"):
+        # Clear only RCA entries
+        import json as _json
+        store = cache_store._load_file()
+        store = {k:v for k,v in store.items() if not k.startswith("rca_")}
+        cache_store._save_file(store)
+        return jsonify({"ok": True, "cleared": "rca"})
+    elif body.get("dashboard_only"):
+        # Clear only dashboard entries (keep RCA)
+        store = cache_store._load_file()
+        store = {k:v for k,v in store.items() if k.startswith("rca_")}
+        cache_store._save_file(store)
+        return jsonify({"ok": True, "cleared": "dashboard"})
+    else:
+        # Clear everything
+        cache_store.clear()
+        return jsonify({"ok": True, "cleared": "all"})
 
 
 # ── GET / ─────────────────────────────────────────────────────────
@@ -231,6 +401,7 @@ if __name__ == "__main__":
     print(f"║  Supervisor : {os.getenv('SUPERVISOR_ENDPOINT_NAME','NOT SET'):<38}║")
     print(f"║  Hostname   : {os.getenv('DATABRICKS_SERVER_HOSTNAME','NOT SET'):<38}║")
     print(f"║  PAT        : {'SET ✓' if os.getenv('DATABRICKS_PAT_TOKEN') else 'NOT SET ⚠':<38}║")
+    print(f"║  SQL views  : {'READY ✓' if VIEWS_AVAILABLE and views_configured() else 'NOT SET ⚠':<38}║")
     print(f"║  Mode       : {os.getenv('SUPERVISOR_QUERY_MODE','minimal'):<38}║")
     print(f"║  Cache TTL  : {os.getenv('INSIGHTS_REFRESH_INTERVAL_HOURS','24')+'h':<38}║")
     print("╚══════════════════════════════════════════════════════╝")
@@ -246,17 +417,23 @@ if __name__ == "__main__":
     print()
 
     if PREWARM:
-        key = json.dumps({"period": "week"}, sort_keys=True)
+        key = json.dumps({}, sort_keys=True)
         if cache_store.get(key):
             print("[startup] Cache valid — skipping pre-warm")
         else:
             print("[startup] Pre-warming in background thread…")
             jid = _new_job()
-            t   = threading.Thread(
+            with _jobs_lock:
+                _jobs[jid]["filter_key"] = key
+            t = threading.Thread(
                 target=_run_dashboard_job,
-                args=(jid, {"period": "week"}, key),
+                args=(jid, {}, key),
                 daemon=True,
             )
             t.start()
+
+    # Start background auto-refresh loop
+    threading.Thread(target=_background_refresh_loop, daemon=True).start()
+    print(f"[auto-refresh] Background refresh every {REFRESH_MINUTES}m started")
 
     app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
