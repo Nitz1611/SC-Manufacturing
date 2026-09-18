@@ -96,13 +96,16 @@ def _remember_sql_error(err: BaseException) -> None:
 def _execute_query(query_key: str, params: dict[str, str | None]) -> list[dict[str, Any]]:
     print(f'[analytics] SQL start: {query_key}', flush=True)
     sql = bind_sql_params(load_query_sql(query_key), params)
-    rows = execute_statement(sql)
+    try:
+        rows = execute_statement(sql)
+    except Exception as err:
+        raise RuntimeError(f'{query_key}: {err}') from err
     print(f'[analytics] SQL done: {query_key} ({len(rows)} rows)', flush=True)
     return rows
 
 
 def _sql_max_workers(batch_size: int) -> int:
-    configured = int(os.getenv('SQL_MAX_CONCURRENCY') or 4)
+    configured = int(os.getenv('SQL_MAX_CONCURRENCY') or 2)
     return max(1, min(batch_size, configured))
 
 
@@ -194,6 +197,29 @@ def _load_prior_sql_cache(filters: dict[str, Any]) -> dict[str, Any] | None:
     cached = cache_get(key)
     if cached and cached.get('kpis') and (cached.get('meta') or {}).get('source') == 'sql':
         return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
+
+    # Fall back to network-level SQL cache (site=All) for the same period/year.
+    if norm.get('site') or norm.get('regions'):
+        network_norm = {**norm, 'site': None, 'regions': None}
+        network_key = coarse_cache_key(network_norm)
+        if network_key != key:
+            cached = cache_get(network_key)
+            if cached and cached.get('kpis') and (cached.get('meta') or {}).get('source') == 'sql':
+                return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
+
+    for entry in cache_load_all_metrics():
+        data = entry.get('data') or {}
+        if not data.get('kpis') or (data.get('meta') or {}).get('source') != 'sql':
+            continue
+        try:
+            parsed = json.loads(entry['key'].replace('metrics_', '', 1))
+            if str(parsed.get('year') or '2026') != str(norm.get('year') or '2026'):
+                continue
+            if (parsed.get('period') or 'week') != (norm.get('period') or 'week'):
+                continue
+            return apply_site_filter(copy.deepcopy(data), norm.get('site'))
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
     return None
 
 
@@ -311,6 +337,7 @@ def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
             prior = _load_prior_sql_cache(filters or {})
             if prior:
                 prior.setdefault('meta', {})['source'] = 'cache'
+                prior['meta']['sql_warning'] = str(err)[:240]
                 _set_memory_cached(norm, prior)
                 return prior
             _remember_sql_error(err)
@@ -383,6 +410,7 @@ def metrics_bundle_to_console_payload(
         '_job_id': extras.get('_job_id'),
         '_source': 'cache' if from_cache else source,
         '_live': _is_live_metrics(metrics),
+        '_sql_warning': meta.get('sql_warning'),
     }
 
 
