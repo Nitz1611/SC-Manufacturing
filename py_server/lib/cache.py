@@ -92,7 +92,11 @@ def cache_load_all_metrics() -> list[dict[str, Any]]:
         return [
             {"key": key, "data": entry["data"], "ts": entry["ts"]}
             for key, entry in store.items()
-            if key.startswith("metrics_") and entry.get("data") and now - entry["ts"] <= TTL_MS
+            if (
+                (key.startswith("metrics_v4_") or key.startswith("metrics_v3_") or key.startswith("metrics_"))
+                and entry.get("data")
+                and now - entry["ts"] <= TTL_MS
+            )
         ]
     except Exception:
         return []

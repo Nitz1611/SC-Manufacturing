@@ -17,7 +17,9 @@ from py_server.lib.config import (
     coarse_cache_key,
     console_demo_mode,
     load_query_sql,
+    metrics_cache_lookup_keys,
     normalize_params,
+    parse_metrics_cache_key,
     resolve_metric_view,
 )
 from py_server.lib.databricks_sql import execute_statement, sql_configured, warmup_warehouse
@@ -30,6 +32,22 @@ from py_server.lib.metrics_transform import (
 
 MEMORY_TTL_MS = int(os.getenv('METRICS_MEMORY_CACHE_MINUTES') or 15) * 60 * 1000
 PERIOD_VARIANTS = ('week', 'month', 'quarter', 'fiscal_year')
+
+
+def _valid_sql_cache(data: dict[str, Any] | None) -> bool:
+    return bool(
+        data
+        and data.get('kpis')
+        and (data.get('meta') or {}).get('source') in ('sql', 'cache')
+    )
+
+
+def _read_sql_cache_for_norm(norm: dict[str, str | None]) -> dict[str, Any] | None:
+    for key in metrics_cache_lookup_keys(norm):
+        cached = cache_get(key)
+        if _valid_sql_cache(cached):
+            return cached
+    return None
 
 _memory_cache: dict[str, dict[str, Any]] = {}
 _last_sql_error: str | None = None
@@ -147,7 +165,11 @@ def load_metrics_from_sql(
             futures = {pool.submit(_execute_query, key, norm): key for key in keys}
             for fut in as_completed(futures):
                 key = futures[fut]
-                out[key] = fut.result()
+                try:
+                    out[key] = fut.result()
+                except Exception as err:
+                    print(f'[analytics] {key} failed: {err}', flush=True)
+                    out[key] = []
                 done += 1
                 msg = f'{wave_label}: {done}/{total} queries complete ({key})'
                 print(f'[analytics] {msg}', flush=True)
@@ -155,7 +177,35 @@ def load_metrics_from_sql(
                     on_progress(msg)
         return out
 
+    def _derive_network_kpis_from_sites(site_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not site_rows:
+            return []
+        total_hrs = sum(float(r.get('downtime_hrs') or 0) for r in site_rows)
+        total_stops = sum(float(r.get('stops') or 0) for r in site_rows)
+        if total_hrs > 0:
+            weighted_pct = sum(
+                float(r.get('downtime_pct') or 0) * float(r.get('downtime_hrs') or 0)
+                for r in site_rows
+            ) / total_hrs
+        else:
+            weighted_pct = sum(float(r.get('downtime_pct') or 0) for r in site_rows) / len(site_rows)
+        return [{
+            'downtime_pct': round(weighted_pct, 2),
+            'downtime_hrs': round(total_hrs, 0),
+            'stops': int(round(total_stops)),
+        }]
+
     w1 = run_keys(wave1_keys, 'Wave 1')
+    if not w1.get('dashboard_dt_kpis') and w1.get('dashboard_dt_site_kpis'):
+        derived = _derive_network_kpis_from_sites(w1['dashboard_dt_site_kpis'])
+        if derived:
+            w1['dashboard_dt_kpis'] = derived
+            print('[analytics] derived network KPIs from site_kpis (dashboard_dt_kpis query failed)', flush=True)
+    if not w1.get('dashboard_dt_kpis') and not w1.get('dashboard_dt_site_kpis'):
+        raise RuntimeError(
+            'Critical SQL queries failed for network and site KPIs. '
+            'Check Databricks warehouse capacity or retry in a moment.',
+        )
     if on_progress:
         on_progress('Querying category, line, and shift breakdowns (wave 2/2)…')
     w2 = run_keys(wave2_keys, 'Wave 2')
@@ -193,33 +243,31 @@ def refresh_metrics_from_sql(
 
 def _load_prior_sql_cache(filters: dict[str, Any]) -> dict[str, Any] | None:
     norm = normalize_params(filters)
-    key = coarse_cache_key(norm)
-    cached = cache_get(key)
-    if cached and cached.get('kpis') and (cached.get('meta') or {}).get('source') == 'sql':
+    cached = _read_sql_cache_for_norm(norm)
+    if cached:
         return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
 
-    # Fall back to network-level SQL cache (site=All) for the same period/year.
+    # Fall back to network-level SQL cache (site=All) for the same year.
     if norm.get('site') or norm.get('regions'):
         network_norm = {**norm, 'site': None, 'regions': None}
-        network_key = coarse_cache_key(network_norm)
-        if network_key != key:
-            cached = cache_get(network_key)
-            if cached and cached.get('kpis') and (cached.get('meta') or {}).get('source') == 'sql':
-                return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
+        cached = _read_sql_cache_for_norm(network_norm)
+        if cached:
+            return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
 
     for entry in cache_load_all_metrics():
         data = entry.get('data') or {}
-        if not data.get('kpis') or (data.get('meta') or {}).get('source') != 'sql':
+        if not _valid_sql_cache(data):
             continue
-        try:
-            parsed = json.loads(entry['key'].replace('metrics_', '', 1))
-            if str(parsed.get('year') or '2026') != str(norm.get('year') or '2026'):
-                continue
-            if (parsed.get('period') or 'week') != (norm.get('period') or 'week'):
-                continue
-            return apply_site_filter(copy.deepcopy(data), norm.get('site'))
-        except (json.JSONDecodeError, KeyError, TypeError):
+        parsed = parse_metrics_cache_key(entry['key'])
+        if not parsed:
             continue
+        if str(parsed.get('year') or '2026') != str(norm.get('year') or '2026'):
+            continue
+        if parsed.get('site') != norm.get('site'):
+            continue
+        if parsed.get('regions') != norm.get('regions'):
+            continue
+        return apply_site_filter(copy.deepcopy(data), norm.get('site'))
     return None
 
 
@@ -230,9 +278,7 @@ def _load_metrics_from_demo_fallback(filters: dict[str, Any]) -> dict[str, Any]:
             'Fix SQL connectivity or remove DATABRICKS_* from .env to use demo mode.',
         )
     norm = normalize_params(filters)
-    key = coarse_cache_key(norm)
-
-    cached = cache_get(key)
+    cached = _read_sql_cache_for_norm(norm)
     if cached and cached.get('kpis') and (cached.get('meta') or {}).get('source') == 'sql':
         return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
 
@@ -240,14 +286,15 @@ def _load_metrics_from_demo_fallback(filters: dict[str, Any]) -> dict[str, Any]:
 
 
 def _get_memory_cached(norm: dict[str, str | None]) -> dict[str, Any] | None:
-    key = coarse_cache_key(norm)
-    hit = _memory_cache.get(key)
-    if not hit or (time.time() * 1000) - hit['ts'] > MEMORY_TTL_MS:
-        return None
-    data = hit['data']
-    if live_data_required() and not _is_live_metrics(data):
-        return None
-    return apply_site_filter(data, norm.get('site'))
+    for key in metrics_cache_lookup_keys(norm):
+        hit = _memory_cache.get(key)
+        if not hit or (time.time() * 1000) - hit['ts'] > MEMORY_TTL_MS:
+            continue
+        data = hit['data']
+        if live_data_required() and not _is_live_metrics(data):
+            continue
+        return apply_site_filter(data, norm.get('site'))
+    return None
 
 
 def _set_memory_cached(norm: dict[str, str | None], metrics: dict[str, Any]) -> None:
@@ -260,12 +307,17 @@ def store_metrics_bundle_to_cache(
     norm: dict[str, str | None],
     metrics: dict[str, Any],
 ) -> None:
-    """Store metrics under all timeframe cache keys — SQL ignores period, UI does not."""
-    for period in PERIOD_VARIANTS:
-        key_norm = {**norm, 'period': period}
-        scoped = apply_site_filter(metrics, key_norm.get('site'))
-        _set_memory_cached(key_norm, scoped)
-        cache_set(coarse_cache_key(key_norm), scoped)
+    """Store one SQL bundle — all UI timeframes share the same live data."""
+    scoped = apply_site_filter(metrics, norm.get('site'))
+    cache_norm = {
+        'year': norm.get('year'),
+        'site': norm.get('site'),
+        'regions': norm.get('regions'),
+        'period': norm.get('period'),
+        'timeframe': norm.get('timeframe'),
+    }
+    _set_memory_cached(cache_norm, scoped)
+    cache_set(coarse_cache_key(cache_norm), scoped)
 
 
 def get_memory_cache_stats() -> dict[str, Any]:
@@ -279,7 +331,9 @@ def warm_memory_cache_from_disk() -> int:
             data = entry.get('data') or {}
             if live_data_required() and not _is_live_metrics(data):
                 continue
-            parsed = json.loads(entry['key'].replace('metrics_', '', 1))
+            parsed = parse_metrics_cache_key(entry['key'])
+            if not parsed:
+                continue
             norm: dict[str, str | None] = {
                 'period': parsed.get('period') or 'week',
                 'year': str(parsed['year']) if parsed.get('year') else '2026',
@@ -291,7 +345,7 @@ def warm_memory_cache_from_disk() -> int:
             if key not in _memory_cache:
                 _memory_cache[key] = {'data': data, 'ts': entry['ts']}
                 loaded += 1
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except (KeyError, TypeError):
             pass
     if loaded:
         print(f'[cache] warmed {loaded} SQL metrics bundle(s) from disk into memory', flush=True)

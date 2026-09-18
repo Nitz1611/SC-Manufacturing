@@ -659,9 +659,16 @@
   }
 
   function renderLoading() {
-    var kpi = $('#maint-kpi-row');
-    if (kpi && state.loading) {
-      kpi.classList.add('maint-loading');
+    var root = $('#maint-root');
+    if (!root || !state.loading) return;
+    root.classList.add('maint-loading');
+    if (!root.querySelector('.maint-loading-shell')) {
+      root.innerHTML =
+        '<div class="maint-loading-shell" role="status" aria-live="polite">' +
+        '<div class="maint-loading-spinner" aria-hidden="true"></div>' +
+        '<p class="maint-loading-text">Loading live maintenance data from Databricks…</p>' +
+        '<p class="maint-loading-sub">First load can take up to a minute while SQL queries complete.</p>' +
+        '</div>';
     }
   }
 

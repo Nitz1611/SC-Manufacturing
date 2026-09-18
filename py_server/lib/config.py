@@ -5,6 +5,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 QUERIES_DIR = ROOT / "config" / "queries"
@@ -322,13 +323,46 @@ def console_demo_mode() -> bool:
 
 
 def coarse_cache_key(params: dict[str, str | None]) -> str:
+    """Cache key for SQL metrics — timeframe is UI-only; SQL does not filter by period."""
     payload = {
-        "period": params.get("period") or "week",
         "year": params.get("year") or "2026",
         "site": params.get("site"),
         "regions": params.get("regions"),
     }
-    return f"metrics_v3_{json.dumps(payload, separators=(',', ':'))}"
+    return f"metrics_v4_{json.dumps(payload, separators=(',', ':'))}"
+
+
+def metrics_cache_lookup_keys(params: dict[str, str | None]) -> list[str]:
+    """Primary v4 key plus legacy v3 keys (period was wrongly part of the cache key)."""
+    keys = [coarse_cache_key(params)]
+    base = {
+        "year": params.get("year") or "2026",
+        "site": params.get("site"),
+        "regions": params.get("regions"),
+    }
+    for period in (
+        "week",
+        "month",
+        "quarter",
+        "fiscal_year",
+        "period",
+        params.get("period") or "week",
+    ):
+        legacy = {**base, "period": period}
+        legacy_key = f"metrics_v3_{json.dumps(legacy, separators=(',', ':'))}"
+        if legacy_key not in keys:
+            keys.append(legacy_key)
+    return keys
+
+
+def parse_metrics_cache_key(key: str) -> dict[str, Any] | None:
+    for prefix in ("metrics_v4_", "metrics_v3_", "metrics_"):
+        if key.startswith(prefix):
+            try:
+                return json.loads(key[len(prefix) :])
+            except json.JSONDecodeError:
+                return None
+    return None
 
 
 def sql_column_summary() -> dict[str, str]:
