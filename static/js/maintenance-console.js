@@ -65,7 +65,7 @@
   var state = {
     page: 'maintenance',
     filters: {
-      timeframe: 'ptd',
+      timeframe: 'FY',
       year: '2026',
       site: 'All',
       region: 'All',
@@ -148,7 +148,7 @@
   function syncToConsoleFilters() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
-    mc.state.filters.timeframe = state.filters.timeframe || 'ptd';
+    mc.state.filters.timeframe = 'FY';
     mc.state.filters.year = state.filters.year === 'All' ? '2026' : state.filters.year;
     mc.state.filters.site = state.filters.site;
     mc.state.filters.region = normalizeRegionList(state.filters.region);
@@ -164,21 +164,14 @@
 
   function buildFilterPayload() {
     var f = state.filters;
-    var payload = {
-      timeframe: f.timeframe,
-      year: f.year === 'All' ? null : f.year,
+    return {
+      year: f.year === 'All' ? '2026' : f.year,
       site: f.site === 'All' ? null : f.site,
-      region:
-        normalizeRegionList(f.region).join(',') || null,
+      region: normalizeRegionList(f.region).join(',') || null,
       department: f.department === 'All' ? null : f.department,
       line: f.line === 'All' ? null : f.line,
       shift: f.shift === 'All' ? null : f.shift,
     };
-    if (f.timeframe === 'custom' && f.dateFrom && f.dateTo) {
-      payload.dateFrom = f.dateFrom;
-      payload.dateTo = f.dateTo;
-    }
-    return payload;
   }
 
   function fetchMaintenanceData() {
@@ -681,7 +674,7 @@
   function renderPrimaryKpi(kpi) {
     if (!kpi) return '';
     var deltaClass = kpi.delta_vs_target > 0 ? 'bad' : 'good';
-    var periodLabel = PERIOD_LABELS[state.filters.timeframe] || 'Last Period';
+    var periodLabel = 'FY 2026';
     var periodText = (kpi.period_delta && kpi.period_delta.text) || '';
     var lastShift = kpi.last_shift
       ? (kpi.last_shift.label || kpi.last_shift.shift || '')
@@ -1550,6 +1543,18 @@
     });
   }
 
+  function createWipTimeframeGroup() {
+    var group = document.createElement('div');
+    group.className = 'maint-filter-group maint-filter-wip';
+    group.innerHTML =
+      '<span class="filter-label">Timeframe <span class="maint-wip-badge">WIP</span></span>' +
+      '<div class="slicer slicer-disabled" data-slicer-id="timeframe">' +
+      '<button type="button" class="slicer-trigger" disabled aria-disabled="true">' +
+      '<span class="slicer-value">FY 2026</span>' +
+      '</button></div>';
+    return group;
+  }
+
   function buildFilterBar() {
     var bar = $('#maint-filter-bar');
     if (!bar || bar.dataset.built) return;
@@ -1557,9 +1562,7 @@
     bar.className = 'maint-filter-bar filter-bar';
     bar.replaceChildren();
 
-    bar.appendChild(
-      createSlicerGroup('timeframe', 'Timeframe', TIMEFRAME_OPTIONS, state.filters.timeframe, false)
-    );
+    bar.appendChild(createWipTimeframeGroup());
     bar.appendChild(
       createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
     );
@@ -1570,9 +1573,6 @@
     bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
     bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
     bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
-    bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
-    bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
-    updateDateFilterVisibility();
 
     if (!document.body.dataset.maintSlicerCloseBound) {
       document.body.dataset.maintSlicerCloseBound = '1';
@@ -1722,9 +1722,8 @@
       return;
     }
     syncFromConsoleFilters();
-    if (!state.filters.timeframe || state.filters.timeframe === 'FY') {
-      state.filters.timeframe = 'ptd';
-    }
+    state.filters.year = state.filters.year || '2026';
+    state.filters.timeframe = 'FY';
     buildPrimaryNav();
     buildFilterBar();
     initDates();

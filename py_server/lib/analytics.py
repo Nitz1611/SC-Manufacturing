@@ -1,6 +1,7 @@
 """
 Analytics — live SQL against pgt_plnt_prodtn_metric_view.
-When SQL is configured, never serves synthetic demo data on failure.
+Filter changes run SQL with year/site/region bound in each query.
+Only short-lived in-memory cache per filter combo — no full metric-view disk cache.
 """
 from __future__ import annotations
 
@@ -11,15 +12,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
-from py_server.lib.cache import cache_get, cache_load_all_metrics, cache_set
 from py_server.lib.config import (
     bind_sql_params,
-    coarse_cache_key,
     console_demo_mode,
+    filter_cache_key,
     load_query_sql,
-    metrics_cache_lookup_keys,
     normalize_params,
-    parse_metrics_cache_key,
     resolve_metric_view,
 )
 from py_server.lib.databricks_sql import execute_statement, sql_configured, warmup_warehouse
@@ -31,23 +29,6 @@ from py_server.lib.metrics_transform import (
 )
 
 MEMORY_TTL_MS = int(os.getenv('METRICS_MEMORY_CACHE_MINUTES') or 15) * 60 * 1000
-PERIOD_VARIANTS = ('week', 'month', 'quarter', 'fiscal_year')
-
-
-def _valid_sql_cache(data: dict[str, Any] | None) -> bool:
-    return bool(
-        data
-        and data.get('kpis')
-        and (data.get('meta') or {}).get('source') in ('sql', 'cache')
-    )
-
-
-def _read_sql_cache_for_norm(norm: dict[str, str | None]) -> dict[str, Any] | None:
-    for key in metrics_cache_lookup_keys(norm):
-        cached = cache_get(key)
-        if _valid_sql_cache(cached):
-            return cached
-    return None
 
 _memory_cache: dict[str, dict[str, Any]] = {}
 _last_sql_error: str | None = None
@@ -86,10 +67,10 @@ def _allow_demo_metrics() -> bool:
     return console_demo_mode() and not live_data_required()
 
 
-def purge_non_sql_caches() -> int:
+def purge_non_sql_caches() -> None:
     """Drop demo/synthetic entries from memory when live SQL is required."""
     if not live_data_required():
-        return 0
+        return
     removed = 0
     for key in list(_memory_cache.keys()):
         entry = _memory_cache.get(key)
@@ -98,7 +79,6 @@ def purge_non_sql_caches() -> int:
             removed += 1
     if removed:
         print(f'[analytics] purged {removed} non-SQL memory cache entries', flush=True)
-    return removed
 
 
 def _remember_sql_error(err: BaseException) -> None:
@@ -131,7 +111,7 @@ def load_metrics_from_sql(
     norm: dict[str, str | None],
     on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Run SQL in two waves with limited concurrency (default 4 parallel queries)."""
+    """Run filtered SQL (year/site/region) and assemble the metrics payload."""
     global _last_sql_error, _last_sql_success_at
 
     if on_progress:
@@ -241,36 +221,6 @@ def refresh_metrics_from_sql(
     return load_metrics_from_sql(norm, on_progress)
 
 
-def _load_prior_sql_cache(filters: dict[str, Any]) -> dict[str, Any] | None:
-    norm = normalize_params(filters)
-    cached = _read_sql_cache_for_norm(norm)
-    if cached:
-        return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
-
-    # Fall back to network-level SQL cache (site=All) for the same year.
-    if norm.get('site') or norm.get('regions'):
-        network_norm = {**norm, 'site': None, 'regions': None}
-        cached = _read_sql_cache_for_norm(network_norm)
-        if cached:
-            return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
-
-    for entry in cache_load_all_metrics():
-        data = entry.get('data') or {}
-        if not _valid_sql_cache(data):
-            continue
-        parsed = parse_metrics_cache_key(entry['key'])
-        if not parsed:
-            continue
-        if str(parsed.get('year') or '2026') != str(norm.get('year') or '2026'):
-            continue
-        if parsed.get('site') != norm.get('site'):
-            continue
-        if parsed.get('regions') != norm.get('regions'):
-            continue
-        return apply_site_filter(copy.deepcopy(data), norm.get('site'))
-    return None
-
-
 def _load_metrics_from_demo_fallback(filters: dict[str, Any]) -> dict[str, Any]:
     if live_data_required():
         raise RuntimeError(
@@ -278,46 +228,33 @@ def _load_metrics_from_demo_fallback(filters: dict[str, Any]) -> dict[str, Any]:
             'Fix SQL connectivity or remove DATABRICKS_* from .env to use demo mode.',
         )
     norm = normalize_params(filters)
-    cached = _read_sql_cache_for_norm(norm)
-    if cached and cached.get('kpis') and (cached.get('meta') or {}).get('source') == 'sql':
-        return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
-
     return apply_site_filter(metrics_from_cache(norm), norm.get('site'))
 
 
 def _get_memory_cached(norm: dict[str, str | None]) -> dict[str, Any] | None:
-    for key in metrics_cache_lookup_keys(norm):
-        hit = _memory_cache.get(key)
-        if not hit or (time.time() * 1000) - hit['ts'] > MEMORY_TTL_MS:
-            continue
-        data = hit['data']
-        if live_data_required() and not _is_live_metrics(data):
-            continue
-        return apply_site_filter(data, norm.get('site'))
-    return None
+    key = filter_cache_key(norm)
+    hit = _memory_cache.get(key)
+    if not hit or (time.time() * 1000) - hit['ts'] > MEMORY_TTL_MS:
+        return None
+    data = hit['data']
+    if live_data_required() and not _is_live_metrics(data):
+        return None
+    return apply_site_filter(data, norm.get('site'))
 
 
 def _set_memory_cached(norm: dict[str, str | None], metrics: dict[str, Any]) -> None:
     if live_data_required() and not _is_live_metrics(metrics):
         return
-    _memory_cache[coarse_cache_key(norm)] = {'data': metrics, 'ts': time.time() * 1000}
+    _memory_cache[filter_cache_key(norm)] = {'data': metrics, 'ts': time.time() * 1000}
 
 
 def store_metrics_bundle_to_cache(
     norm: dict[str, str | None],
     metrics: dict[str, Any],
 ) -> None:
-    """Store one SQL bundle — all UI timeframes share the same live data."""
+    """Session memory only — keyed by SQL filters (year, site, regions)."""
     scoped = apply_site_filter(metrics, norm.get('site'))
-    cache_norm = {
-        'year': norm.get('year'),
-        'site': norm.get('site'),
-        'regions': norm.get('regions'),
-        'period': norm.get('period'),
-        'timeframe': norm.get('timeframe'),
-    }
-    _set_memory_cached(cache_norm, scoped)
-    cache_set(coarse_cache_key(cache_norm), scoped)
+    _set_memory_cached(norm, scoped)
 
 
 def get_memory_cache_stats() -> dict[str, Any]:
@@ -325,75 +262,53 @@ def get_memory_cache_stats() -> dict[str, Any]:
 
 
 def warm_memory_cache_from_disk() -> int:
-    loaded = 0
-    for entry in cache_load_all_metrics():
-        try:
-            data = entry.get('data') or {}
-            if live_data_required() and not _is_live_metrics(data):
-                continue
-            parsed = parse_metrics_cache_key(entry['key'])
-            if not parsed:
-                continue
-            norm: dict[str, str | None] = {
-                'period': parsed.get('period') or 'week',
-                'year': str(parsed['year']) if parsed.get('year') else '2026',
-                'site': parsed.get('site') or None,
-                'regions': parsed.get('regions') or None,
-                'timeframe': parsed.get('period') or 'week',
-            }
-            key = coarse_cache_key(norm)
-            if key not in _memory_cache:
-                _memory_cache[key] = {'data': data, 'ts': entry['ts']}
-                loaded += 1
-        except (KeyError, TypeError):
-            pass
-    if loaded:
-        print(f'[cache] warmed {loaded} SQL metrics bundle(s) from disk into memory', flush=True)
-    return loaded
+    """Disk metric-view cache disabled — nothing to warm."""
+    return 0
 
 
 def get_cached_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any] | None:
     norm = normalize_params(filters or {})
-    return _get_memory_cached(norm) or _load_prior_sql_cache(filters or {})
+    return _get_memory_cached(norm)
 
 
 def get_fresh_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    norm = normalize_params(filters or {})
-    return _get_memory_cached(norm)
+    return get_cached_metrics_bundle(filters)
 
 
 def refresh_metrics_bundle(
     filters: dict[str, Any],
     on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Refresh metrics from SQL and update caches. Used by background console-data jobs."""
     norm = normalize_params(filters)
     metrics = load_metrics_from_sql(norm, on_progress)
     scoped = apply_site_filter(metrics, norm.get('site'))
-    store_metrics_bundle_to_cache(norm, metrics)
+    store_metrics_bundle_to_cache(norm, scoped)
     return scoped
 
 
 def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return metrics for the active filter selection — SQL on miss, memory on repeat."""
     norm = normalize_params(filters or {})
     mem = _get_memory_cached(norm)
     if mem:
+        print(
+            f'[analytics] memory cache hit filters={filter_cache_key(norm)}',
+            flush=True,
+        )
         return mem
 
     if sql_configured():
         try:
-            print(f'[analytics] Loading live data from {resolve_metric_view()}…', flush=True)
+            print(
+                f'[analytics] Loading live SQL for {resolve_metric_view()} '
+                f'filters={filter_cache_key(norm)}…',
+                flush=True,
+            )
             metrics = load_metrics_from_sql(norm)
             store_metrics_bundle_to_cache(norm, metrics)
             return apply_site_filter(metrics, norm.get('site'))
         except Exception as err:
             print(f'[analytics] Live SQL failed: {err}', flush=True)
-            prior = _load_prior_sql_cache(filters or {})
-            if prior:
-                prior.setdefault('meta', {})['source'] = 'cache'
-                prior['meta']['sql_warning'] = str(err)[:240]
-                _set_memory_cached(norm, prior)
-                return prior
             _remember_sql_error(err)
 
     if not _allow_demo_metrics():
@@ -423,11 +338,12 @@ def run_analytics_query(
         except Exception as e:
             _last_sql_error = str(e)
             print(f'[analytics] {query_key} live SQL failed: {_last_sql_error}', flush=True)
-            prior = _load_prior_sql_cache(params)
-            if prior:
-                result = query_result_for_key(query_key, prior)
+            cached = _get_memory_cached(norm)
+            if cached:
+                result = query_result_for_key(query_key, cached)
                 row_list = result.get('rows', []) if isinstance(result, dict) else []
-                return {'rows': row_list, 'source': 'cache', 'cached': True}
+                if row_list:
+                    return {'rows': row_list, 'source': 'cache', 'cached': True}
             raise
 
     if not _allow_demo_metrics():
@@ -484,6 +400,10 @@ def verify_metric_view_access() -> dict[str, Any]:
         return {'ok': False, 'error': _last_sql_error}
 
 
+# Backward-compatible alias used by summaries refresh jobs.
+coarse_cache_key = filter_cache_key
+
+
 __all__ = [
     'databricks_configured',
     'get_last_sql_error',
@@ -504,4 +424,6 @@ __all__ = [
     'verify_metric_view_access',
     'warmup_warehouse',
     'resolve_metric_view',
+    'filter_cache_key',
+    'coarse_cache_key',
 ]

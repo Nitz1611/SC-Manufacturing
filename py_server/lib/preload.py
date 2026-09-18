@@ -28,7 +28,7 @@ DEFAULT_YEAR = os.getenv('PRELOAD_DEFAULT_YEAR') or '2026'
 
 
 def preload_enabled() -> bool:
-    return (os.getenv('PRELOAD_ENABLED') or 'true').lower() != 'false'
+    return (os.getenv('PRELOAD_ENABLED') or 'false').lower() == 'true'
 
 
 class PreloadStatus(TypedDict):

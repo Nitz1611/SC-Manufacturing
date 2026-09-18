@@ -283,7 +283,10 @@ def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
     }
     period = tf_map.get(timeframe.lower(), timeframe.lower())
     year_val = raw.get("year")
-    year = str(year_val) if year_val and str(year_val).lower() != "all" else None
+    if year_val and str(year_val).lower() != "all":
+        year = str(year_val)
+    else:
+        year = "2026"
     site_val = raw.get("site")
     site = str(site_val).upper() if site_val and str(site_val).lower() != "all" else None
     regions: str | None = None
@@ -322,47 +325,19 @@ def console_demo_mode() -> bool:
     return (os.environ.get("CONSOLE_DEMO_MODE") or "").lower() == "true"
 
 
-def coarse_cache_key(params: dict[str, str | None]) -> str:
-    """Cache key for SQL metrics — timeframe is UI-only; SQL does not filter by period."""
+def filter_cache_key(params: dict[str, str | None]) -> str:
+    """In-memory cache key — only SQL-bound filters (year, site, regions). Timeframe is WIP/UI-only."""
     payload = {
         "year": params.get("year") or "2026",
         "site": params.get("site"),
         "regions": params.get("regions"),
     }
-    return f"metrics_v4_{json.dumps(payload, separators=(',', ':'))}"
+    return json.dumps(payload, sort_keys=True)
 
 
-def metrics_cache_lookup_keys(params: dict[str, str | None]) -> list[str]:
-    """Primary v4 key plus legacy v3 keys (period was wrongly part of the cache key)."""
-    keys = [coarse_cache_key(params)]
-    base = {
-        "year": params.get("year") or "2026",
-        "site": params.get("site"),
-        "regions": params.get("regions"),
-    }
-    for period in (
-        "week",
-        "month",
-        "quarter",
-        "fiscal_year",
-        "period",
-        params.get("period") or "week",
-    ):
-        legacy = {**base, "period": period}
-        legacy_key = f"metrics_v3_{json.dumps(legacy, separators=(',', ':'))}"
-        if legacy_key not in keys:
-            keys.append(legacy_key)
-    return keys
-
-
-def parse_metrics_cache_key(key: str) -> dict[str, Any] | None:
-    for prefix in ("metrics_v4_", "metrics_v3_", "metrics_"):
-        if key.startswith(prefix):
-            try:
-                return json.loads(key[len(prefix) :])
-            except json.JSONDecodeError:
-                return None
-    return None
+def coarse_cache_key(params: dict[str, str | None]) -> str:
+    """Backward-compatible alias — do not use for disk cache."""
+    return filter_cache_key(params)
 
 
 def sql_column_summary() -> dict[str, str]:

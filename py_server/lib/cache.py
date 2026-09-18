@@ -53,6 +53,9 @@ def cache_get_any() -> dict[str, Any] | None:
 
 
 def cache_set(key: str, data: dict[str, Any]) -> None:
+    """Legacy disk cache — disabled for full metric-view blobs (use in-memory filter cache)."""
+    if (os.environ.get("METRICS_DISK_CACHE") or "false").lower() != "true":
+        return
     try:
         store: dict[str, dict[str, Any]] = {}
         if CACHE_FILE.is_file():
@@ -62,6 +65,26 @@ def cache_set(key: str, data: dict[str, Any]) -> None:
         print(f"[cache] SAVED key={key[:40]}")
     except Exception as exc:
         print(f"[cache] write failed {exc}")
+
+
+def purge_metrics_disk_cache() -> int:
+    """Remove stale full-bundle metric entries from cache.json on startup."""
+    try:
+        if not CACHE_FILE.is_file():
+            return 0
+        store = _read_store()
+        removed = 0
+        for key in list(store.keys()):
+            if key.startswith("metrics_v") or key.startswith("metrics_"):
+                del store[key]
+                removed += 1
+        if removed:
+            CACHE_FILE.write_text(json.dumps(store), encoding="utf-8")
+            print(f"[cache] purged {removed} metric-view disk entries", flush=True)
+        return removed
+    except Exception as exc:
+        print(f"[cache] purge failed {exc}", flush=True)
+        return 0
 
 
 def cache_info() -> dict[str, Any]:

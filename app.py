@@ -19,6 +19,7 @@ from pathlib import Path
 from flask import Flask, render_template
 
 from py_server.lib.analytics import verify_metric_view_access, purge_non_sql_caches
+from py_server.lib.cache import purge_metrics_disk_cache
 from py_server.lib.databricks_fetch import test_databricks_reachability
 from py_server.lib.databricks_sql import sql_configured, warmup_warehouse
 from py_server.lib.env import load_env, sql_env_status
@@ -38,6 +39,7 @@ register_routes(app)
 def _startup_warmup() -> None:
     if sql_configured():
         purge_non_sql_caches()
+        purge_metrics_disk_cache()
     if not sql_configured():
         return
     try:
@@ -49,7 +51,10 @@ def _startup_warmup() -> None:
         test = verify_metric_view_access()
         if test.get("ok"):
             print(f"[startup] ✓ metric view OK ({test.get('row_count', 0)} rows)")
-            start_preload_scheduler()
+            if (os.getenv("PRELOAD_ENABLED") or "false").lower() == "true":
+                start_preload_scheduler()
+            else:
+                print("[startup] preload disabled — SQL runs on demand per filter change")
         else:
             print(f"[startup] ✗ metric view check failed: {test.get('error')}")
     except Exception as exc:

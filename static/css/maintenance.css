@@ -16,6 +16,23 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 
 .maint-hidden { display: none !important; }
 
+.maint-filter-wip .slicer-disabled .slicer-trigger {
+  opacity: 0.72;
+  cursor: not-allowed;
+  background: #f4f7fb;
+}
+.maint-filter-wip .maint-wip-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6b7280;
+  background: #eef2f7;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .maint-root { padding: 0 0 80px; min-height: 320px; }
 .maint-root.maint-loading:not(:empty) { opacity: 0.6; pointer-events: none; }
 
