@@ -1,0 +1,1819 @@
+/**
+ * Maintenance console — filter-driven dashboard with My Report, Drill Down, and KPI Overview links.
+ * Requires ManufacturingConsole (console-engine.js) and Chart.js.
+ */
+(function () {
+  'use strict';
+
+  var PRIMARY_NAV = [
+    { id: 'overview', title: 'Overview' },
+    { id: 'execute', title: 'Execute' },
+    { id: 'maintenance', title: 'Maintenance' },
+    { id: 'quality', title: 'Quality' },
+    { id: 'planning', title: 'Planning' },
+  ];
+
+  var TIMEFRAME_OPTIONS = [
+    { value: 'shift', label: 'Shift (Last Completed)', short: 'Shift' },
+    { value: 'wtd', label: 'WTD (Week to Date)', short: 'WTD' },
+    { value: 'ptd', label: 'PTD (Period to Date)', short: 'PTD' },
+    { value: 'ytd', label: 'YTD (Year to Date)', short: 'YTD' },
+    { value: 'custom', label: 'Custom Range', short: 'Custom Range' },
+  ];
+
+  var PERIOD_LABELS = {
+    ptd: 'Current Period',
+    wtd: 'Current Week',
+    ytd: 'Current Year',
+    shift: 'Last Completed Shift',
+    custom: 'Custom Range',
+  };
+
+  /* KPI Overview chart palette — keep identical across Maintenance + KPI Overview */
+  var CHART_COLORS = [
+    '#002855',
+    '#004080',
+    '#0066cc',
+    '#0088cc',
+    '#00a896',
+    '#5c6bc0',
+    '#9e9e9e',
+    '#ffb74d',
+    '#ff9800',
+    '#e53935',
+  ];
+  var DONUT_DT_COLOR = '#e53935';
+  var DONUT_TRACK_COLOR = '#e8eef5';
+  var BAR_COLORS = CHART_COLORS;
+  var DT_TARGET = 4.5;
+  var SCATTER_COLORS = { outlier: '#dc2626', normal: '#eab308' };
+  var REGION_OPTIONS = [
+    'North America',
+    'Latin America',
+    'Europe',
+    'Asia Pacific',
+    'Middle East & Africa',
+  ];
+  var SHIFT_OPTIONS = ['All', 'Shift 1', 'Shift 2', 'Shift 3'];
+  var SHOW_IN_OPTIONS = ['Thousands', 'Actual', 'Percentage'];
+  var SELECT_ALL = { value: 'All', label: 'Select All' };
+
+  /** Original console-engine navigators — captured before wrapper patch */
+  var engineSwitchPage = null;
+  var engineSwitchKpiTab = null;
+  var engineEnterKpiOverview = null;
+
+  var state = {
+    page: 'maintenance',
+    filters: {
+      timeframe: 'FY',
+      year: '2026',
+      site: 'All',
+      region: 'All',
+      department: 'All',
+      line: 'All',
+      shift: 'All',
+      showIn: 'Thousands',
+      dateFrom: '',
+      dateTo: '',
+    },
+    payload: null,
+    loading: false,
+    insightsLoading: false,
+    insightTab: 'ai-summary',
+    reportTab: 'snapshot',
+    charts: {},
+    openAlert: null,
+  };
+
+  function $(sel, root) {
+    return (root || document).querySelector(sel);
+  }
+
+  function $$(sel, root) {
+    return Array.prototype.slice.call((root || document).querySelectorAll(sel));
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function fmtPct(n) {
+    return Number(n).toFixed(2) + ' %';
+  }
+
+  function fmtNum(n) {
+    return Math.round(Number(n)).toLocaleString('en-US');
+  }
+
+  function destroyChart(id) {
+    if (state.charts[id]) {
+      state.charts[id].destroy();
+      delete state.charts[id];
+    }
+  }
+
+  function normalizeRegionList(value) {
+    if (!value || value === 'All') return [];
+    if (Array.isArray(value)) {
+      return value.map(function (r) {
+        return String(r).trim();
+      }).filter(Boolean);
+    }
+    return String(value)
+      .split(',')
+      .map(function (r) {
+        return r.trim();
+      })
+      .filter(Boolean);
+  }
+
+  function regionFilterLabel(value) {
+    var list = normalizeRegionList(value);
+    return list.length ? list.join(', ') : 'All';
+  }
+
+  function syncFromConsoleFilters() {
+    var mc = window.ManufacturingConsole;
+    if (!mc || !mc.state || !mc.state.filters) return;
+    var f = mc.state.filters;
+    if (f.timeframe) state.filters.timeframe = String(f.timeframe).toLowerCase() === 'fy' ? 'FY' : f.timeframe;
+    if (f.year) state.filters.year = f.year;
+    if (f.site) state.filters.site = f.site;
+    state.filters.region = regionFilterLabel(f.region);
+    if (f.showIn) state.filters.showIn = f.showIn;
+  }
+
+  function syncToConsoleFilters() {
+    var mc = window.ManufacturingConsole;
+    if (!mc || !mc.state) return;
+    mc.state.filters.timeframe = 'FY';
+    mc.state.filters.year = state.filters.year === 'All' ? '2026' : state.filters.year;
+    mc.state.filters.site = state.filters.site;
+    mc.state.filters.region = normalizeRegionList(state.filters.region);
+    mc.state.filters.showIn = state.filters.showIn || 'Thousands';
+  }
+
+  function applyShowInToEngine() {
+    var mc = window.ManufacturingConsole;
+    if (!mc) return;
+    syncToConsoleFilters();
+    if (typeof mc.applyShowIn === 'function') {
+      mc.applyShowIn();
+    }
+  }
+
+  function reloadConsoleMetrics() {
+    var mc = window.ManufacturingConsole;
+    if (mc && typeof mc.reloadMetrics === 'function') {
+      mc.reloadMetrics(false, { background: state.page !== 'kpi-overview' });
+    }
+  }
+
+  function buildFilterPayload() {
+    var f = state.filters;
+    return {
+      year: f.year === 'All' ? '2026' : f.year,
+      site: f.site === 'All' ? null : f.site,
+      region: normalizeRegionList(f.region).join(',') || null,
+      department: f.department === 'All' ? null : f.department,
+      line: f.line === 'All' ? null : f.line,
+      shift: f.shift === 'All' ? null : f.shift,
+    };
+  }
+
+  function fetchMaintenanceData(silent) {
+    if (!silent) {
+      state.loading = true;
+      renderLoading();
+    }
+    return fetch('/api/maintenance/data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filters: buildFilterPayload() }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data.error) throw new Error(data.error);
+        state.payload = data;
+        applyFilterOptions(data.filter_options || {});
+        updateDateFilterVisibility();
+        renderMaintenance();
+        fetchAiInsights();
+        if ($('#maint-report-modal') && $('#maint-report-modal').classList.contains('open')) {
+          renderReportModal();
+        }
+        if (data._partial || data._refreshing) {
+          window.setTimeout(function () {
+            fetchMaintenanceData(true);
+          }, 4000);
+        }
+      })
+      .catch(function (err) {
+        console.error('[maintenance]', err);
+        var el = $('#maint-root');
+        if (el) {
+          el.innerHTML =
+            '<div class="page-hero"><h2>Maintenance</h2><p>Unable to load data: ' +
+            esc(err.message) +
+            '</p></div>';
+        }
+      })
+      .finally(function () {
+        state.loading = false;
+      });
+  }
+
+  function isCustomTimeframe() {
+    return String(state.filters.timeframe || '').toLowerCase() === 'custom';
+  }
+
+  function updateDateFilterVisibility() {
+    var show = isCustomTimeframe();
+    $$('.maint-date-filter').forEach(function (el) {
+      el.classList.toggle('maint-hidden', !show);
+    });
+  }
+
+  function withSelectAllOption(options) {
+    var opts = (options || []).slice();
+    var allIdx = opts.findIndex(function (o) {
+      var v = typeof o === 'object' ? o.value : o;
+      return v === 'All';
+    });
+    if (allIdx >= 0) {
+      opts[allIdx] = SELECT_ALL;
+      return opts;
+    }
+    return [SELECT_ALL].concat(opts);
+  }
+
+  function fetchAiInsights() {
+    if (state.insightsLoading) return;
+    state.insightsLoading = true;
+    return fetch('/api/maintenance/insights', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filters: buildFilterPayload(), allowFallback: true }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data.error || !data.ai_summaries) return;
+        if (state.payload) state.payload.ai_summaries = data.ai_summaries;
+        if (state.insightTab === 'ai-summary') {
+          var el = $('#maint-tab-ai-summary');
+          if (el) el.innerHTML = renderAiSummaries(data.ai_summaries);
+        }
+      })
+      .catch(function (err) {
+        console.warn('[maintenance insights]', err);
+      })
+      .finally(function () {
+        state.insightsLoading = false;
+      });
+  }
+
+  function slicerDisplayValue(id, value) {
+    if (value == null || value === '' || value === 'All') return 'Select All';
+    if (id === 'region') return regionFilterLabel(value) === 'All' ? 'Select All' : regionFilterLabel(value);
+    if (Array.isArray(value)) return value.length ? value.join(', ') : 'Select All';
+    if (id === 'timeframe') {
+      var tfMatch = TIMEFRAME_OPTIONS.filter(function (o) {
+        return o.value === value;
+      })[0];
+      return tfMatch ? tfMatch.short || tfMatch.label : String(value);
+    }
+    var match = TIMEFRAME_OPTIONS.filter(function (o) {
+      return o.value === value;
+    })[0];
+    if (match) return match.short || match.label;
+    return String(value);
+  }
+
+  function updateSlicerDisplay(id, value) {
+    var slicer = $('.maint-filter-bar .slicer[data-slicer-id="' + id + '"]');
+    if (!slicer) return;
+    var el = slicer.querySelector('.slicer-value');
+    if (el) el.textContent = slicerDisplayValue(id, value);
+  }
+
+  function closeAllSlicers() {
+    $$('.maint-filter-bar .slicer.open').forEach(function (s) {
+      resetMaintSlicerPanel(s);
+      s.classList.remove('open');
+    });
+    $$('.maint-filter-bar .maint-filter-group-open').forEach(function (g) {
+      g.classList.remove('maint-filter-group-open');
+    });
+    var bar = $('#maint-filter-bar');
+    if (bar) bar.classList.remove('maint-slicers-open');
+  }
+
+  function positionMaintSlicerPanel(slicer) {
+    if (!slicer) return;
+    var trigger = slicer.querySelector('.slicer-trigger');
+    var panel = slicer.querySelector('.slicer-panel');
+    if (!trigger || !panel) return;
+    var rect = trigger.getBoundingClientRect();
+    panel.style.position = 'fixed';
+    panel.style.top = Math.round(rect.bottom + 6) + 'px';
+    panel.style.left = Math.round(rect.left) + 'px';
+    panel.style.minWidth = Math.max(rect.width, 260) + 'px';
+    panel.style.zIndex = '10050';
+  }
+
+  function resetMaintSlicerPanel(slicer) {
+    if (!slicer) return;
+    var panel = slicer.querySelector('.slicer-panel');
+    if (!panel) return;
+    panel.style.position = '';
+    panel.style.top = '';
+    panel.style.left = '';
+    panel.style.minWidth = '';
+    panel.style.zIndex = '';
+  }
+
+  function repositionOpenMaintSlicers() {
+    $$('.maint-filter-bar .slicer.open').forEach(positionMaintSlicerPanel);
+  }
+
+  function bindMaintSlicerViewport() {
+    if (window.__maintSlicerViewportBound) return;
+    window.__maintSlicerViewportBound = true;
+    window.addEventListener('scroll', repositionOpenMaintSlicers, true);
+    window.addEventListener('resize', repositionOpenMaintSlicers);
+  }
+
+  function refreshSlicerOptions(id) {
+    if (id === 'timeframe') {
+      populateSlicerOptions('timeframe', TIMEFRAME_OPTIONS, state.filters.timeframe, false);
+    } else if (id === 'region') {
+      populateSlicerOptions('region', regionSlicerOptions(), state.filters.region, true);
+    } else if (id === 'year') {
+      populateSlicerOptions('year', [{ value: state.filters.year, label: state.filters.year }], state.filters.year, false);
+    }
+  }
+
+  function populateSlicerOptions(id, options, currentValue, multi) {
+    var wrap = $('.maint-filter-bar .slicer-options[data-slicer-options="' + id + '"]');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    var normalized = withSelectAllOption(options);
+    var selected = multi ? normalizeRegionList(currentValue) : [currentValue || 'All'];
+
+    normalized.forEach(function (opt) {
+      var val = typeof opt === 'object' ? opt.value : opt;
+      var lab = typeof opt === 'object' ? opt.label : opt;
+      var isSelected = multi
+        ? val === 'All'
+          ? !selected.length
+          : selected.indexOf(val) >= 0
+        : String(selected[0]) === String(val);
+
+      var row = document.createElement('div');
+      row.className = 'slicer-option' + (isSelected ? ' selected' : '');
+      row.dataset.value = val;
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      if (multi) {
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = isSelected;
+        cb.tabIndex = -1;
+        row.appendChild(cb);
+      } else {
+        row.appendChild(document.createElement('span')).className = 'radio-dot';
+      }
+      var labelEl = document.createElement('span');
+      labelEl.textContent = lab;
+      row.appendChild(labelEl);
+      row.addEventListener('click', function (e) {
+        e.stopPropagation();
+        onSlicerSelect(id, val, multi);
+      });
+      wrap.appendChild(row);
+    });
+  }
+
+  function onSlicerSelect(id, value, multi) {
+    if (multi) {
+      if (value === 'All') {
+        state.filters.region = 'All';
+      } else {
+        var list = normalizeRegionList(state.filters.region);
+        var idx = list.indexOf(value);
+        if (idx >= 0) list.splice(idx, 1);
+        else list.push(value);
+        state.filters.region = list.length ? list.join(', ') : 'All';
+      }
+      populateSlicerOptions('region', regionSlicerOptions(), state.filters.region, true);
+      updateSlicerDisplay('region', state.filters.region);
+    } else {
+      state.filters[id] = value;
+      updateSlicerDisplay(id, value);
+      if (id === 'showIn') {
+        closeAllSlicers();
+        applyShowInToEngine();
+        return;
+      }
+      if (id === 'site') {
+        state.filters.line = 'All';
+        updateSlicerDisplay('line', 'All');
+      }
+      if (id === 'timeframe') {
+        updateDateFilterVisibility();
+      }
+    }
+    closeAllSlicers();
+    onFilterChange();
+  }
+
+  function regionSlicerOptions() {
+    return REGION_OPTIONS.map(function (r) {
+      return { value: r, label: r };
+    });
+  }
+
+  function createSlicerGroup(id, label, options, currentValue, multi, searchable) {
+    var group = document.createElement('div');
+    group.className = 'filter-group maint-filter-group';
+    group.innerHTML = '<span class="filter-label maint-filter-label">' + esc(label) + '</span>';
+
+    var slicer = document.createElement('div');
+    slicer.className = 'slicer';
+    slicer.dataset.slicerId = id;
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'slicer-trigger';
+    trigger.innerHTML =
+      '<span class="slicer-value">' +
+      esc(slicerDisplayValue(id, currentValue)) +
+      '</span><span class="slicer-chevron"></span>';
+
+    var panel = document.createElement('div');
+    panel.className = 'slicer-panel';
+
+    if (searchable) {
+      var searchWrap = document.createElement('div');
+      searchWrap.className = 'slicer-search-wrap';
+      var searchInput = document.createElement('input');
+      searchInput.type = 'text';
+      searchInput.className = 'slicer-search';
+      searchInput.placeholder = 'Search…';
+      searchInput.addEventListener('input', function (e) {
+        filterSlicerOptions(id, e.target.value);
+      });
+      searchInput.addEventListener('click', function (e) {
+        e.stopPropagation();
+      });
+      searchWrap.appendChild(searchInput);
+      panel.appendChild(searchWrap);
+    }
+
+    panel.addEventListener('click', function (e) {
+      e.stopPropagation();
+    });
+
+    var optsWrap = document.createElement('div');
+    optsWrap.className = 'slicer-options';
+    optsWrap.dataset.slicerOptions = id;
+
+    panel.appendChild(optsWrap);
+    slicer.appendChild(trigger);
+    slicer.appendChild(panel);
+    group.appendChild(slicer);
+
+    trigger.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var wasOpen = slicer.classList.contains('open');
+      closeAllSlicers();
+      if (!wasOpen) {
+        refreshSlicerOptions(id);
+        slicer.classList.add('open');
+        group.classList.add('maint-filter-group-open');
+        var bar = $('#maint-filter-bar');
+        if (bar) bar.classList.add('maint-slicers-open');
+        requestAnimationFrame(function () {
+          positionMaintSlicerPanel(slicer);
+        });
+        if (searchable) {
+          var input = panel.querySelector('.slicer-search');
+          if (input) {
+            input.value = '';
+            filterSlicerOptions(id, '');
+            setTimeout(function () {
+              input.focus();
+            }, 50);
+          }
+        }
+      }
+    });
+
+    populateSlicerOptions(id, options, currentValue, multi);
+    return group;
+  }
+
+  function createDateGroup(id, label, value) {
+    var group = document.createElement('div');
+    group.className = 'filter-group maint-filter-group maint-date-filter';
+    group.innerHTML =
+      '<span class="filter-label maint-filter-label">' +
+      esc(label) +
+      '</span>' +
+      '<div class="slicer maint-date-slicer">' +
+      '<label class="slicer-trigger maint-date-trigger">' +
+      '<input type="date" class="maint-date-input" id="maint-filter-' +
+      id +
+      '" value="' +
+      esc(value || '') +
+      '" aria-label="' +
+      esc(label) +
+      '" />' +
+      '</label></div>';
+    group.querySelector('input').addEventListener('change', onFilterChange);
+    return group;
+  }
+
+  function applyFilterOptions(opts) {
+    if (opts.sites && opts.sites.length) {
+      var siteOpts = opts.sites.map(function (s) {
+        return { value: s, label: s };
+      });
+      populateSlicerOptions('site', siteOpts, state.filters.site, false);
+      updateSlicerDisplay('site', state.filters.site);
+    }
+    if (opts.lines && opts.lines.length) {
+      updateLineSlicerOptions(opts.lines);
+    }
+    if (opts.years && opts.years.length) {
+      var yearOpts = opts.years.map(function (y) {
+        return { value: String(y), label: String(y) };
+      });
+      populateSlicerOptions('year', yearOpts, state.filters.year, false);
+      updateSlicerDisplay('year', state.filters.year);
+    }
+    if (opts.shifts && opts.shifts.length) {
+      var shiftOpts = opts.shifts.map(function (s) {
+        return { value: s, label: s };
+      });
+      populateSlicerOptions('shift', shiftOpts, state.filters.shift, false);
+      updateSlicerDisplay('shift', state.filters.shift);
+    }
+    if (opts.departments && opts.departments.length) {
+      var deptOpts = opts.departments.map(function (d) {
+        return { value: d, label: d };
+      });
+      populateSlicerOptions('department', deptOpts, state.filters.department, false);
+      updateSlicerDisplay('department', state.filters.department);
+    }
+    updateDateFilterVisibility();
+  }
+
+  function updateLineSlicerOptions(lines) {
+    var lineOpts = lines.map(function (l) {
+      return { value: l, label: l };
+    });
+    populateSlicerOptions('line', lineOpts, state.filters.line, false);
+    updateSlicerDisplay('line', state.filters.line);
+  }
+
+  function filterSlicerOptions(id, query) {
+    var wrap = $('.maint-filter-bar .slicer-options[data-slicer-options="' + id + '"]');
+    if (!wrap) return;
+    query = String(query || '').toLowerCase();
+    wrap.querySelectorAll('.slicer-option').forEach(function (btn) {
+      var text = btn.textContent.toLowerCase();
+      btn.style.display = !query || text.indexOf(query) >= 0 ? '' : 'none';
+    });
+  }
+
+  function renderRankedExposureTable(rows, options) {
+    options = options || {};
+    if (!rows || !rows.length) {
+      return '<p class="maint-empty-note">No data for the current filter selection.</p>';
+    }
+    var valueKey = options.valueKey || 'dt_pct';
+    var nameKey = options.nameKey || 'site';
+    var maxVal = options.maxValue;
+    if (!maxVal) {
+      maxVal = Math.max.apply(
+        null,
+        rows.map(function (r) {
+          return Number(r[valueKey]) || 0;
+        }).concat([DT_TARGET, 12])
+      );
+    }
+    var targetTick = Math.min(100, (DT_TARGET / maxVal) * 100);
+    var tbody = rows
+      .map(function (row, i) {
+        var val = Number(row[valueKey]) || 0;
+        var width = Math.max(4, (val / maxVal) * 100);
+        var color = CHART_COLORS[i % CHART_COLORS.length];
+        var detail = options.detailFn ? options.detailFn(row) : '';
+        return (
+          '<tr>' +
+          '<td class="reason-rank-col">' +
+          (i + 1) +
+          '</td>' +
+          '<td class="reason-name-col">' +
+          esc(row[nameKey]) +
+          (detail ? '<div class="maint-ranked-detail">' + esc(detail) + '</div>' : '') +
+          '</td>' +
+          '<td class="reason-bar-cell">' +
+          '<div class="reason-bar-track">' +
+          '<span class="maint-target-tick" style="left:' +
+          targetTick +
+          '%" title="Target ' +
+          DT_TARGET.toFixed(2) +
+          '%"></span>' +
+          '<div class="reason-bar" style="width:' +
+          width +
+          '%;background-color:' +
+          color +
+          '"></div></div>' +
+          (options.barValueFn
+            ? '<span class="reason-hours-val">' + esc(options.barValueFn(row)) + '</span>'
+            : '') +
+          '</td>' +
+          '<td class="reason-pct-col">' +
+          val.toFixed(2) +
+          ' %</td></tr>'
+        );
+      })
+      .join('');
+
+    return (
+      '<div class="maint-ranked-table-wrap">' +
+      '<div class="table-scroll reason-table-scroll maint-ranked-scroll">' +
+      '<table class="data-table reason-table maint-ranked-table">' +
+      '<thead><tr>' +
+      '<th class="reason-rank-col">#</th>' +
+      '<th class="reason-name-col">' +
+      esc(options.nameHeader || 'Site') +
+      '</th>' +
+      '<th class="reason-bar-col">' +
+      esc(options.barHeader || 'Unplanned DT Exposure') +
+      '</th>' +
+      '<th class="reason-pct-col">' +
+      esc(options.pctHeader || 'Unplanned DT %') +
+      '</th></tr></thead><tbody>' +
+      tbody +
+      '</tbody></table></div>' +
+      '<div class="maint-target-legend">FLNA Target: ' +
+      DT_TARGET.toFixed(2) +
+      '% <span class="maint-target-swatch"></span></div></div>'
+    );
+  }
+
+  function renderLoading() {
+    var root = $('#maint-root');
+    if (!root || !state.loading) return;
+    root.classList.add('maint-loading');
+    if (!root.querySelector('.maint-loading-shell')) {
+      root.innerHTML =
+        '<div class="maint-loading-shell" role="status" aria-live="polite">' +
+        '<div class="maint-loading-spinner" aria-hidden="true"></div>' +
+        '<p class="maint-loading-text">Loading live maintenance data from Databricks…</p>' +
+        '<p class="maint-loading-sub">First load can take 1–3 minutes. Do not refresh — waiting for Databricks SQL.</p>' +
+        '</div>';
+    }
+  }
+
+  function statusDotClass(pct, target) {
+    if (pct >= target + 3) return 'critical';
+    if (pct >= target) return 'warning';
+    return 'good';
+  }
+
+  function renderPrimaryKpi(kpi) {
+    if (!kpi) return '';
+    var deltaClass = kpi.delta_vs_target > 0 ? 'bad' : 'good';
+    var periodLabel = 'FY 2026';
+    var periodText = (kpi.period_delta && kpi.period_delta.text) || '';
+    var lastShift = kpi.last_shift
+      ? (kpi.last_shift.label || kpi.last_shift.shift || '')
+      : '—';
+    var schedLost = kpi.scheduled_hours ? kpi.scheduled_hours.display : '—';
+
+    return (
+      '<article class="maint-kpi-card primary" data-kpi="primary">' +
+      '<div class="maint-kpi-head">' +
+      '<span class="maint-status-dot ' +
+      statusDotClass(kpi.value, kpi.target) +
+      '" aria-hidden="true"></span>' +
+      '<span class="maint-kpi-title">Total Unplanned Downtime %</span>' +
+      '</div>' +
+      '<div class="maint-kpi-body">' +
+      '<div class="maint-kpi-main">' +
+      '<div class="maint-kpi-value">' +
+      esc(kpi.value_display || fmtPct(kpi.value)) +
+      '</div>' +
+      '<div class="maint-kpi-target-row">Target <strong>' +
+      fmtPct(kpi.target) +
+      '</strong>' +
+      '<span class="maint-kpi-delta ' +
+      deltaClass +
+      '">' +
+      esc(Math.abs(kpi.delta_vs_target).toFixed(2)) +
+      ' pts ' +
+      (kpi.delta_vs_target > 0 ? '▲' : '▼') +
+      '</span></div>' +
+      '</div>' +
+      '<div class="maint-kpi-trend"><canvas id="maint-spark-primary" aria-label="Unplanned DT trend"></canvas></div>' +
+      '</div>' +
+      '<div class="maint-period-delta">' +
+      periodLabel +
+      ' <span>' +
+      esc(periodText) +
+      '</span></div>' +
+      '<div class="maint-kpi-footer-stats">' +
+      '<span>Last Shift <span class="bad">' +
+      esc(lastShift) +
+      '</span></span>' +
+      '<span class="bad"><strong>' +
+      esc(schedLost.replace(' h', '')) +
+      '</strong> Scheduled Hours Lost</span>' +
+      '</div>' +
+      renderKnowMore() +
+      '</article>'
+    );
+  }
+
+  function renderSecondaryKpis(list) {
+    return (list || [])
+      .map(function (k, i) {
+        var val = k.value || '—';
+        var wip = k.wip ? ' <span class="maint-wip-badge">WIP</span>' : '';
+        var target = k.target ? 'Target <strong>' + esc(k.target) + '</strong>' : '';
+        return (
+          '<article class="maint-kpi-card" style="animation-delay:' +
+          i * 0.05 +
+          's">' +
+          '<div class="maint-kpi-head">' +
+          '<span class="maint-kpi-title">' +
+          esc(k.label) +
+          wip +
+          '</span>' +
+          '<span class="maint-status-dot critical"></span>' +
+          '</div>' +
+          '<div class="maint-kpi-body">' +
+          '<div class="maint-kpi-main">' +
+          '<div class="maint-kpi-value">' +
+          esc(val) +
+          '</div>' +
+          '<div class="maint-kpi-target-row">' +
+          target +
+          '</div>' +
+          '</div>' +
+          '<div class="maint-kpi-trend"><canvas id="maint-spark-sec-' +
+          i +
+          '"></canvas></div>' +
+          '</div>' +
+          '<div class="maint-period-delta">Last Period <span>+1.20%</span></div>' +
+          '</article>'
+        );
+      })
+      .join('');
+  }
+
+  function renderKnowMore() {
+    return (
+      '<div class="maint-know-more">' +
+      '<span class="maint-know-more-label">Select to know more</span>' +
+      '<div class="maint-know-actions">' +
+      '<button type="button" class="maint-action-btn" data-action="my-report" aria-label="My Report">' +
+      '<span class="maint-tooltip">My Report</span>' +
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>' +
+      ' My Report</button>' +
+      '<button type="button" class="maint-action-btn round" data-action="drill-down" aria-label="Drill Down">' +
+      '<span class="maint-tooltip">Drill Down</span>' +
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>' +
+      '</button>' +
+      '<button type="button" class="maint-action-btn round" data-action="kpi-overview" aria-label="KPI Overview" onclick="window.__goKpiOverview && window.__goKpiOverview(event)">' +
+      '<span class="maint-tooltip">KPI Overview</span>' +
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>' +
+      '</button>' +
+      '</div></div>'
+    );
+  }
+
+  function severityLabel(sev) {
+    var map = { critical: 'Critical', high: 'High', medium: 'Medium', info: 'Insight' };
+    return map[String(sev || '').toLowerCase()] || 'Insight';
+  }
+
+  function renderAiSummaries(summaries) {
+    return (summaries || [])
+      .map(function (s, i) {
+        return (
+          '<article class="maint-ai-card" style="animation-delay:' +
+          i * 0.08 +
+          's">' +
+          '<div class="ai-summary-icon" aria-hidden="true">✦</div>' +
+          '<div class="maint-ai-content">' +
+          '<div class="maint-ai-head">' +
+          '<span class="maint-severity ' +
+          esc(s.severity || 'info') +
+          '">' +
+          esc(severityLabel(s.severity)) +
+          '</span>' +
+          '<span class="maint-insight-time">' +
+          esc(s.timestamp || 'Just now') +
+          '</span>' +
+          '</div>' +
+          '<div class="ai-summary-label">' +
+          esc(s.title) +
+          '</div>' +
+          '<p class="ai-summary-text">' +
+          esc(s.body) +
+          '</p></div></article>'
+        );
+      })
+      .join('');
+  }
+
+  function renderAlerts(alerts) {
+    return (alerts || [])
+      .map(function (a, idx) {
+        var sev = (a.severity || 'Critical').toLowerCase();
+        var cardClass = sev === 'warning' || sev === 'medium' ? ' warning' : '';
+        var open = state.openAlert === idx ? ' open' : '';
+        var detail = a.detail || {};
+        var mini = (detail.mini_kpis || [])
+          .map(function (m) {
+            return (
+              '<div class="maint-mini-kpi"><label>' +
+              esc(m.label) +
+              '</label><strong>' +
+              esc(m.value) +
+              '</strong><small>' +
+              esc(m.sub || '') +
+              '</small></div>'
+            );
+          })
+          .join('');
+        var bullets = (detail.executive_bullets || [])
+          .map(function (b) {
+            return '<li>' + esc(b) + '</li>';
+          })
+          .join('');
+
+        return (
+          '<div class="maint-alert-card' +
+          cardClass +
+          open +
+          '" data-alert-idx="' +
+          idx +
+          '">' +
+          '<div class="maint-alert-header" role="button" tabindex="0" aria-expanded="' +
+          (open ? 'true' : 'false') +
+          '">' +
+          '<span class="maint-severity ' +
+          (sev === 'high' ? 'critical' : sev) +
+          '">' +
+          esc(a.severity || 'Critical') +
+          '</span>' +
+          '<span class="maint-insight-title">' +
+          esc(a.title || 'Unplanned Downtime % ' + a.site) +
+          '</span>' +
+          '<span class="maint-insight-time">' +
+          esc(a.timestamp || '') +
+          '</span>' +
+          '<span class="maint-alert-chevron" aria-hidden="true">▼</span>' +
+          '</div>' +
+          '<p class="maint-insight-body" style="padding:0 16px 12px;margin:0">' +
+          esc(a.summary || '') +
+          '</p>' +
+          '<div class="maint-alert-body">' +
+          '<div class="maint-alert-detail-grid">' +
+          '<div class="maint-mini-kpis">' +
+          mini +
+          '</div>' +
+          '<div><h4 style="font-size:12px;margin:0 0 8px">' +
+          esc(detail.chart_title || 'Top Downtime Drivers') +
+          '</h4>' +
+          '<div class="maint-driver-chart"><canvas id="maint-alert-chart-' +
+          idx +
+          '"></canvas></div></div>' +
+          '<div class="maint-exec-box"><h4>⚡ AI Executive Summary</h4><ul>' +
+          bullets +
+          '</ul>' +
+          '<button type="button" class="maint-exec-btn" data-action="drill-down">Open Full Analysis →</button>' +
+          '</div></div></div></div>'
+        );
+      })
+      .join('');
+  }
+
+  function renderMaintenance() {
+    var root = $('#maint-root');
+    if (!root || !state.payload) return;
+    root.classList.remove('maint-loading');
+    var p = state.payload;
+    var kpi = p.kpis && p.kpis.primary;
+
+    root.innerHTML =
+      '<div class="maint-kpi-row" id="maint-kpi-row">' +
+      renderPrimaryKpi(kpi) +
+      renderSecondaryKpis(p.secondary_kpis) +
+      '</div>' +
+      '<div class="maint-tabs" role="tablist">' +
+      '<button type="button" class="maint-tab' +
+      (state.insightTab === 'ai-summary' ? ' active' : '') +
+      '" data-tab="ai-summary" role="tab">AI Summary</button>' +
+      '<button type="button" class="maint-tab' +
+      (state.insightTab === 'alerts' ? ' active' : '') +
+      '" data-tab="alerts" role="tab">Alerts' +
+      (p.alerts && p.alerts.length
+        ? ' <span class="badge">' + p.alerts.length + '</span>'
+        : '') +
+      '</button></div>' +
+      '<div id="maint-tab-ai-summary"' +
+      (state.insightTab === 'ai-summary' ? '' : ' class="maint-hidden"') +
+      '>' +
+      renderAiSummaries(p.ai_summaries) +
+      '</div>' +
+      '<div id="maint-tab-alerts"' +
+      (state.insightTab === 'alerts' ? '' : ' class="maint-hidden"') +
+      '>' +
+      renderAlerts(p.alerts) +
+      '</div>';
+
+    bindMaintenanceEvents();
+    requestAnimationFrame(function () {
+      drawSparkline('maint-spark-primary', kpi && kpi.trend);
+      (p.secondary_kpis || []).forEach(function (_, i) {
+        drawSparkline('maint-spark-sec-' + i, kpi && kpi.trend);
+      });
+      if (state.openAlert != null && p.alerts && p.alerts[state.openAlert]) {
+        drawAlertChart(state.openAlert, p.alerts[state.openAlert].detail);
+      }
+    });
+  }
+
+  function drawSparkline(canvasId, trend) {
+    destroyChart(canvasId);
+    var canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === 'undefined' || !trend || !trend.data) return;
+    var data = trend.data;
+    var labels = trend.labels || data.map(function (_, i) {
+      return 'P' + (i + 1);
+    });
+    var ctx = canvas.getContext('2d');
+    var grad = ctx.createLinearGradient(0, 0, 0, 80);
+    grad.addColorStop(0, 'rgba(220,38,38,0.35)');
+    grad.addColorStop(1, 'rgba(220,38,38,0)');
+    state.charts[canvasId] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            data: data,
+            borderColor: '#dc2626',
+            backgroundColor: grad,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0,
+            borderWidth: 2,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { enabled: true } },
+        scales: { x: { display: false }, y: { display: false } },
+        animation: { duration: 600 },
+      },
+    });
+  }
+
+  function drawAlertChart(idx, detail) {
+    var id = 'maint-alert-chart-' + idx;
+    destroyChart(id);
+    var canvas = document.getElementById(id);
+    if (!canvas || typeof Chart === 'undefined' || !detail) return;
+    var bars = detail.driver_bars || [];
+    state.charts[id] = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: bars.map(function (b) {
+          return b.reason;
+        }),
+        datasets: [
+          {
+            data: bars.map(function (b) {
+              return b.pct;
+            }),
+            backgroundColor: BAR_COLORS,
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { title: { display: true, text: '% Share of Unplanned Downtime Hours' } },
+        },
+      },
+    });
+  }
+
+  function bindMaintenanceEvents() {
+    $$('.maint-tab[data-tab]').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        state.insightTab = tab.getAttribute('data-tab');
+        renderMaintenance();
+      });
+    });
+
+    $$('.maint-alert-header').forEach(function (hdr) {
+      hdr.addEventListener('click', function () {
+        var card = hdr.closest('.maint-alert-card');
+        var idx = parseInt(card.getAttribute('data-alert-idx'), 10);
+        state.openAlert = state.openAlert === idx ? null : idx;
+        renderMaintenance();
+      });
+    });
+
+    $$('[data-action="drill-down"]').forEach(function (btn) {
+      if (btn.closest('.maint-exec-box')) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          openDrillDown();
+        });
+      }
+    });
+  }
+
+  function reflowDashboardCharts() {
+    requestAnimationFrame(function () {
+      window.dispatchEvent(new Event('resize'));
+      document.querySelectorAll('canvas').forEach(function (el) {
+        el.dispatchEvent(new Event('chart:reflow', { bubbles: true }));
+      });
+    });
+  }
+
+  function handleKnowMoreAction(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn || !btn.closest('.maint-know-actions')) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    var action = btn.getAttribute('data-action');
+    if (action === 'my-report') openMyReport();
+    else if (action === 'drill-down') openDrillDown();
+    else if (action === 'kpi-overview') goToKpiOverview();
+    return true;
+  }
+
+  function goToKpiOverview() {
+    var mc = window.ManufacturingConsole;
+    if (!mc) return;
+
+    try {
+      syncToConsoleFilters();
+    } catch (err) {
+      console.warn('[maintenance] filter sync skipped:', err);
+    }
+
+    state.page = 'kpi-overview';
+    document.body.classList.remove('mode-maintenance');
+    document.body.classList.add('mode-kpi-overview');
+    updateShellForPage('kpi-overview');
+
+    if (typeof engineEnterKpiOverview === 'function') {
+      engineEnterKpiOverview(true);
+    } else if (engineSwitchPage && engineSwitchKpiTab) {
+      engineSwitchPage('kpi-overview', true);
+      engineSwitchKpiTab('overview', true);
+    }
+
+    applyShowInToEngine();
+    reflowDashboardCharts();
+    reloadConsoleMetrics();
+  }
+
+  function openMyReport() {
+    var overlay = $('#maint-report-modal');
+    if (!overlay) return;
+    state.reportTab = 'snapshot';
+    overlay.classList.add('open');
+    document.body.classList.add('maint-report-open');
+    renderReportModal();
+  }
+
+  function closeMyReport() {
+    var overlay = $('#maint-report-modal');
+    if (overlay) overlay.classList.remove('open');
+    document.body.classList.remove('maint-report-open');
+    Object.keys(state.charts).forEach(function (k) {
+      if (k.indexOf('report-') === 0) destroyChart(k);
+    });
+  }
+
+  function reportStatCard(label, value, iconSvg) {
+    return (
+      '<div class="maint-stat-card">' +
+      '<div class="maint-stat-card-content">' +
+      '<label>' +
+      esc(label) +
+      '</label>' +
+      '<strong>' +
+      esc(value) +
+      '</strong></div>' +
+      '<div class="maint-stat-icon" aria-hidden="true">' +
+      iconSvg +
+      '</div></div>'
+    );
+  }
+
+  var REPORT_ICONS = {
+    schedule:
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    downtime:
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18h16M6 14l3-6 3 4 3-7 3 9"/><circle cx="18" cy="6" r="2"/></svg>',
+    percent:
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M9 15l6-6"/></svg>',
+  };
+
+  function modernChartBase() {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 750, easing: 'easeOutQuart' },
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1a2b4a', padding: 10, cornerRadius: 8 } },
+    };
+  }
+
+  function barGradient(ctx, area, colors) {
+    var g = ctx.createLinearGradient(area.left, 0, area.right, 0);
+    g.addColorStop(0, colors[0]);
+    g.addColorStop(1, colors[1]);
+    return g;
+  }
+
+  function targetLinePlugin(target, label) {
+    return {
+      id: 'targetLine-' + target,
+      afterDraw: function (chart) {
+        var xScale = chart.scales.x;
+        var yScale = chart.scales.y;
+        if (!xScale || !yScale) return;
+        var x = xScale.getPixelForValue(target);
+        var ctx = chart.ctx;
+        ctx.save();
+        ctx.strokeStyle = '#16a34a';
+        ctx.setLineDash([5, 4]);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, yScale.top + 4);
+        ctx.lineTo(x, yScale.bottom - 4);
+        ctx.stroke();
+        ctx.fillStyle = '#16a34a';
+        ctx.font = '600 10px Inter, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(label || 'FLNA Target: ' + target.toFixed(2) + '%', x + 6, yScale.top + 16);
+        ctx.restore();
+      },
+    };
+  }
+
+  function hbarValueLabelsPlugin(rows, formatter) {
+    return {
+      id: 'hbarValueLabels',
+      afterDatasetsDraw: function (chart) {
+        var ctx = chart.ctx;
+        var meta = chart.getDatasetMeta(0);
+        if (!meta || !meta.data) return;
+        meta.data.forEach(function (bar, index) {
+          var row = rows[index];
+          if (!row) return;
+          var text = formatter(row);
+          var x = Math.min(bar.x - 8, chart.chartArea.right - 8);
+          ctx.save();
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '600 11px Inter, sans-serif';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'middle';
+          ctx.shadowColor = 'rgba(0,0,0,0.25)';
+          ctx.shadowBlur = 4;
+          ctx.fillText(text, x, bar.y);
+          ctx.restore();
+        });
+      },
+    };
+  }
+
+  function donutCenterPlugin(mainText, subText) {
+    return {
+      id: 'donutCenterText',
+      afterDraw: function (chart) {
+        var area = chart.chartArea;
+        if (!area) return;
+        var ctx = chart.ctx;
+        var x = (area.left + area.right) / 2;
+        var y = (area.top + area.bottom) / 2;
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#1a2b4a';
+        ctx.font = '800 26px Inter, sans-serif';
+        ctx.fillText(mainText, x, y - 6);
+        if (subText) {
+          ctx.fillStyle = '#64748b';
+          ctx.font = '600 11px Inter, sans-serif';
+          ctx.fillText(subText, x, y + 16);
+        }
+        ctx.restore();
+      },
+    };
+  }
+
+  function renderReportModal() {
+    var body = $('#maint-report-body');
+    if (!body || !state.payload) return;
+    var p = state.payload;
+    var kpi = p.kpis && p.kpis.primary;
+
+    body.innerHTML =
+      '<div class="maint-modal-tabs">' +
+      ['snapshot', 'sites', 'drivers']
+        .map(function (t) {
+          var labels = { snapshot: 'KPI Snapshot', sites: 'Sites at Risk', drivers: 'Top Downtime Drivers' };
+          return (
+            '<button type="button" class="maint-modal-tab' +
+            (state.reportTab === t ? ' active' : '') +
+            '" data-report-tab="' +
+            t +
+            '">' +
+            labels[t] +
+            '</button>'
+          );
+        })
+        .join('') +
+      '</div>' +
+      '<div id="maint-report-content"></div>';
+
+    $$('[data-report-tab]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        state.reportTab = btn.getAttribute('data-report-tab');
+        renderReportModal();
+      });
+    });
+
+    var content = $('#maint-report-content');
+    if (state.reportTab === 'snapshot') content.innerHTML = renderReportSnapshot(kpi, p);
+    else if (state.reportTab === 'sites') content.innerHTML = renderReportSites(p);
+    else content.innerHTML = renderReportDrivers(p);
+
+    requestAnimationFrame(function () {
+      if (state.reportTab === 'snapshot') {
+        drawDonut('report-donut', kpi);
+      } else if (state.reportTab === 'drivers') {
+        drawDriversDonut('report-drivers-donut', p.downtime_drivers);
+      }
+    });
+  }
+
+  function siteTableDetail(row) {
+    return (
+      fmtNum(row.hours) +
+      ' Unplanned DT Hrs / ' +
+      fmtNum(row.sched_hrs) +
+      ' Sched Hrs'
+    );
+  }
+
+  function siteExposureTable(sites) {
+    return renderRankedExposureTable((sites || []).slice(0, 5), {
+      nameHeader: 'Site',
+      barHeader: 'Unplanned DT Exposure Rate',
+      detailFn: siteTableDetail,
+      barValueFn: function (row) {
+        return fmtNum(row.hours) + ' h';
+      },
+    });
+  }
+
+  function lineExposureTable(lines) {
+    return renderRankedExposureTable((lines || []).slice(0, 5), {
+      nameKey: 'line',
+      nameHeader: 'Line',
+      barHeader: 'Unplanned DT Rate',
+      maxValue: 70,
+    });
+  }
+
+  function renderReportSnapshot(kpi, p) {
+    var dtHrs = (kpi && kpi.downtime_hours && kpi.downtime_hours.display) || '—';
+    var sched = (kpi && kpi.scheduled_hours && kpi.scheduled_hours.display) || '—';
+    var pctVal = kpi ? kpi.value : 0;
+    var pct = fmtPct(pctVal);
+    var target = kpi ? kpi.target : DT_TARGET;
+    var delta = kpi ? Math.abs(kpi.delta_vs_target).toFixed(2) : '0.00';
+    var deltaArrow = kpi && kpi.delta_vs_target > 0 ? '▲' : '▼';
+    var stops = (kpi && kpi.stops && kpi.stops.display) || '—';
+
+    return (
+      '<div class="maint-report-section-head">' +
+      '<h4>Total Unplanned Downtime %</h4>' +
+      '<select class="maint-report-metric-select" aria-label="Metric selector">' +
+      '<option>Total DT %</option></select></div>' +
+      '<div class="maint-snapshot-grid">' +
+      '<div class="maint-report-donut-card">' +
+      '<div class="maint-donut-wrap"><canvas id="report-donut"></canvas></div>' +
+      '<div class="maint-donut-meta">' +
+      '<div class="maint-donut-meta-item">Target <strong>' +
+      fmtPct(target) +
+      '</strong> <span class="bad">' +
+      delta +
+      'pp ' +
+      deltaArrow +
+      '</span></div>' +
+      '<div class="maint-donut-meta-item bad">Total Stops <strong>' +
+      esc(stops) +
+      '</strong></div></div></div>' +
+      '<div class="maint-stat-stack">' +
+      reportStatCard('Schedule Hours', sched.replace(' h', ''), REPORT_ICONS.schedule) +
+      reportStatCard('Unplanned Downtime Hours', dtHrs.replace(' h', ''), REPORT_ICONS.downtime) +
+      reportStatCard('Percentage Downtime', pct, REPORT_ICONS.percent) +
+      '</div></div>' +
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
+      siteExposureTable(p.sites_at_risk) +
+      '</div>'
+    );
+  }
+
+  function renderReportSites(p) {
+    var topSite = (p.sites_at_risk && p.sites_at_risk[0] && p.sites_at_risk[0].site) || 'Top Site';
+    return (
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
+      siteExposureTable(p.sites_at_risk) +
+      '</div>' +
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<div class="maint-report-section-head" style="margin-bottom:10px">' +
+      '<h4 style="margin:0">' +
+      esc(topSite) +
+      ' — Top 5 Lines by Unplanned Downtime Hours</h4>' +
+      '<span class="maint-severity critical">HIGH LOSS</span></div>' +
+      lineExposureTable(p.site_lines) +
+      '</div>'
+    );
+  }
+
+  function renderReportDrivers(p) {
+    var bullets = (p.insights_bullets || [])
+      .slice(0, 5)
+      .map(function (b) {
+        return '<li>' + esc(b) + '</li>';
+      })
+      .join('');
+    return (
+      '<div class="maint-report-section-head"><h4>Total Unplanned Downtime %</h4></div>' +
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<div class="donut-chart-layout maint-drivers-donut-layout">' +
+      '<div class="donut-canvas-wrap maint-donut-wrap"><canvas id="report-drivers-donut"></canvas></div>' +
+      '<div class="donut-legend maint-drivers-legend" id="report-drivers-legend"></div></div></div>' +
+      '<div class="maint-insights-panel maint-insights-panel-compact"><h4>AI Insight</h4><ul>' +
+      bullets +
+      '</ul></div>'
+    );
+  }
+
+  function drawDonut(id, kpi) {
+    destroyChart(id);
+    var canvas = document.getElementById(id);
+    if (!canvas || typeof Chart === 'undefined' || !kpi) return;
+    var val = kpi.value || 0;
+    var rest = Math.max(0, 100 - val);
+    state.charts[id] = new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: ['Unplanned DT', 'Available'],
+        datasets: [
+          {
+            data: [val, rest],
+            backgroundColor: [DONUT_DT_COLOR, DONUT_TRACK_COLOR],
+            borderWidth: 0,
+            spacing: 3,
+            borderRadius: 4,
+            hoverOffset: 8,
+          },
+        ],
+      },
+      options: Object.assign({}, modernChartBase(), {
+        cutout: '68%',
+        layout: { padding: 8 },
+        plugins: Object.assign({}, modernChartBase().plugins, { tooltip: { enabled: false } }),
+      }),
+      plugins: [donutCenterPlugin(val.toFixed(1) + '%', 'Unplanned DT')],
+    });
+  }
+
+  function drawDriversDonut(id, drivers) {
+    destroyChart(id);
+    var canvas = document.getElementById(id);
+    if (!canvas || typeof Chart === 'undefined') return;
+    var entries = (drivers || []).slice(0, 6);
+    if (!entries.length) return;
+    var colors = entries.map(function (_, i) {
+      return CHART_COLORS[i % CHART_COLORS.length];
+    });
+    state.charts[id] = new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: entries.map(function (d) {
+          return d.reason;
+        }),
+        datasets: [
+          {
+            data: entries.map(function (d) {
+              return d.pct;
+            }),
+            backgroundColor: colors,
+            borderWidth: 0,
+            spacing: 3,
+            borderRadius: 5,
+            hoverOffset: 8,
+          },
+        ],
+      },
+      options: Object.assign({}, modernChartBase(), {
+        cutout: '68%',
+        layout: { padding: 8 },
+        plugins: Object.assign({}, modernChartBase().plugins, {
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                return ' ' + ctx.label + ': ' + ctx.parsed.toFixed(1) + '%';
+              },
+            },
+          },
+        }),
+      }),
+    });
+    var leg = $('#report-drivers-legend');
+    if (leg) {
+      leg.innerHTML = entries
+        .map(function (d, i) {
+          return (
+            '<div class="donut-legend-item">' +
+            '<span class="donut-legend-swatch" style="background:' +
+            colors[i] +
+            '"></span>' +
+            '<span class="donut-legend-label">' +
+            esc(d.reason) +
+            '</span>' +
+            '<span class="donut-legend-value">' +
+            d.pct.toFixed(1) +
+            '%</span></div>'
+          );
+        })
+        .join('');
+    }
+  }
+
+  function openDrillDown() {
+    var overlay = $('#maint-drill-overlay');
+    if (!overlay) return;
+    overlay.classList.add('open');
+    renderDrillDown();
+  }
+
+  function closeDrillDown() {
+    var overlay = $('#maint-drill-overlay');
+    if (overlay) overlay.classList.remove('open');
+    destroyChart('drill-scatter');
+  }
+
+  function renderDrillDown() {
+    var panel = $('#maint-drill-insights');
+    var p = state.payload;
+    if (!panel || !p) return;
+    var bullets = (p.insights_bullets || []).slice(0, 5);
+    panel.innerHTML =
+      '<h4>✨ AI Summary</h4><p style="font-weight:700;margin-bottom:10px">' +
+      esc(bullets[0] || 'Network performance analysis') +
+      '</p><ul>' +
+      bullets
+        .map(function (b) {
+          return '<li>' + esc(b) + '</li>';
+        })
+        .join('') +
+      '</ul>';
+    drawScatter('drill-scatter', p.drilldown || [], p.kpis && p.kpis.primary && p.kpis.primary.target);
+  }
+
+  function drawScatter(id, points, target) {
+    destroyChart(id);
+    var canvas = document.getElementById(id);
+    if (!canvas || typeof Chart === 'undefined' || !points.length) return;
+    var avg =
+      points.reduce(function (s, p) {
+        return s + p.dt_pct;
+      }, 0) / points.length;
+    state.charts[id] = new Chart(canvas, {
+      type: 'scatter',
+      data: {
+        datasets: [
+          {
+            label: 'Sites',
+            data: points.map(function (p) {
+              return { x: p.sched_hrs, y: p.dt_pct, site: p.site };
+            }),
+            backgroundColor: points.map(function (p) {
+              return p.dt_pct > avg + 2 ? SCATTER_COLORS.outlier : SCATTER_COLORS.normal;
+            }),
+            pointRadius: 8,
+            pointHoverRadius: 10,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function (ctx) {
+                var raw = ctx.raw;
+                return raw.site + ': ' + raw.y.toFixed(2) + '% @ ' + fmtNum(raw.x) + ' sched hrs';
+              },
+            },
+          },
+        },
+        scales: {
+          x: { title: { display: true, text: 'Scheduled Hours' } },
+          y: { title: { display: true, text: '% Unplanned Downtime' } },
+        },
+      },
+    });
+  }
+
+  function createWipTimeframeGroup() {
+    var group = document.createElement('div');
+    group.className = 'maint-filter-group maint-filter-wip';
+    group.innerHTML =
+      '<span class="filter-label">Timeframe <span class="maint-wip-badge">WIP</span></span>' +
+      '<div class="slicer slicer-disabled" data-slicer-id="timeframe">' +
+      '<button type="button" class="slicer-trigger" disabled aria-disabled="true">' +
+      '<span class="slicer-value">FY 2026</span>' +
+      '</button></div>';
+    return group;
+  }
+
+  function buildFilterBar() {
+    var bar = $('#maint-filter-bar');
+    if (!bar || bar.dataset.built) return;
+    bar.dataset.built = '1';
+    bar.className = 'maint-filter-bar filter-bar';
+    bar.replaceChildren();
+
+    bar.appendChild(createWipTimeframeGroup());
+    var showInGroup = createSlicerGroup(
+      'showIn',
+      'Show in',
+      SHOW_IN_OPTIONS.map(function (v) {
+        return { value: v, label: v };
+      }),
+      state.filters.showIn,
+      false
+    );
+    showInGroup.classList.add('maint-showin-group', 'maint-hidden');
+    bar.appendChild(showInGroup);
+    bar.appendChild(
+      createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
+    );
+    bar.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, false, true));
+    bar.appendChild(
+      createSlicerGroup('region', 'Region', regionSlicerOptions(), state.filters.region, true)
+    );
+    bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
+    bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
+    bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
+
+    if (!document.body.dataset.maintSlicerCloseBound) {
+      document.body.dataset.maintSlicerCloseBound = '1';
+      document.addEventListener('click', function (e) {
+        if (e.target.closest('.maint-filter-bar')) return;
+        closeAllSlicers();
+      });
+      bindMaintSlicerViewport();
+    }
+  }
+
+  function onFilterChange() {
+    var fromEl = $('#maint-filter-from');
+    var toEl = $('#maint-filter-to');
+    if (fromEl) state.filters.dateFrom = fromEl.value;
+    if (toEl) state.filters.dateTo = toEl.value;
+    syncToConsoleFilters();
+    reloadConsoleMetrics();
+    fetchMaintenanceData();
+  }
+
+  function buildPrimaryNav() {
+    var nav = $('#top-nav-primary');
+    if (!nav) return;
+    nav.innerHTML = '';
+    PRIMARY_NAV.forEach(function (item) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'top-nav-item';
+      btn.dataset.page = item.id;
+      btn.setAttribute('role', 'tab');
+      btn.innerHTML = '<span class="top-nav-label">' + esc(item.title) + '</span>';
+      btn.addEventListener('click', function () {
+        if (item.id === 'maintenance') switchSectionPage('maintenance');
+        else if (item.id === 'overview') switchSectionPage('overview');
+        else switchSectionPage(item.id);
+      });
+      nav.appendChild(btn);
+    });
+
+    var kpiLink = document.createElement('button');
+    kpiLink.type = 'button';
+    kpiLink.className = 'top-nav-item maint-hidden';
+    kpiLink.id = 'nav-kpi-overview-hidden';
+    kpiLink.dataset.page = 'kpi-overview';
+    nav.appendChild(kpiLink);
+  }
+
+  function updateNavActive() {
+    $$('.top-nav-item').forEach(function (btn) {
+      var page = btn.dataset.page;
+      var active = page === state.page && state.page !== 'kpi-overview';
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+  }
+
+  function updateShellForPage(page) {
+    state.page = page;
+    var maintFilter = $('#maint-filter-bar');
+    var banner = $('#app-banner');
+    var subnav = $('#top-nav-secondary');
+    var isMaint = page === 'maintenance';
+    var isKpi = page === 'kpi-overview';
+
+    document.body.classList.toggle('mode-maintenance', isMaint);
+    document.body.classList.toggle('mode-kpi-overview', isKpi);
+
+    var showInGroup = $('.maint-showin-group');
+    if (showInGroup) showInGroup.classList.toggle('maint-hidden', !isKpi);
+
+    maintFilter && maintFilter.classList.remove('maint-hidden');
+    banner && banner.classList.toggle('has-subnav', isKpi);
+    subnav && subnav.classList.toggle('visible', isKpi);
+    $('#filter-context-bar') && $('#filter-context-bar').classList.toggle('maint-hidden', isMaint);
+    $('#data-status-bar') && $('#data-status-bar').classList.toggle('maint-hidden', isMaint);
+    var fab = $('#maint-fab');
+    if (fab) fab.classList.toggle('maint-hidden', page !== 'maintenance');
+
+    $$('.page-panel').forEach(function (panel) {
+      panel.classList.remove('active', 'leaving');
+    });
+    var target = $('#page-' + page);
+    if (target) target.classList.add('active');
+
+    var crumb = $('#context-breadcrumb');
+    if (crumb) {
+      var labels = {
+        maintenance: 'Maintenance · Unplanned DT',
+        'kpi-overview': 'KPI Overview · Overview',
+        overview: 'Overview',
+        execute: 'Execute',
+        quality: 'Quality',
+        planning: 'Planning',
+      };
+      crumb.textContent = labels[page] || page;
+    }
+    updateNavActive();
+  }
+
+  function switchSectionPage(page) {
+    if (page === 'kpi-overview') {
+      goToKpiOverview();
+      return;
+    }
+    updateShellForPage(page);
+    if (page === 'maintenance') fetchMaintenanceData();
+  }
+
+  function initDates() {
+    var today = new Date();
+    var from = new Date(today);
+    from.setDate(from.getDate() - 14);
+    state.filters.dateFrom = from.toISOString().slice(0, 10);
+    state.filters.dateTo = today.toISOString().slice(0, 10);
+    var fromEl = $('#maint-filter-from');
+    var toEl = $('#maint-filter-to');
+    if (fromEl) fromEl.value = state.filters.dateFrom;
+    if (toEl) toEl.value = state.filters.dateTo;
+    updateDateFilterVisibility();
+  }
+
+  function bindGlobalEvents() {
+    if (!document.body.dataset.maintEventsBound) {
+      document.body.dataset.maintEventsBound = '1';
+      document.addEventListener('click', handleKnowMoreAction, true);
+    }
+
+    var root = document.getElementById('maint-root');
+    if (root && !root.dataset.delegateBound) {
+      root.dataset.delegateBound = '1';
+      root.addEventListener('click', handleKnowMoreAction);
+    }
+
+    $('#maint-report-close') &&
+      $('#maint-report-close').addEventListener('click', closeMyReport);
+    $('#maint-report-backdrop') &&
+      $('#maint-report-backdrop').addEventListener('click', closeMyReport);
+    $('#maint-report-modal') &&
+      $('#maint-report-modal').addEventListener('click', function (e) {
+        if (e.target.id === 'maint-report-backdrop') closeMyReport();
+      });
+    $('#maint-drill-back') &&
+      $('#maint-drill-back').addEventListener('click', closeDrillDown);
+  }
+
+  function init() {
+    if (!window.ManufacturingConsole) {
+      setTimeout(init, 50);
+      return;
+    }
+    syncFromConsoleFilters();
+    state.filters.year = state.filters.year || '2026';
+    state.filters.timeframe = 'FY';
+    buildPrimaryNav();
+    buildFilterBar();
+    initDates();
+    bindGlobalEvents();
+
+    var mc = window.ManufacturingConsole;
+    engineSwitchPage = mc.switchPage;
+    engineSwitchKpiTab = mc.switchKpiTab;
+    engineEnterKpiOverview = mc.enterKpiOverview || null;
+
+    mc.switchPage = function (page, force) {
+      if (PRIMARY_NAV.some(function (item) { return item.id === page; })) {
+        updateShellForPage(page);
+        if (page === 'maintenance') fetchMaintenanceData();
+        return;
+      }
+      if (page === 'kpi-overview') {
+        goToKpiOverview();
+        return;
+      }
+      return engineSwitchPage.call(mc, page, force);
+    };
+    mc.switchKpiTab = function (tab, force) {
+      if (state.page === 'kpi-overview' || mc.state.page === 'kpi-overview') {
+        updateShellForPage('kpi-overview');
+      }
+      return engineSwitchKpiTab.call(mc, tab, force);
+    };
+
+    updateShellForPage('maintenance');
+    fetchMaintenanceData();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  window.__goKpiOverview = function (e) {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    goToKpiOverview();
+  };
+
+  window.MaintenanceConsole = {
+    refresh: fetchMaintenanceData,
+    state: state,
+    switchPage: switchSectionPage,
+    goToKpiOverview: goToKpiOverview,
+  };
+})();
