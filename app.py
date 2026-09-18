@@ -21,7 +21,7 @@ from flask import Flask, render_template
 from py_server.lib.analytics import (
     purge_non_sql_caches,
     verify_metric_view_access,
-    warmup_default_metrics_async,
+    warm_memory_cache_from_disk,
 )
 from py_server.lib.cache import purge_legacy_metrics_disk_cache
 from py_server.lib.databricks_fetch import test_databricks_reachability
@@ -55,11 +55,10 @@ def _startup_warmup() -> None:
         test = verify_metric_view_access()
         if test.get("ok"):
             print(f"[startup] ✓ metric view OK ({test.get('row_count', 0)} rows)")
-            warmup_default_metrics_async()
-            if (os.getenv("PRELOAD_ENABLED") or "false").lower() == "true":
-                start_preload_scheduler()
-            else:
-                print("[startup] default FY 2026 warmup started in background")
+            loaded = warm_memory_cache_from_disk()
+            if loaded:
+                print(f"[startup] ✓ warmed {loaded} cached metric bundle(s) from disk")
+            start_preload_scheduler()
         else:
             print(f"[startup] ✗ metric view check failed: {test.get('error')}")
     except Exception as exc:

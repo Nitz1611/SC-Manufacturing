@@ -16,17 +16,19 @@ from py_server.lib.analytics import (
     get_fresh_metrics_bundle,
     get_memory_cache_stats,
     refresh_metrics_bundle,
+    run_analytics_query,
     warm_memory_cache_from_disk,
 )
 from py_server.lib.databricks_sql import sql_configured
+from py_server.lib.metrics_transform import build_filter_options
 
 INTERVAL_MS = int(os.getenv('PRELOAD_INTERVAL_MINUTES') or 15) * 60 * 1000
-CONCURRENCY = max(1, int(os.getenv('PRELOAD_CONCURRENCY') or 3))
+CONCURRENCY = max(1, int(os.getenv('PRELOAD_CONCURRENCY') or 1))
 DEFAULT_YEAR = os.getenv('PRELOAD_DEFAULT_YEAR') or '2026'
 
 
 def preload_enabled() -> bool:
-    return (os.getenv('PRELOAD_ENABLED') or 'false').lower() == 'true'
+    return (os.getenv('PRELOAD_ENABLED') or 'true').lower() != 'false'
 
 
 class PreloadStatus(TypedDict):
@@ -65,13 +67,39 @@ _status_lock = threading.Lock()
 
 
 def _load_filter_combinations() -> list[dict[str, Any]]:
-    """Only preload the default FY 2026 network view — not every site/region combo."""
-    return [{
-        'year': DEFAULT_YEAR,
-        'site': 'All',
-        'region': [],
-        'timeframe': 'FY',
-    }]
+    result = run_analytics_query('dashboard_filter_options', {})
+    rows = result.get('rows') or []
+    options = build_filter_options(rows)
+    years = [str(y) for y in options.get('years') or []] or [DEFAULT_YEAR]
+    sites: list[str | None] = [None, *(options.get('sites') or [])]
+    region_sets: list[list[str] | None] = [None]
+    for r in options.get('regions') or []:
+        region_sets.append([r])
+
+    combos: list[dict[str, Any]] = []
+    for year in years:
+        for site in sites:
+            for region in region_sets:
+                combos.append({
+                    'year': year,
+                    'site': site or 'All',
+                    'region': region or [],
+                    'timeframe': 'FY',
+                })
+
+    def score(c: dict[str, Any]) -> int:
+        s = 0
+        if str(c.get('year')) == DEFAULT_YEAR:
+            s += 100
+        if c.get('site') == 'All':
+            s += 50
+        region = c.get('region')
+        if not region or (isinstance(region, list) and len(region) == 0):
+            s += 25
+        return s
+
+    combos.sort(key=score, reverse=True)
+    return combos
 
 
 def _run_pool(

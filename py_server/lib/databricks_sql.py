@@ -9,7 +9,7 @@ from typing import Any
 from py_server.lib.databricks_fetch import databricks_fetch, databricks_host, databricks_token
 
 _statement_semaphore = threading.Semaphore(
-    max(1, int(os.getenv('DATABRICKS_SQL_MAX_IN_FLIGHT') or os.getenv('SQL_MAX_CONCURRENCY') or 2))
+    max(1, int(os.getenv('DATABRICKS_SQL_MAX_IN_FLIGHT') or os.getenv('SQL_MAX_CONCURRENCY') or 1))
 )
 _RETRY_COUNT = max(1, int(os.getenv('DATABRICKS_SQL_RETRY_COUNT') or 3))
 

@@ -137,7 +137,7 @@ def _execute_query(query_key: str, params: dict[str, str | None]) -> list[dict[s
 
 
 def _sql_max_workers(batch_size: int) -> int:
-    configured = int(os.getenv('SQL_MAX_CONCURRENCY') or 2)
+    configured = int(os.getenv('SQL_MAX_CONCURRENCY') or 1)
     return max(1, min(batch_size, configured))
 
 
