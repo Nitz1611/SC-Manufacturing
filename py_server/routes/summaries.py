@@ -305,31 +305,37 @@ def console_data():
     filters = body.get('filters') or {}
     force = bool(body.get('force'))
 
-    if not force:
-        cached = get_cached_metrics_bundle(filters)
-        if cached and cached.get('kpis'):
-            return jsonify(metrics_bundle_to_console_payload(cached, {'fromCache': True}))
+    cached = get_cached_metrics_bundle(filters)
+    fresh = get_fresh_metrics_bundle(filters)
 
-    try:
-        metrics = get_metrics_bundle(filters)
-        if metrics and metrics.get('kpis'):
-            meta = metrics.get('meta') or {}
-            return jsonify(metrics_bundle_to_console_payload(metrics, {
-                'fromCache': meta.get('source') in ('cache',),
+    # PR #16 pattern: return cache instantly; refresh SQL in background when stale.
+    if cached and cached.get('kpis') and not force:
+        refreshing = not fresh and sql_configured()
+        if refreshing:
+            job_id = new_job_id()
+            create_job(job_id, 'Refreshing live metrics…')
+
+            def _run_refresh() -> None:
+                try:
+                    metrics = refresh_metrics_bundle(filters, lambda msg: update_job_message(job_id, msg))
+                    finish_job(job_id, {'metrics': metrics, 'filterKey': coarse_cache_key(normalize_params(filters))})
+                    print(f'[job {job_id[:8]}] Metrics refresh complete', flush=True)
+                except Exception as e:
+                    fail_job(job_id, str(e))
+                    print(f'[job {job_id[:8]}] Metrics refresh failed: {e}', flush=True)
+
+            _run_background(_run_refresh)
+            return jsonify(metrics_bundle_to_console_payload(cached, {
+                'fromCache': True,
+                '_refreshing': True,
+                '_job_id': job_id,
             }))
-    except Exception as e:
-        return jsonify({
-            'error': str(e),
-            'metrics': None,
-            '_source': 'error',
-            '_cached': True,
-            'metric_view': resolve_metric_view(),
-        }), 503
 
-    use_preload = preload_enabled() and sql_configured()
-    if force and use_preload:
+        return jsonify(metrics_bundle_to_console_payload(cached, {'fromCache': True}))
+
+    if sql_configured():
         job_id = new_job_id()
-        create_job(job_id, 'Refreshing metrics…')
+        create_job(job_id, 'Connecting to Databricks metric view…')
 
         def _run_refresh() -> None:
             try:
@@ -342,6 +348,14 @@ def console_data():
                 print(f'[job {job_id[:8]}] Metrics refresh failed: {e}', flush=True)
 
         _run_background(_run_refresh)
+
+        if cached and cached.get('kpis'):
+            return jsonify(metrics_bundle_to_console_payload(cached, {
+                '_job_id': job_id,
+                '_refreshing': True,
+                'fromCache': True,
+            }))
+
         return jsonify({
             'metrics': None,
             'dashboard': {},
@@ -352,9 +366,26 @@ def console_data():
             'status': 'running',
         })
 
-    return jsonify({
-        'error': 'No metrics available',
-        'metrics': None,
-        '_source': 'error',
-        '_cached': True,
-    }), 503
+    if not console_demo_mode():
+        return jsonify({
+            'error': (
+                'Live SQL is not configured. Set DATABRICKS_* in .env, '
+                'or set CONSOLE_DEMO_MODE=true to enable demo data.'
+            ),
+            'metrics': None,
+            '_source': 'error',
+            '_cached': True,
+            'metric_view': resolve_metric_view(),
+        }), 503
+
+    try:
+        metrics = get_metrics_bundle(filters)
+        return jsonify(metrics_bundle_to_console_payload(metrics))
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'metrics': None,
+            '_source': 'error',
+            '_cached': True,
+            'metric_view': resolve_metric_view(),
+        }), 503

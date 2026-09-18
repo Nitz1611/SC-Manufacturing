@@ -8,7 +8,12 @@ from typing import Any
 
 from flask import Blueprint, jsonify, request
 
-from py_server.lib.analytics import get_cached_metrics_bundle, get_metrics_bundle
+from py_server.lib.analytics import (
+    get_cached_metrics_bundle,
+    get_fresh_metrics_bundle,
+    get_metrics_bundle,
+    refresh_metrics_bundle,
+)
 from py_server.lib.claude_summary import claude_configured, invoke_claude
 from py_server.lib.config import normalize_params
 from py_server.lib.maintenance import build_maintenance_payload
@@ -27,9 +32,33 @@ def _filters_from_body(body: dict[str, Any]) -> dict[str, Any]:
     return body.get('filters') or body.get('params') or {}
 
 
-def _metrics_for_request(filters: dict[str, Any]) -> dict[str, Any]:
+def _run_background(fn) -> None:
+    thread = threading.Thread(target=fn, daemon=True)
+    thread.start()
+
+
+def _metrics_for_request(filters: dict[str, Any], *, block: bool = True) -> dict[str, Any]:
     cached = get_cached_metrics_bundle(filters)
-    return cached if cached else get_metrics_bundle(filters)
+    if cached and not block:
+        return cached
+    if cached:
+        fresh = get_fresh_metrics_bundle(filters)
+        if fresh:
+            return fresh
+    return get_metrics_bundle(filters)
+
+
+def _schedule_metrics_refresh(filters: dict[str, Any]) -> None:
+    if get_fresh_metrics_bundle(filters):
+        return
+
+    def _run() -> None:
+        try:
+            refresh_metrics_bundle(filters)
+        except Exception as exc:
+            print(f'[maintenance] background refresh failed: {exc}', flush=True)
+
+    _run_background(_run)
 
 
 def _insights_cache_key(filters: dict[str, Any]) -> str:
@@ -110,16 +139,37 @@ def maintenance_data():
     filters = _filters_from_body(body)
     force_refresh = bool(body.get('forceRefresh') or body.get('refresh'))
     cache_key = _insights_cache_key(filters)
+
+    cached_metrics = None if force_refresh else get_cached_metrics_bundle(filters)
+    if cached_metrics and cached_metrics.get('kpis'):
+        payload = build_maintenance_payload(cached_metrics, filters)
+        meta = cached_metrics.get('meta') or {}
+        _payload_cache[cache_key] = {
+            'payload': payload,
+            'source': meta.get('source', 'cache'),
+            'ts': time.time() * 1000,
+        }
+        _schedule_metrics_refresh(filters)
+        return jsonify({
+            **payload,
+            '_source': meta.get('source', 'cache'),
+            '_live': meta.get('source') in ('sql', 'cache'),
+            '_cached': True,
+            '_refreshing': not get_fresh_metrics_bundle(filters),
+        })
+
     if not force_refresh:
         hit = _payload_cache.get(cache_key)
         if hit and time.time() * 1000 - hit['ts'] < PAYLOAD_TTL_MS:
+            _schedule_metrics_refresh(filters)
             return jsonify({
                 **hit['payload'],
                 '_source': hit.get('source', 'cache'),
                 '_cached': True,
+                '_refreshing': True,
             })
     try:
-        metrics = _metrics_for_request(filters)
+        metrics = get_metrics_bundle(filters)
         payload = build_maintenance_payload(metrics, filters)
         meta = metrics.get('meta') or {}
         response = {

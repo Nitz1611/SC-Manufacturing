@@ -1,17 +1,24 @@
 """
 Analytics — live SQL against pgt_plnt_prodtn_metric_view.
 Filter changes run SQL with year/site/region bound in each query.
-Only short-lived in-memory cache per filter combo — no full metric-view disk cache.
+Instant serve from filter-scoped memory/disk cache; background refresh when stale.
 """
 from __future__ import annotations
 
 import copy
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
+from py_server.lib.cache import (
+    FILTER_PREFIX,
+    cache_get,
+    cache_load_all_metrics,
+    cache_set,
+)
 from py_server.lib.config import (
     bind_sql_params,
     console_demo_mode,
@@ -28,7 +35,7 @@ from py_server.lib.metrics_transform import (
     query_result_for_key,
 )
 
-MEMORY_TTL_MS = int(os.getenv('METRICS_MEMORY_CACHE_MINUTES') or 15) * 60 * 1000
+MEMORY_TTL_MS = int(os.getenv('METRICS_MEMORY_CACHE_MINUTES') or 30) * 60 * 1000
 
 _memory_cache: dict[str, dict[str, Any]] = {}
 _last_sql_error: str | None = None
@@ -65,6 +72,30 @@ def _is_live_metrics(metrics: dict[str, Any] | None) -> bool:
 
 def _allow_demo_metrics() -> bool:
     return console_demo_mode() and not live_data_required()
+
+
+def _valid_sql_cache(data: dict[str, Any] | None) -> bool:
+    return bool(
+        data
+        and data.get('kpis')
+        and (data.get('meta') or {}).get('source') in ('sql', 'cache')
+    )
+
+
+def disk_cache_key(norm: dict[str, str | None]) -> str:
+    return f'{FILTER_PREFIX}{filter_cache_key(norm)}'
+
+
+def _read_disk_cached(norm: dict[str, str | None]) -> dict[str, Any] | None:
+    cached = cache_get(disk_cache_key(norm))
+    if _valid_sql_cache(cached):
+        return cached
+    if norm.get('site') or norm.get('regions'):
+        network_norm = {**norm, 'site': None, 'regions': None}
+        cached = cache_get(disk_cache_key(network_norm))
+        if _valid_sql_cache(cached):
+            return cached
+    return None
 
 
 def purge_non_sql_caches() -> None:
@@ -252,9 +283,10 @@ def store_metrics_bundle_to_cache(
     norm: dict[str, str | None],
     metrics: dict[str, Any],
 ) -> None:
-    """Session memory only — keyed by SQL filters (year, site, regions)."""
+    """Memory + filter-scoped disk cache (one entry per year/site/regions)."""
     scoped = apply_site_filter(metrics, norm.get('site'))
     _set_memory_cached(norm, scoped)
+    cache_set(disk_cache_key(norm), scoped)
 
 
 def get_memory_cache_stats() -> dict[str, Any]:
@@ -262,17 +294,51 @@ def get_memory_cache_stats() -> dict[str, Any]:
 
 
 def warm_memory_cache_from_disk() -> int:
-    """Disk metric-view cache disabled — nothing to warm."""
-    return 0
+    loaded = 0
+    for entry in cache_load_all_metrics():
+        try:
+            key = entry['key']
+            if not key.startswith(FILTER_PREFIX):
+                continue
+            data = entry.get('data') or {}
+            if live_data_required() and not _is_live_metrics(data):
+                continue
+            parsed = json.loads(key[len(FILTER_PREFIX):])
+            norm: dict[str, str | None] = {
+                'year': str(parsed.get('year') or '2026'),
+                'site': parsed.get('site') or None,
+                'regions': parsed.get('regions') or None,
+                'period': 'week',
+                'timeframe': 'FY',
+            }
+            mem_key = filter_cache_key(norm)
+            if mem_key not in _memory_cache:
+                _memory_cache[mem_key] = {'data': data, 'ts': entry['ts']}
+                loaded += 1
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+    if loaded:
+        print(f'[cache] warmed {loaded} filter-scoped bundle(s) from disk into memory', flush=True)
+    return loaded
 
 
 def get_cached_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Memory or disk — may be stale but valid live SQL data."""
     norm = normalize_params(filters or {})
-    return _get_memory_cached(norm)
+    mem = _get_memory_cached(norm)
+    if mem:
+        return mem
+    disk = _read_disk_cached(norm)
+    if disk:
+        _set_memory_cached(norm, disk)
+        return apply_site_filter(copy.deepcopy(disk), norm.get('site'))
+    return None
 
 
 def get_fresh_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    return get_cached_metrics_bundle(filters)
+    """In-memory only, within TTL — no background refresh needed."""
+    norm = normalize_params(filters or {})
+    return _get_memory_cached(norm)
 
 
 def refresh_metrics_bundle(
@@ -287,15 +353,19 @@ def refresh_metrics_bundle(
 
 
 def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Return metrics for the active filter selection — SQL on miss, memory on repeat."""
+    """Return metrics for the active filter selection — cache first, then SQL."""
     norm = normalize_params(filters or {})
     mem = _get_memory_cached(norm)
     if mem:
-        print(
-            f'[analytics] memory cache hit filters={filter_cache_key(norm)}',
-            flush=True,
-        )
+        print(f'[analytics] memory cache hit filters={filter_cache_key(norm)}', flush=True)
         return mem
+
+    disk = _read_disk_cached(norm)
+    if disk:
+        print(f'[analytics] disk cache hit filters={filter_cache_key(norm)}', flush=True)
+        scoped = apply_site_filter(copy.deepcopy(disk), norm.get('site'))
+        _set_memory_cached(norm, scoped)
+        return scoped
 
     if sql_configured():
         try:
@@ -309,6 +379,13 @@ def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
             return apply_site_filter(metrics, norm.get('site'))
         except Exception as err:
             print(f'[analytics] Live SQL failed: {err}', flush=True)
+            stale = _read_disk_cached(norm)
+            if stale:
+                stale = copy.deepcopy(stale)
+                stale.setdefault('meta', {})['source'] = 'cache'
+                stale['meta']['sql_warning'] = str(err)[:240]
+                _set_memory_cached(norm, stale)
+                return apply_site_filter(stale, norm.get('site'))
             _remember_sql_error(err)
 
     if not _allow_demo_metrics():
@@ -338,7 +415,7 @@ def run_analytics_query(
         except Exception as e:
             _last_sql_error = str(e)
             print(f'[analytics] {query_key} live SQL failed: {_last_sql_error}', flush=True)
-            cached = _get_memory_cached(norm)
+            cached = get_cached_metrics_bundle(params)
             if cached:
                 result = query_result_for_key(query_key, cached)
                 row_list = result.get('rows', []) if isinstance(result, dict) else []
@@ -404,6 +481,27 @@ def verify_metric_view_access() -> dict[str, Any]:
 coarse_cache_key = filter_cache_key
 
 
+def warmup_default_metrics_async() -> None:
+    """Background load for FY 2026 / all sites — makes first page visit instant."""
+    if not sql_configured():
+        return
+
+    def _run() -> None:
+        try:
+            warm_memory_cache_from_disk()
+            default_filters: dict[str, Any] = {'year': '2026', 'site': None, 'region': None}
+            if get_fresh_metrics_bundle(default_filters):
+                print('[analytics] default FY 2026 cache already warm', flush=True)
+                return
+            print('[analytics] warming default FY 2026 metrics in background…', flush=True)
+            refresh_metrics_bundle(default_filters)
+            print('[analytics] default FY 2026 metrics ready', flush=True)
+        except Exception as exc:
+            print(f'[analytics] default warmup failed: {exc}', flush=True)
+
+    threading.Thread(target=_run, daemon=True, name='metrics-warmup').start()
+
+
 __all__ = [
     'databricks_configured',
     'get_last_sql_error',
@@ -424,6 +522,7 @@ __all__ = [
     'verify_metric_view_access',
     'warmup_warehouse',
     'resolve_metric_view',
+    'warmup_default_metrics_async',
     'filter_cache_key',
     'coarse_cache_key',
 ]

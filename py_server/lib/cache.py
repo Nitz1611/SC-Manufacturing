@@ -1,4 +1,4 @@
-"""Disk cache for metrics payloads — mirrors server/lib/cache.ts."""
+"""Disk cache for filter-scoped metrics — one entry per year/site/region combo."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,11 @@ from py_server.lib.config import CACHE_FILE
 
 TTL_HOURS = float(os.environ.get("INSIGHTS_REFRESH_INTERVAL_HOURS") or 24)
 TTL_MS = TTL_HOURS * 3600 * 1000
+FILTER_PREFIX = "metrics_f_"
+
+
+def metrics_disk_cache_enabled() -> bool:
+    return (os.environ.get("METRICS_DISK_CACHE") or "true").lower() != "false"
 
 
 def _read_store() -> dict[str, dict[str, Any]]:
@@ -27,9 +32,9 @@ def cache_get(key: str) -> dict[str, Any] | None:
         if not entry:
             return None
         if (time.time() * 1000) - entry["ts"] > TTL_MS:
-            print(f"[cache] EXPIRED key={key[:40]}")
+            print(f"[cache] EXPIRED key={key[:48]}")
             return None
-        print(f"[cache] HIT key={key[:40]}")
+        print(f"[cache] HIT key={key[:48]}")
         return entry["data"]
     except Exception as exc:
         print(f"[cache] read failed {exc}")
@@ -42,19 +47,17 @@ def cache_get_any() -> dict[str, Any] | None:
             return None
         store = _read_store()
         for key, entry in store.items():
-            if key.startswith("metrics_") and entry.get("data"):
+            if key.startswith(FILTER_PREFIX) and entry.get("data"):
                 return entry["data"]
-            data = entry.get("data") or {}
-            if key.startswith("{") and data.get("kpis"):
-                return data
         return None
     except Exception:
         return None
 
 
 def cache_set(key: str, data: dict[str, Any]) -> None:
-    """Legacy disk cache — disabled for full metric-view blobs (use in-memory filter cache)."""
-    if (os.environ.get("METRICS_DISK_CACHE") or "false").lower() != "true":
+    if not metrics_disk_cache_enabled():
+        return
+    if not key.startswith(FILTER_PREFIX):
         return
     try:
         store: dict[str, dict[str, Any]] = {}
@@ -62,25 +65,27 @@ def cache_set(key: str, data: dict[str, Any]) -> None:
             store = _read_store()
         store[key] = {"data": data, "ts": int(time.time() * 1000)}
         CACHE_FILE.write_text(json.dumps(store), encoding="utf-8")
-        print(f"[cache] SAVED key={key[:40]}")
+        print(f"[cache] SAVED key={key[:48]}")
     except Exception as exc:
         print(f"[cache] write failed {exc}")
 
 
-def purge_metrics_disk_cache() -> int:
-    """Remove stale full-bundle metric entries from cache.json on startup."""
+def purge_legacy_metrics_disk_cache() -> int:
+    """Remove old period-fan-out cache keys; keep filter-scoped metrics_f_ entries."""
     try:
         if not CACHE_FILE.is_file():
             return 0
         store = _read_store()
         removed = 0
         for key in list(store.keys()):
-            if key.startswith("metrics_v") or key.startswith("metrics_"):
+            if key.startswith(FILTER_PREFIX):
+                continue
+            if key.startswith("metrics_"):
                 del store[key]
                 removed += 1
         if removed:
             CACHE_FILE.write_text(json.dumps(store), encoding="utf-8")
-            print(f"[cache] purged {removed} metric-view disk entries", flush=True)
+            print(f"[cache] purged {removed} legacy metric cache entries", flush=True)
         return removed
     except Exception as exc:
         print(f"[cache] purge failed {exc}", flush=True)
@@ -115,11 +120,7 @@ def cache_load_all_metrics() -> list[dict[str, Any]]:
         return [
             {"key": key, "data": entry["data"], "ts": entry["ts"]}
             for key, entry in store.items()
-            if (
-                (key.startswith("metrics_v4_") or key.startswith("metrics_v3_") or key.startswith("metrics_"))
-                and entry.get("data")
-                and now - entry["ts"] <= TTL_MS
-            )
+            if key.startswith(FILTER_PREFIX) and entry.get("data") and now - entry["ts"] <= TTL_MS
         ]
     except Exception:
         return []
