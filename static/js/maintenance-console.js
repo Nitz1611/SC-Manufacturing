@@ -148,15 +148,7 @@
   function syncToConsoleFilters() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
-    var tf = String(state.filters.timeframe || 'ptd').toLowerCase();
-    var consoleTfMap = {
-      ptd: 'Month',
-      wtd: 'Week',
-      ytd: 'FY',
-      shift: 'Week',
-      custom: 'Week',
-    };
-    mc.state.filters.timeframe = consoleTfMap[tf] || 'Month';
+    mc.state.filters.timeframe = state.filters.timeframe || 'ptd';
     mc.state.filters.year = state.filters.year === 'All' ? '2026' : state.filters.year;
     mc.state.filters.site = state.filters.site;
     mc.state.filters.region = normalizeRegionList(state.filters.region);
@@ -1088,6 +1080,7 @@
     }
 
     reflowDashboardCharts();
+    reloadConsoleMetrics();
   }
 
   function openMyReport() {

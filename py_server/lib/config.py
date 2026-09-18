@@ -312,15 +312,9 @@ def console_demo_mode() -> bool:
 def coarse_cache_key(params: dict[str, str | None]) -> str:
     payload = {
         "period": params.get("period") or "week",
-        "timeframe": params.get("timeframe"),
         "year": params.get("year") or "2026",
         "site": params.get("site"),
         "regions": params.get("regions"),
-        "line": params.get("line"),
-        "department": params.get("department"),
-        "shift_filter": params.get("shift_filter"),
-        "date_from": params.get("date_from"),
-        "date_to": params.get("date_to"),
     }
     return f"metrics_v3_{json.dumps(payload, separators=(',', ':'))}"
 

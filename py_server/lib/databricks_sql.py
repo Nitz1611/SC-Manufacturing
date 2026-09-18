@@ -91,6 +91,13 @@ def execute_statement(sql: str) -> list[dict[str, Any]]:
         text = resp.text[:500]
         raise RuntimeError(f"Databricks SQL POST failed ({resp.status_code}): {text}")
 
+    content_type = (resp.headers.get("content-type") or "").lower()
+    if "html" in content_type or resp.text.lstrip().startswith("<!"):
+        raise RuntimeError(
+            "Databricks SQL returned a sign-in page — refresh DATABRICKS_PAT_TOKEN in .env "
+            "and confirm DATABRICKS_SERVER_HOSTNAME matches your workspace."
+        )
+
     stmt = resp.json()
     state = (stmt.get("status") or {}).get("state")
 
