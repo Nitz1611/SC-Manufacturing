@@ -22,12 +22,13 @@ from py_server.lib.analytics import (
     purge_non_sql_caches,
     verify_metric_view_access,
     warm_memory_cache_from_disk,
+    warmup_default_metrics_async,
 )
 from py_server.lib.cache import purge_legacy_metrics_disk_cache
 from py_server.lib.databricks_fetch import test_databricks_reachability
 from py_server.lib.databricks_sql import sql_configured, warmup_warehouse
 from py_server.lib.env import load_env, sql_env_status
-from py_server.lib.preload import start_preload_scheduler
+from py_server.lib.preload import preload_enabled, start_preload_scheduler
 from py_server.lib.summary_provider import describe_summary_provider
 from py_server.routes import register_routes
 
@@ -58,7 +59,10 @@ def _startup_warmup() -> None:
             loaded = warm_memory_cache_from_disk()
             if loaded:
                 print(f"[startup] ✓ warmed {loaded} cached metric bundle(s) from disk")
-            start_preload_scheduler()
+            if preload_enabled():
+                start_preload_scheduler()
+            else:
+                warmup_default_metrics_async()
         else:
             print(f"[startup] ✗ metric view check failed: {test.get('error')}")
     except Exception as exc:

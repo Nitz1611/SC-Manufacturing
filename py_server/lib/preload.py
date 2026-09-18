@@ -25,6 +25,7 @@ from py_server.lib.metrics_transform import build_filter_options
 INTERVAL_MS = int(os.getenv('PRELOAD_INTERVAL_MINUTES') or 15) * 60 * 1000
 CONCURRENCY = max(1, int(os.getenv('PRELOAD_CONCURRENCY') or 1))
 DEFAULT_YEAR = os.getenv('PRELOAD_DEFAULT_YEAR') or '2026'
+FULL_CYCLE_DELAY_MS = int(os.getenv('PRELOAD_FULL_DELAY_MINUTES') or 10) * 60 * 1000
 
 
 def preload_enabled() -> bool:
@@ -124,6 +125,31 @@ def _run_pool(
         futures = [pool.submit(next_worker) for _ in range(min(concurrency, len(items) or 1))]
         for fut in as_completed(futures):
             fut.result()
+
+
+def _default_filter_combo() -> dict[str, Any]:
+    return {
+        'year': DEFAULT_YEAR,
+        'site': 'All',
+        'region': [],
+        'timeframe': 'FY',
+    }
+
+
+def warm_default_combo() -> None:
+    """Priority warmup for FY default — keeps first page visit fast and avoids combo fan-out."""
+    if not preload_enabled() or not sql_configured():
+        return
+    combo = _default_filter_combo()
+    if get_fresh_metrics_bundle(combo):
+        print('[preload] default FY combo already fresh in memory', flush=True)
+        return
+    try:
+        print(f'[preload] warming default FY {DEFAULT_YEAR} combo…', flush=True)
+        refresh_metrics_bundle(combo)
+        print(f'[preload] default FY {DEFAULT_YEAR} combo ready', flush=True)
+    except Exception as exc:
+        print(f'[preload] default combo warmup failed: {exc}', flush=True)
 
 
 def run_preload_cycle() -> None:
@@ -246,10 +272,23 @@ def start_preload_scheduler() -> None:
         _status['enabled'] = True
     warm_memory_cache_from_disk()
     print(
-        f'[preload] scheduler started — every {INTERVAL_MS / 60000} min, concurrency={CONCURRENCY}',
+        f'[preload] scheduler started — default warmup now, full cycle every '
+        f'{INTERVAL_MS / 60000} min (after {FULL_CYCLE_DELAY_MS / 60000} min delay), '
+        f'concurrency={CONCURRENCY}',
         flush=True,
     )
-    threading.Thread(target=run_preload_cycle, daemon=True).start()
+
+    def _boot() -> None:
+        warm_default_combo()
+        if FULL_CYCLE_DELAY_MS > 0:
+            print(
+                f'[preload] deferring full combo cycle for {FULL_CYCLE_DELAY_MS / 60000:.0f} min',
+                flush=True,
+            )
+            time.sleep(FULL_CYCLE_DELAY_MS / 1000)
+        run_preload_cycle()
+
+    threading.Thread(target=_boot, daemon=True, name='preload-boot').start()
 
 
 def get_preload_status() -> PreloadStatus:

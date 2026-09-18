@@ -14,6 +14,7 @@ from py_server.lib.analytics import (
     get_fresh_metrics_bundle,
     get_metrics_bundle,
     metrics_bundle_to_console_payload,
+    schedule_extended_metrics_load,
     schedule_metrics_refresh,
 )
 from py_server.lib.claude_summary import claude_status, get_claude_batch_summaries, get_claude_tab_summary
@@ -308,9 +309,17 @@ def console_data():
     if not force:
         cached = get_cached_metrics_bundle(filters)
         if cached and cached.get('kpis'):
-            if not get_fresh_metrics_bundle(filters) and sql_configured():
+            meta = cached.get('meta') or {}
+            partial = bool(meta.get('partial'))
+            if partial:
+                schedule_extended_metrics_load(filters)
+            elif not get_fresh_metrics_bundle(filters) and sql_configured():
                 schedule_metrics_refresh(filters)
-            return jsonify(metrics_bundle_to_console_payload(cached, {'fromCache': True}))
+            payload = metrics_bundle_to_console_payload(cached, {
+                'fromCache': True,
+                '_refreshing': partial,
+            })
+            return jsonify(payload)
 
     if not console_demo_mode() and not sql_configured():
         return jsonify({

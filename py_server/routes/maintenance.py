@@ -12,6 +12,7 @@ from py_server.lib.analytics import (
     get_cached_metrics_bundle,
     get_fresh_metrics_bundle,
     get_metrics_bundle,
+    schedule_extended_metrics_load,
     schedule_metrics_refresh,
 )
 from py_server.lib.claude_summary import claude_configured, invoke_claude
@@ -119,25 +120,35 @@ def maintenance_data():
         if cached and cached.get('kpis'):
             payload = build_maintenance_payload(cached, filters)
             meta = cached.get('meta') or {}
-            if not get_fresh_metrics_bundle(filters):
+            partial = bool(meta.get('partial'))
+            if partial:
+                schedule_extended_metrics_load(filters)
+            elif not get_fresh_metrics_bundle(filters):
                 schedule_metrics_refresh(filters)
             return jsonify({
                 **payload,
                 '_source': meta.get('source', 'cache'),
                 '_live': meta.get('source') in ('sql', 'cache'),
                 '_cached': True,
+                '_partial': partial,
+                '_refreshing': partial,
             })
 
     try:
         metrics = get_metrics_bundle(filters)
         payload = build_maintenance_payload(metrics, filters)
         meta = metrics.get('meta') or {}
+        partial = bool(meta.get('partial'))
+        if partial:
+            schedule_extended_metrics_load(filters)
         return jsonify({
             **payload,
             '_source': meta.get('source', 'live'),
             '_live': meta.get('source') in ('sql', 'cache'),
             '_cached': meta.get('source') in ('cache',),
             '_sql_warning': meta.get('sql_warning'),
+            '_partial': partial,
+            '_refreshing': partial,
         })
     except Exception as e:
         cached = get_cached_metrics_bundle(filters)

@@ -34,9 +34,11 @@ class MetricsMeta(TypedDict, total=False):
     period: str
     week: str
     source: Literal["live", "cache", "demo", "sql"]
+    partial: bool
     filters: Dict[str, str]
     filtered_site: str
     filtered_regions: str
+    sql_warning: str
 
 
 class ReasonRow(TypedDict):
@@ -885,6 +887,35 @@ def _build_dow_by_shift(
     return out
 
 
+def build_core_metrics_from_sql(
+    kpi_rows: List[Dict[str, Any]],
+    site_rows: List[Dict[str, Any]],
+    filters: Dict[str, Optional[str]],
+) -> MetricsPayload:
+    """Minimal live payload — network/site KPIs only (fast path before chart queries)."""
+    k = kpi_rows[0] if kpi_rows else {}
+    kpis = format_kpis_from_raw(k)
+    site_kpis = _build_site_kpis_map(site_rows)
+    year_num = int(filters["year"]) if filters.get("year") else 2026
+    m: MetricsPayload = {
+        "meta": {
+            "year": year_num,
+            "period": PERIODS[-1] if PERIODS else "P09",
+            "week": WEEKS[-1] if WEEKS else "",
+            "source": "sql",
+            "partial": True,
+            "filters": {k: str(v) for k, v in filters.items() if v is not None},
+        },
+        "periods": PERIODS,
+        "weeks": WEEKS,
+        "kpis": kpis,
+        "site_kpis": site_kpis,
+        "tab_insights": {},
+    }
+    m["tab_insights"] = build_tab_insights(m)
+    return m
+
+
 def build_metrics_from_sql(
     results: SqlQueryResults,
     filters: Dict[str, Optional[str]],
@@ -991,14 +1022,15 @@ def build_metrics_from_sql(
         else (filter_options["years"][0] if filter_options["years"] else 2026)
     )
 
+    meta: MetricsMeta = {
+        "year": year_num,
+        "period": periods[-1] if periods else "P09",
+        "week": dow_weeks[-1] if dow_weeks else "",
+        "source": "sql",
+        "filters": {k: str(v) for k, v in filters.items() if v is not None},
+    }
     m: MetricsPayload = {
-        "meta": {
-            "year": year_num,
-            "period": periods[-1] if periods else "P09",
-            "week": dow_weeks[-1] if dow_weeks else "",
-            "source": "sql",
-            "filters": {k: str(v) for k, v in filters.items() if v is not None},
-        },
+        "meta": meta,
         "periods": periods,
         "weeks": dow_weeks,
         "kpis": kpis,
@@ -1042,6 +1074,7 @@ formatKpisFromRaw = format_kpis_from_raw
 applySiteFilter = apply_site_filter
 queryResultForKey = query_result_for_key
 buildFilterOptions = build_filter_options
+buildCoreMetricsFromSql = build_core_metrics_from_sql
 buildMetricsFromSql = build_metrics_from_sql
 transformDashboard = transform_dashboard
 synthesizeFromTrend = synthesize_from_trend
@@ -1081,6 +1114,8 @@ __all__ = [
     "pivot_site_entity_rows",
     "build_filter_options",
     "buildFilterOptions",
+    "build_core_metrics_from_sql",
+    "buildCoreMetricsFromSql",
     "build_metrics_from_sql",
     "buildMetricsFromSql",
 ]

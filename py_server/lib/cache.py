@@ -71,21 +71,25 @@ def cache_set(key: str, data: dict[str, Any]) -> None:
 
 
 def purge_legacy_metrics_disk_cache() -> int:
-    """Remove old period-fan-out cache keys; keep filter-scoped metrics_f_ entries."""
+    """Remove invalid disk cache entries — keep only live SQL metrics_f_ bundles."""
     try:
         if not CACHE_FILE.is_file():
             return 0
         store = _read_store()
         removed = 0
         for key in list(store.keys()):
-            if key.startswith(FILTER_PREFIX):
+            if not key.startswith(FILTER_PREFIX):
+                del store[key]
+                removed += 1
                 continue
-            if key.startswith("metrics_"):
+            data = (store.get(key) or {}).get("data") or {}
+            meta = data.get("meta") or {}
+            if meta.get("source") not in ("sql", "cache"):
                 del store[key]
                 removed += 1
         if removed:
             CACHE_FILE.write_text(json.dumps(store), encoding="utf-8")
-            print(f"[cache] purged {removed} legacy metric cache entries", flush=True)
+            print(f"[cache] purged {removed} invalid disk cache entries", flush=True)
         return removed
     except Exception as exc:
         print(f"[cache] purge failed {exc}", flush=True)

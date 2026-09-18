@@ -174,9 +174,11 @@
     };
   }
 
-  function fetchMaintenanceData() {
-    state.loading = true;
-    renderLoading();
+  function fetchMaintenanceData(silent) {
+    if (!silent) {
+      state.loading = true;
+      renderLoading();
+    }
     return fetch('/api/maintenance/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -194,6 +196,11 @@
         fetchAiInsights();
         if ($('#maint-report-modal') && $('#maint-report-modal').classList.contains('open')) {
           renderReportModal();
+        }
+        if (data._partial || data._refreshing) {
+          window.setTimeout(function () {
+            fetchMaintenanceData(true);
+          }, 4000);
         }
       })
       .catch(function (err) {

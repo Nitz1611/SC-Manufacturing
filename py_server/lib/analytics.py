@@ -31,7 +31,9 @@ from py_server.lib.config import (
 from py_server.lib.databricks_sql import execute_statement, sql_configured, warmup_warehouse
 from py_server.lib.metrics_transform import (
     apply_site_filter,
+    build_core_metrics_from_sql,
     build_metrics_from_sql,
+    build_tab_insights,
     metrics_from_cache,
     query_result_for_key,
 )
@@ -42,8 +44,27 @@ _memory_cache: dict[str, dict[str, Any]] = {}
 _load_locks: dict[str, threading.Lock] = {}
 _load_locks_guard = threading.Lock()
 _refresh_inflight: set[str] = set()
+_extended_inflight: set[str] = set()
 _last_sql_error: str | None = None
 _last_sql_success_at: float | None = None
+
+CRITICAL_QUERY_KEYS = ('dashboard_dt_kpis', 'dashboard_dt_site_kpis')
+WAVE1_CHART_KEYS = (
+    'dashboard_dt_period_trend',
+    'dashboard_dt_site_by_period',
+    'dashboard_dt_reasons',
+    'dashboard_dt_dow',
+    'dashboard_dt_top_lines',
+    'dashboard_dt_shift_comparison',
+    'dashboard_filter_options',
+)
+WAVE2_QUERY_KEYS = (
+    'dashboard_dt_category_by_period',
+    'dashboard_dt_line_by_period',
+    'dashboard_dt_category_network',
+    'dashboard_dt_line_network',
+    'dashboard_dt_dow_by_shift',
+)
 
 
 def databricks_configured() -> bool:
@@ -153,34 +174,75 @@ def _sql_max_workers(batch_size: int) -> int:
     return max(1, min(batch_size, configured))
 
 
+def _derive_network_kpis_from_sites(site_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not site_rows:
+        return []
+    total_hrs = sum(float(r.get('downtime_hrs') or 0) for r in site_rows)
+    total_stops = sum(float(r.get('stops') or 0) for r in site_rows)
+    if total_hrs > 0:
+        weighted_pct = sum(
+            float(r.get('downtime_pct') or 0) * float(r.get('downtime_hrs') or 0)
+            for r in site_rows
+        ) / total_hrs
+    else:
+        weighted_pct = sum(float(r.get('downtime_pct') or 0) for r in site_rows) / len(site_rows)
+    return [{
+        'downtime_pct': round(weighted_pct, 2),
+        'downtime_hrs': round(total_hrs, 0),
+        'stops': int(round(total_stops)),
+    }]
+
+
+def _run_critical_queries(norm: dict[str, str | None]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run the two KPI queries sequentially — least load on Databricks, fastest path to live KPIs."""
+    kpi_rows: list[dict[str, Any]] = []
+    site_rows: list[dict[str, Any]] = []
+    for key in CRITICAL_QUERY_KEYS:
+        try:
+            rows = _execute_query(key, norm)
+        except Exception as err:
+            print(f'[analytics] critical {key} failed: {err}', flush=True)
+            rows = []
+        if key == 'dashboard_dt_kpis':
+            kpi_rows = rows
+        else:
+            site_rows = rows
+    if not kpi_rows and site_rows:
+        kpi_rows = _derive_network_kpis_from_sites(site_rows)
+        if kpi_rows:
+            print('[analytics] derived network KPIs from site_kpis', flush=True)
+    if not kpi_rows and not site_rows:
+        raise RuntimeError(
+            'Critical SQL queries failed for network and site KPIs. '
+            'Check Databricks warehouse capacity or retry in a moment.',
+        )
+    return kpi_rows, site_rows
+
+
+def _store_core_metrics(norm: dict[str, str | None], kpi_rows: list, site_rows: list) -> dict[str, Any]:
+    partial = build_core_metrics_from_sql(kpi_rows, site_rows, norm)
+    scoped = apply_site_filter(partial, norm.get('site'))
+    store_metrics_bundle_to_cache(norm, scoped)
+    return scoped
+
+
 def load_metrics_from_sql(
     norm: dict[str, str | None],
     on_progress: Callable[[str], None] | None = None,
+    *,
+    cache_intermediate: bool = True,
 ) -> dict[str, Any]:
     """Run filtered SQL (year/site/region) and assemble the metrics payload."""
     global _last_sql_error, _last_sql_success_at
 
     if on_progress:
-        on_progress('Querying KPIs, sites, and trends (wave 1/2)…')
+        on_progress('Querying live KPIs…')
 
-    wave1_keys = (
-        'dashboard_dt_kpis',
-        'dashboard_dt_site_kpis',
-        'dashboard_dt_period_trend',
-        'dashboard_dt_site_by_period',
-        'dashboard_dt_reasons',
-        'dashboard_dt_dow',
-        'dashboard_dt_top_lines',
-        'dashboard_dt_shift_comparison',
-        'dashboard_filter_options',
-    )
-    wave2_keys = (
-        'dashboard_dt_category_by_period',
-        'dashboard_dt_line_by_period',
-        'dashboard_dt_category_network',
-        'dashboard_dt_line_network',
-        'dashboard_dt_dow_by_shift',
-    )
+    kpi_rows, site_rows = _run_critical_queries(norm)
+    if cache_intermediate:
+        _store_core_metrics(norm, kpi_rows, site_rows)
+        if on_progress:
+            on_progress('KPIs ready — loading charts (wave 1/2)…')
 
     def run_keys(keys: tuple[str, ...], wave_label: str) -> dict[str, list[dict[str, Any]]]:
         out: dict[str, list[dict[str, Any]]] = {}
@@ -203,38 +265,13 @@ def load_metrics_from_sql(
                     on_progress(msg)
         return out
 
-    def _derive_network_kpis_from_sites(site_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not site_rows:
-            return []
-        total_hrs = sum(float(r.get('downtime_hrs') or 0) for r in site_rows)
-        total_stops = sum(float(r.get('stops') or 0) for r in site_rows)
-        if total_hrs > 0:
-            weighted_pct = sum(
-                float(r.get('downtime_pct') or 0) * float(r.get('downtime_hrs') or 0)
-                for r in site_rows
-            ) / total_hrs
-        else:
-            weighted_pct = sum(float(r.get('downtime_pct') or 0) for r in site_rows) / len(site_rows)
-        return [{
-            'downtime_pct': round(weighted_pct, 2),
-            'downtime_hrs': round(total_hrs, 0),
-            'stops': int(round(total_stops)),
-        }]
+    w1 = run_keys(WAVE1_CHART_KEYS, 'Wave 1')
+    w1['dashboard_dt_kpis'] = kpi_rows
+    w1['dashboard_dt_site_kpis'] = site_rows
 
-    w1 = run_keys(wave1_keys, 'Wave 1')
-    if not w1.get('dashboard_dt_kpis') and w1.get('dashboard_dt_site_kpis'):
-        derived = _derive_network_kpis_from_sites(w1['dashboard_dt_site_kpis'])
-        if derived:
-            w1['dashboard_dt_kpis'] = derived
-            print('[analytics] derived network KPIs from site_kpis (dashboard_dt_kpis query failed)', flush=True)
-    if not w1.get('dashboard_dt_kpis') and not w1.get('dashboard_dt_site_kpis'):
-        raise RuntimeError(
-            'Critical SQL queries failed for network and site KPIs. '
-            'Check Databricks warehouse capacity or retry in a moment.',
-        )
     if on_progress:
         on_progress('Querying category, line, and shift breakdowns (wave 2/2)…')
-    w2 = run_keys(wave2_keys, 'Wave 2')
+    w2 = run_keys(WAVE2_QUERY_KEYS, 'Wave 2')
 
     results = {
         'kpis': w1['dashboard_dt_kpis'],
@@ -364,6 +401,49 @@ def _filter_lock(norm: dict[str, str | None]) -> threading.Lock:
         return _load_locks[key]
 
 
+def _metrics_is_partial(metrics: dict[str, Any] | None) -> bool:
+    return bool((metrics or {}).get('meta') or {}).get('partial')
+
+
+def _filters_dict_from_norm(norm: dict[str, str | None]) -> dict[str, Any]:
+    return {
+        'year': norm.get('year') or '2026',
+        'site': norm.get('site'),
+        'region': norm.get('regions'),
+    }
+
+
+def schedule_extended_metrics_load(filters: dict[str, Any] | None = None) -> bool:
+    """Background completion of chart queries after critical KPIs are cached."""
+    if not sql_configured():
+        return False
+    norm = normalize_params(filters or {})
+    key = filter_cache_key(norm)
+    with _load_locks_guard:
+        if key in _extended_inflight or key in _refresh_inflight:
+            return False
+        _extended_inflight.add(key)
+
+    def _run() -> None:
+        try:
+            print(f'[analytics] extended load starting filters={key[:48]}…', flush=True)
+            metrics = load_metrics_from_sql(norm, cache_intermediate=False)
+            store_metrics_bundle_to_cache(norm, apply_site_filter(metrics, norm.get('site')))
+            print(f'[analytics] extended load complete filters={key[:48]}', flush=True)
+        except Exception as exc:
+            print(f'[analytics] extended load failed: {exc}', flush=True)
+        finally:
+            with _load_locks_guard:
+                _extended_inflight.discard(key)
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f'metrics-extended-{key[:12]}',
+    ).start()
+    return True
+
+
 def schedule_metrics_refresh(filters: dict[str, Any] | None = None) -> bool:
     """Background SQL refresh for stale cache — skips if one is already running."""
     if not sql_configured():
@@ -393,40 +473,69 @@ def refresh_metrics_bundle(
     on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     norm = normalize_params(filters)
-    metrics = load_metrics_from_sql(norm, on_progress)
+    metrics = load_metrics_from_sql(norm, on_progress, cache_intermediate=True)
     scoped = apply_site_filter(metrics, norm.get('site'))
     store_metrics_bundle_to_cache(norm, scoped)
     return scoped
 
 
-def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
+def get_metrics_bundle(
+    filters: dict[str, Any] | None = None,
+    *,
+    fast_path: bool = True,
+) -> dict[str, Any]:
     """Return metrics for the active filter selection — cache first, then SQL."""
     norm = normalize_params(filters or {})
     mem = _get_memory_cached(norm)
-    if mem:
+    if mem and not _metrics_is_partial(mem):
         print(f'[analytics] memory cache hit filters={filter_cache_key(norm)}', flush=True)
         return mem
 
     disk = _read_disk_cached(norm)
-    if disk:
+    if disk and not _metrics_is_partial(disk):
         print(f'[analytics] disk cache hit filters={filter_cache_key(norm)}', flush=True)
         scoped = apply_site_filter(copy.deepcopy(disk), norm.get('site'))
         _set_memory_cached(norm, scoped)
+        return scoped
+
+    if mem and _metrics_is_partial(mem):
+        schedule_extended_metrics_load(_filters_dict_from_norm(norm))
+        return mem
+
+    if disk and _metrics_is_partial(disk):
+        scoped = apply_site_filter(copy.deepcopy(disk), norm.get('site'))
+        _set_memory_cached(norm, scoped)
+        schedule_extended_metrics_load(_filters_dict_from_norm(norm))
         return scoped
 
     lock = _filter_lock(norm)
     with lock:
         mem = _get_memory_cached(norm)
         if mem:
+            if _metrics_is_partial(mem):
+                schedule_extended_metrics_load(_filters_dict_from_norm(norm))
             return mem
         disk = _read_disk_cached(norm)
         if disk:
             scoped = apply_site_filter(copy.deepcopy(disk), norm.get('site'))
             _set_memory_cached(norm, scoped)
+            if _metrics_is_partial(scoped):
+                schedule_extended_metrics_load(_filters_dict_from_norm(norm))
             return scoped
 
         if sql_configured():
             try:
+                if fast_path:
+                    print(
+                        f'[analytics] Fast-path live KPIs for {resolve_metric_view()} '
+                        f'filters={filter_cache_key(norm)}…',
+                        flush=True,
+                    )
+                    kpi_rows, site_rows = _run_critical_queries(norm)
+                    partial = _store_core_metrics(norm, kpi_rows, site_rows)
+                    schedule_extended_metrics_load(_filters_dict_from_norm(norm))
+                    return partial
+
                 print(
                     f'[analytics] Loading live SQL for {resolve_metric_view()} '
                     f'filters={filter_cache_key(norm)}…',
@@ -443,6 +552,8 @@ def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
                     stale.setdefault('meta', {})['source'] = 'cache'
                     stale['meta']['sql_warning'] = str(err)[:240]
                     _set_memory_cached(norm, stale)
+                    if _metrics_is_partial(stale):
+                        schedule_extended_metrics_load(_filters_dict_from_norm(norm))
                     return apply_site_filter(stale, norm.get('site'))
                 _remember_sql_error(err)
 
@@ -511,7 +622,8 @@ def metrics_bundle_to_console_payload(
         'metrics': metrics,
         'dashboard': {},
         '_cached': from_cache or (metrics is None or meta.get('source') != 'sql'),
-        '_refreshing': extras.get('_refreshing', False),
+        '_refreshing': extras.get('_refreshing', False) or bool(meta.get('partial')),
+        '_partial': bool(meta.get('partial')),
         '_job_id': extras.get('_job_id'),
         '_source': 'cache' if from_cache else source,
         '_live': _is_live_metrics(metrics),
@@ -574,6 +686,7 @@ __all__ = [
     'get_cached_metrics_bundle',
     'get_fresh_metrics_bundle',
     'refresh_metrics_bundle',
+    'schedule_extended_metrics_load',
     'schedule_metrics_refresh',
     'get_metrics_bundle',
     'run_analytics_query',
