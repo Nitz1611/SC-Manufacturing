@@ -178,14 +178,30 @@ def _parse_batch_narratives(raw: str) -> dict[SummaryEntity, str]:
     return {}
 
 
+def _claude_temperature() -> float | None:
+    raw = (os.getenv('CLAUDE_TEMPERATURE') or '').strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _apply_optional_temperature(body: dict[str, Any]) -> None:
+    temp = _claude_temperature()
+    if temp is not None:
+        body['temperature'] = temp
+
+
 def _invoke_claude_invocations(messages: list[ChatMessage]) -> str:
     h = databricks_host()
     url = f'https://{h}/serving-endpoints/{claude_endpoint()}/invocations'
-    body = {
+    body: dict[str, Any] = {
         'messages': messages,
         'max_tokens': int(os.getenv('CLAUDE_MAX_TOKENS') or 800),
-        'temperature': float(os.getenv('CLAUDE_TEMPERATURE') or 0.2),
     }
+    _apply_optional_temperature(body)
 
     print(f'[claude] invocations → {claude_endpoint()} ({len(messages)} messages)…', flush=True)
     started = time.time()
@@ -226,9 +242,9 @@ def _invoke_claude_anthropic(messages: list[ChatMessage]) -> str:
     body: dict[str, Any] = {
         'model': claude_endpoint(),
         'max_tokens': int(os.getenv('CLAUDE_MAX_TOKENS') or 800),
-        'temperature': float(os.getenv('CLAUDE_TEMPERATURE') or 0.2),
         'messages': chat_messages or [{'role': 'user', 'content': messages[-1]['content']}],
     }
+    _apply_optional_temperature(body)
     if system:
         body['system'] = system
 

@@ -55,6 +55,7 @@
     'Middle East & Africa',
   ];
   var SHIFT_OPTIONS = ['All', 'Shift 1', 'Shift 2', 'Shift 3'];
+  var SHOW_IN_OPTIONS = ['Thousands', 'Actual', 'Percentage'];
   var SELECT_ALL = { value: 'All', label: 'Select All' };
 
   /** Original console-engine navigators — captured before wrapper patch */
@@ -72,6 +73,7 @@
       department: 'All',
       line: 'All',
       shift: 'All',
+      showIn: 'Thousands',
       dateFrom: '',
       dateTo: '',
     },
@@ -143,6 +145,7 @@
     if (f.year) state.filters.year = f.year;
     if (f.site) state.filters.site = f.site;
     state.filters.region = regionFilterLabel(f.region);
+    if (f.showIn) state.filters.showIn = f.showIn;
   }
 
   function syncToConsoleFilters() {
@@ -152,7 +155,16 @@
     mc.state.filters.year = state.filters.year === 'All' ? '2026' : state.filters.year;
     mc.state.filters.site = state.filters.site;
     mc.state.filters.region = normalizeRegionList(state.filters.region);
-    if (!mc.state.filters.showIn) mc.state.filters.showIn = 'Millions';
+    mc.state.filters.showIn = state.filters.showIn || 'Thousands';
+  }
+
+  function applyShowInToEngine() {
+    var mc = window.ManufacturingConsole;
+    if (!mc) return;
+    syncToConsoleFilters();
+    if (typeof mc.applyShowIn === 'function') {
+      mc.applyShowIn();
+    }
   }
 
   function reloadConsoleMetrics() {
@@ -407,6 +419,11 @@
     } else {
       state.filters[id] = value;
       updateSlicerDisplay(id, value);
+      if (id === 'showIn') {
+        closeAllSlicers();
+        applyShowInToEngine();
+        return;
+      }
       if (id === 'site') {
         state.filters.line = 'All';
         updateSlicerDisplay('line', 'All');
@@ -1086,6 +1103,7 @@
       engineSwitchKpiTab('overview', true);
     }
 
+    applyShowInToEngine();
     reflowDashboardCharts();
     reloadConsoleMetrics();
   }
@@ -1570,6 +1588,17 @@
     bar.replaceChildren();
 
     bar.appendChild(createWipTimeframeGroup());
+    var showInGroup = createSlicerGroup(
+      'showIn',
+      'Show in',
+      SHOW_IN_OPTIONS.map(function (v) {
+        return { value: v, label: v };
+      }),
+      state.filters.showIn,
+      false
+    );
+    showInGroup.classList.add('maint-showin-group', 'maint-hidden');
+    bar.appendChild(showInGroup);
     bar.appendChild(
       createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
     );
@@ -1647,6 +1676,9 @@
 
     document.body.classList.toggle('mode-maintenance', isMaint);
     document.body.classList.toggle('mode-kpi-overview', isKpi);
+
+    var showInGroup = $('.maint-showin-group');
+    if (showInGroup) showInGroup.classList.toggle('maint-hidden', !isKpi);
 
     maintFilter && maintFilter.classList.remove('maint-hidden');
     banner && banner.classList.toggle('has-subnav', isKpi);
