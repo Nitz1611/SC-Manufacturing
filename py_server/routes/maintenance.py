@@ -125,7 +125,8 @@ def maintenance_data():
         response = {
             **payload,
             '_source': meta.get('source', 'live'),
-            '_cached': meta.get('source') in ('cache', 'demo'),
+            '_live': meta.get('source') in ('sql', 'cache'),
+            '_cached': meta.get('source') in ('cache',),
         }
         _payload_cache[cache_key] = {
             'payload': payload,

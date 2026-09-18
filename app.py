@@ -18,7 +18,7 @@ from pathlib import Path
 
 from flask import Flask, render_template
 
-from py_server.lib.analytics import verify_metric_view_access
+from py_server.lib.analytics import verify_metric_view_access, purge_non_sql_caches
 from py_server.lib.databricks_fetch import test_databricks_reachability
 from py_server.lib.databricks_sql import sql_configured, warmup_warehouse
 from py_server.lib.env import load_env, sql_env_status
@@ -36,6 +36,8 @@ register_routes(app)
 
 
 def _startup_warmup() -> None:
+    if sql_configured():
+        purge_non_sql_caches()
     if not sql_configured():
         return
     try:

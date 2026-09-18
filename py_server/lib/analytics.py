@@ -25,7 +25,6 @@ from py_server.lib.metrics_transform import (
     apply_site_filter,
     build_metrics_from_sql,
     metrics_from_cache,
-    metrics_from_dashboard_cache,
     query_result_for_key,
 )
 
@@ -47,6 +46,41 @@ def get_last_sql_error() -> str | None:
 
 def get_last_sql_success_at() -> float | None:
     return _last_sql_success_at
+
+
+def live_data_required() -> bool:
+    """True when Databricks SQL is configured — demo/synthetic metrics must not be served."""
+    return sql_configured()
+
+
+def _metrics_source(metrics: dict[str, Any] | None) -> str:
+    meta = (metrics or {}).get('meta') or {}
+    return str(meta.get('source') or '')
+
+
+def _is_live_metrics(metrics: dict[str, Any] | None) -> bool:
+    if not metrics or not metrics.get('kpis'):
+        return False
+    return _metrics_source(metrics) in ('sql', 'cache')
+
+
+def _allow_demo_metrics() -> bool:
+    return console_demo_mode() and not live_data_required()
+
+
+def purge_non_sql_caches() -> int:
+    """Drop demo/synthetic entries from memory when live SQL is required."""
+    if not live_data_required():
+        return 0
+    removed = 0
+    for key in list(_memory_cache.keys()):
+        entry = _memory_cache.get(key)
+        if entry and not _is_live_metrics(entry.get('data')):
+            del _memory_cache[key]
+            removed += 1
+    if removed:
+        print(f'[analytics] purged {removed} non-SQL memory cache entries', flush=True)
+    return removed
 
 
 def _remember_sql_error(err: BaseException) -> None:
@@ -164,20 +198,17 @@ def _load_prior_sql_cache(filters: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _load_metrics_from_demo_fallback(filters: dict[str, Any]) -> dict[str, Any]:
+    if live_data_required():
+        raise RuntimeError(
+            'Demo metrics are disabled while Databricks SQL is configured. '
+            'Fix SQL connectivity or remove DATABRICKS_* from .env to use demo mode.',
+        )
     norm = normalize_params(filters)
     key = coarse_cache_key(norm)
 
     cached = cache_get(key)
     if cached and cached.get('kpis') and (cached.get('meta') or {}).get('source') == 'sql':
         return apply_site_filter(copy.deepcopy(cached), norm.get('site'))
-
-    dash_key = json.dumps({'period': norm.get('period') or 'week'})
-    dashboard = cache_get(dash_key)
-    if dashboard:
-        return apply_site_filter(
-            metrics_from_dashboard_cache(dashboard, norm),
-            norm.get('site'),
-        )
 
     return apply_site_filter(metrics_from_cache(norm), norm.get('site'))
 
@@ -187,10 +218,15 @@ def _get_memory_cached(norm: dict[str, str | None]) -> dict[str, Any] | None:
     hit = _memory_cache.get(key)
     if not hit or (time.time() * 1000) - hit['ts'] > MEMORY_TTL_MS:
         return None
-    return apply_site_filter(hit['data'], norm.get('site'))
+    data = hit['data']
+    if live_data_required() and not _is_live_metrics(data):
+        return None
+    return apply_site_filter(data, norm.get('site'))
 
 
 def _set_memory_cached(norm: dict[str, str | None], metrics: dict[str, Any]) -> None:
+    if live_data_required() and not _is_live_metrics(metrics):
+        return
     _memory_cache[coarse_cache_key(norm)] = {'data': metrics, 'ts': time.time() * 1000}
 
 
@@ -214,6 +250,9 @@ def warm_memory_cache_from_disk() -> int:
     loaded = 0
     for entry in cache_load_all_metrics():
         try:
+            data = entry.get('data') or {}
+            if live_data_required() and not _is_live_metrics(data):
+                continue
             parsed = json.loads(entry['key'].replace('metrics_', '', 1))
             norm: dict[str, str | None] = {
                 'period': parsed.get('period') or 'week',
@@ -224,12 +263,12 @@ def warm_memory_cache_from_disk() -> int:
             }
             key = coarse_cache_key(norm)
             if key not in _memory_cache:
-                _memory_cache[key] = {'data': entry['data'], 'ts': entry['ts']}
+                _memory_cache[key] = {'data': data, 'ts': entry['ts']}
                 loaded += 1
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
     if loaded:
-        print(f'[cache] warmed {loaded} metrics bundle(s) from disk into memory', flush=True)
+        print(f'[cache] warmed {loaded} SQL metrics bundle(s) from disk into memory', flush=True)
     return loaded
 
 
@@ -276,10 +315,10 @@ def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
                 return prior
             _remember_sql_error(err)
 
-    if not console_demo_mode():
+    if not _allow_demo_metrics():
         raise RuntimeError(
             'Live SQL is not configured. Set DATABRICKS_* in .env, '
-            'or set CONSOLE_DEMO_MODE=true to enable demo data.',
+            'or set CONSOLE_DEMO_MODE=true when SQL credentials are absent.',
         )
 
     demo = _load_metrics_from_demo_fallback(filters or {})
@@ -310,10 +349,10 @@ def run_analytics_query(
                 return {'rows': row_list, 'source': 'cache', 'cached': True}
             raise
 
-    if not console_demo_mode():
+    if not _allow_demo_metrics():
         raise RuntimeError(
             'Live SQL is not configured. Set DATABRICKS_* in .env, '
-            'or set CONSOLE_DEMO_MODE=true to enable demo data.',
+            'or set CONSOLE_DEMO_MODE=true when SQL credentials are absent.',
         )
 
     metrics = _load_metrics_from_demo_fallback(params)
@@ -333,13 +372,17 @@ def metrics_bundle_to_console_payload(
     extras = extras or {}
     from_cache = extras.get('fromCache', extras.get('from_cache', False))
     meta = (metrics or {}).get('meta') or {}
+    source = meta.get('source') or extras.get('_source') or 'loading'
+    if live_data_required() and source == 'demo':
+        source = 'error'
     return {
         'metrics': metrics,
         'dashboard': {},
         '_cached': from_cache or (metrics is None or meta.get('source') != 'sql'),
         '_refreshing': extras.get('_refreshing', False),
         '_job_id': extras.get('_job_id'),
-        '_source': 'cache' if from_cache else meta.get('source', 'loading'),
+        '_source': 'cache' if from_cache else source,
+        '_live': _is_live_metrics(metrics),
     }
 
 
@@ -363,6 +406,8 @@ __all__ = [
     'databricks_configured',
     'get_last_sql_error',
     'get_last_sql_success_at',
+    'live_data_required',
+    'purge_non_sql_caches',
     'load_metrics_from_sql',
     'refresh_metrics_from_sql',
     'store_metrics_bundle_to_cache',

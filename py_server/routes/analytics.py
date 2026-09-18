@@ -10,6 +10,7 @@ from py_server.lib.analytics import (
     databricks_configured,
     get_last_sql_error,
     get_last_sql_success_at,
+    live_data_required,
     run_analytics_query,
     verify_metric_view_access,
 )
@@ -117,6 +118,8 @@ def status():
         'sql_columns': sql_column_summary(),
         'mode': mode,
         'demo_mode': console_demo_mode(),
+        'live_data_required': live_data_required(),
+        'demo_allowed': console_demo_mode() and not live_data_required(),
         **describe_summary_provider(),
         'supervisor': os.getenv('SUPERVISOR_ENDPOINT_NAME') if supervisor_configured() else 'not configured',
         'active_supervisor_jobs': running_job_count(),

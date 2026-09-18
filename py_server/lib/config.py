@@ -306,6 +306,18 @@ def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
 
 
 def console_demo_mode() -> bool:
+    """Demo data is only allowed when live SQL is not configured."""
+    host = (
+        (os.environ.get("DATABRICKS_HOST") or "")
+        or (os.environ.get("DATABRICKS_SERVER_HOSTNAME") or "")
+    ).strip()
+    token = (
+        (os.environ.get("DATABRICKS_TOKEN") or "")
+        or (os.environ.get("DATABRICKS_PAT_TOKEN") or "")
+    ).strip()
+    warehouse = (os.environ.get("DATABRICKS_WAREHOUSE_ID") or "").strip()
+    if host and token and warehouse:
+        return False
     return (os.environ.get("CONSOLE_DEMO_MODE") or "").lower() == "true"
 
 

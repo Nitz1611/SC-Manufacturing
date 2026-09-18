@@ -315,7 +315,7 @@ def console_data():
         if metrics and metrics.get('kpis'):
             meta = metrics.get('meta') or {}
             return jsonify(metrics_bundle_to_console_payload(metrics, {
-                'fromCache': meta.get('source') in ('cache', 'demo'),
+                'fromCache': meta.get('source') in ('cache',),
             }))
     except Exception as e:
         return jsonify({
