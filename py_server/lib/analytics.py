@@ -16,6 +16,7 @@ from typing import Any, Callable
 from py_server.lib.cache import (
     FILTER_PREFIX,
     cache_get,
+    cache_get_any,
     cache_load_all_metrics,
     cache_set,
 )
@@ -98,6 +99,17 @@ def _read_disk_cached(norm: dict[str, str | None]) -> dict[str, Any] | None:
         cached = cache_get(disk_cache_key(network_norm))
         if _valid_sql_cache(cached):
             return cached
+    return None
+
+
+def _load_any_disk_cache(norm: dict[str, str | None]) -> dict[str, Any] | None:
+    """Last-resort: any valid SQL cache on disk (e.g. morning data under a nearby filter key)."""
+    any_data = cache_get_any()
+    if _valid_sql_cache(any_data):
+        print('[analytics] using last-resort disk cache entry', flush=True)
+        scoped = apply_site_filter(copy.deepcopy(any_data), norm.get('site'))
+        _set_memory_cached(norm, scoped)
+        return scoped
     return None
 
 
@@ -335,7 +347,7 @@ def get_cached_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str
     if disk:
         _set_memory_cached(norm, disk)
         return apply_site_filter(copy.deepcopy(disk), norm.get('site'))
-    return None
+    return _load_any_disk_cache(norm)
 
 
 def get_fresh_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -425,7 +437,7 @@ def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
                 return apply_site_filter(metrics, norm.get('site'))
             except Exception as err:
                 print(f'[analytics] Live SQL failed: {err}', flush=True)
-                stale = _read_disk_cached(norm)
+                stale = _read_disk_cached(norm) or _load_any_disk_cache(norm)
                 if stale:
                     stale = copy.deepcopy(stale)
                     stale.setdefault('meta', {})['source'] = 'cache'

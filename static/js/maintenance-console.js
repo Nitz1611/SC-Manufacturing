@@ -660,7 +660,7 @@
         '<div class="maint-loading-shell" role="status" aria-live="polite">' +
         '<div class="maint-loading-spinner" aria-hidden="true"></div>' +
         '<p class="maint-loading-text">Loading live maintenance data from Databricks…</p>' +
-        '<p class="maint-loading-sub">First load can take up to a minute while SQL queries complete.</p>' +
+        '<p class="maint-loading-sub">First load can take 1–3 minutes. Do not refresh — waiting for Databricks SQL.</p>' +
         '</div>';
     }
   }

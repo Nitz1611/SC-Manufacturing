@@ -137,8 +137,19 @@ def maintenance_data():
             '_source': meta.get('source', 'live'),
             '_live': meta.get('source') in ('sql', 'cache'),
             '_cached': meta.get('source') in ('cache',),
+            '_sql_warning': meta.get('sql_warning'),
         })
     except Exception as e:
+        cached = get_cached_metrics_bundle(filters)
+        if cached and cached.get('kpis'):
+            payload = build_maintenance_payload(cached, filters)
+            return jsonify({
+                **payload,
+                '_source': 'cache',
+                '_live': True,
+                '_cached': True,
+                '_sql_warning': str(e)[:240],
+            })
         return jsonify({'error': str(e)}), 500
 
 
