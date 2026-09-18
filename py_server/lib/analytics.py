@@ -38,6 +38,9 @@ from py_server.lib.metrics_transform import (
 MEMORY_TTL_MS = int(os.getenv('METRICS_MEMORY_CACHE_MINUTES') or 30) * 60 * 1000
 
 _memory_cache: dict[str, dict[str, Any]] = {}
+_load_locks: dict[str, threading.Lock] = {}
+_load_locks_guard = threading.Lock()
+_refresh_inflight: set[str] = set()
 _last_sql_error: str | None = None
 _last_sql_success_at: float | None = None
 
@@ -341,6 +344,38 @@ def get_fresh_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str,
     return _get_memory_cached(norm)
 
 
+def _filter_lock(norm: dict[str, str | None]) -> threading.Lock:
+    key = filter_cache_key(norm)
+    with _load_locks_guard:
+        if key not in _load_locks:
+            _load_locks[key] = threading.Lock()
+        return _load_locks[key]
+
+
+def schedule_metrics_refresh(filters: dict[str, Any] | None = None) -> bool:
+    """Background SQL refresh for stale cache — skips if one is already running."""
+    if not sql_configured():
+        return False
+    norm = normalize_params(filters or {})
+    key = filter_cache_key(norm)
+    with _load_locks_guard:
+        if key in _refresh_inflight:
+            return False
+        _refresh_inflight.add(key)
+
+    def _run() -> None:
+        try:
+            refresh_metrics_bundle(filters or {})
+        except Exception as exc:
+            print(f'[analytics] background refresh failed: {exc}', flush=True)
+        finally:
+            with _load_locks_guard:
+                _refresh_inflight.discard(key)
+
+    threading.Thread(target=_run, daemon=True, name=f'metrics-refresh-{key[:12]}').start()
+    return True
+
+
 def refresh_metrics_bundle(
     filters: dict[str, Any],
     on_progress: Callable[[str], None] | None = None,
@@ -367,36 +402,47 @@ def get_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any]:
         _set_memory_cached(norm, scoped)
         return scoped
 
-    if sql_configured():
-        try:
-            print(
-                f'[analytics] Loading live SQL for {resolve_metric_view()} '
-                f'filters={filter_cache_key(norm)}…',
-                flush=True,
+    lock = _filter_lock(norm)
+    with lock:
+        mem = _get_memory_cached(norm)
+        if mem:
+            return mem
+        disk = _read_disk_cached(norm)
+        if disk:
+            scoped = apply_site_filter(copy.deepcopy(disk), norm.get('site'))
+            _set_memory_cached(norm, scoped)
+            return scoped
+
+        if sql_configured():
+            try:
+                print(
+                    f'[analytics] Loading live SQL for {resolve_metric_view()} '
+                    f'filters={filter_cache_key(norm)}…',
+                    flush=True,
+                )
+                metrics = load_metrics_from_sql(norm)
+                store_metrics_bundle_to_cache(norm, metrics)
+                return apply_site_filter(metrics, norm.get('site'))
+            except Exception as err:
+                print(f'[analytics] Live SQL failed: {err}', flush=True)
+                stale = _read_disk_cached(norm)
+                if stale:
+                    stale = copy.deepcopy(stale)
+                    stale.setdefault('meta', {})['source'] = 'cache'
+                    stale['meta']['sql_warning'] = str(err)[:240]
+                    _set_memory_cached(norm, stale)
+                    return apply_site_filter(stale, norm.get('site'))
+                _remember_sql_error(err)
+
+        if not _allow_demo_metrics():
+            raise RuntimeError(
+                'Live SQL is not configured. Set DATABRICKS_* in .env, '
+                'or set CONSOLE_DEMO_MODE=true when SQL credentials are absent.',
             )
-            metrics = load_metrics_from_sql(norm)
-            store_metrics_bundle_to_cache(norm, metrics)
-            return apply_site_filter(metrics, norm.get('site'))
-        except Exception as err:
-            print(f'[analytics] Live SQL failed: {err}', flush=True)
-            stale = _read_disk_cached(norm)
-            if stale:
-                stale = copy.deepcopy(stale)
-                stale.setdefault('meta', {})['source'] = 'cache'
-                stale['meta']['sql_warning'] = str(err)[:240]
-                _set_memory_cached(norm, stale)
-                return apply_site_filter(stale, norm.get('site'))
-            _remember_sql_error(err)
 
-    if not _allow_demo_metrics():
-        raise RuntimeError(
-            'Live SQL is not configured. Set DATABRICKS_* in .env, '
-            'or set CONSOLE_DEMO_MODE=true when SQL credentials are absent.',
-        )
-
-    demo = _load_metrics_from_demo_fallback(filters or {})
-    _set_memory_cached(norm, demo)
-    return demo
+        demo = _load_metrics_from_demo_fallback(filters or {})
+        _set_memory_cached(norm, demo)
+        return demo
 
 
 def run_analytics_query(
@@ -516,6 +562,7 @@ __all__ = [
     'get_cached_metrics_bundle',
     'get_fresh_metrics_bundle',
     'refresh_metrics_bundle',
+    'schedule_metrics_refresh',
     'get_metrics_bundle',
     'run_analytics_query',
     'metrics_bundle_to_console_payload',

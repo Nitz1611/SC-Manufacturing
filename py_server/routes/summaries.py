@@ -14,7 +14,7 @@ from py_server.lib.analytics import (
     get_fresh_metrics_bundle,
     get_metrics_bundle,
     metrics_bundle_to_console_payload,
-    refresh_metrics_bundle,
+    schedule_metrics_refresh,
 )
 from py_server.lib.claude_summary import claude_status, get_claude_batch_summaries, get_claude_tab_summary
 from py_server.lib.config import coarse_cache_key, console_demo_mode, normalize_params, resolve_metric_view
@@ -305,68 +305,14 @@ def console_data():
     filters = body.get('filters') or {}
     force = bool(body.get('force'))
 
-    cached = get_cached_metrics_bundle(filters)
-    fresh = get_fresh_metrics_bundle(filters)
-
-    # PR #16 pattern: return cache instantly; refresh SQL in background when stale.
-    if cached and cached.get('kpis') and not force:
-        refreshing = not fresh and sql_configured()
-        if refreshing:
-            job_id = new_job_id()
-            create_job(job_id, 'Refreshing live metrics…')
-
-            def _run_refresh() -> None:
-                try:
-                    metrics = refresh_metrics_bundle(filters, lambda msg: update_job_message(job_id, msg))
-                    finish_job(job_id, {'metrics': metrics, 'filterKey': coarse_cache_key(normalize_params(filters))})
-                    print(f'[job {job_id[:8]}] Metrics refresh complete', flush=True)
-                except Exception as e:
-                    fail_job(job_id, str(e))
-                    print(f'[job {job_id[:8]}] Metrics refresh failed: {e}', flush=True)
-
-            _run_background(_run_refresh)
-            return jsonify(metrics_bundle_to_console_payload(cached, {
-                'fromCache': True,
-                '_refreshing': True,
-                '_job_id': job_id,
-            }))
-
-        return jsonify(metrics_bundle_to_console_payload(cached, {'fromCache': True}))
-
-    if sql_configured():
-        job_id = new_job_id()
-        create_job(job_id, 'Connecting to Databricks metric view…')
-
-        def _run_refresh() -> None:
-            try:
-                metrics = refresh_metrics_bundle(filters, lambda msg: update_job_message(job_id, msg))
-                filter_key = coarse_cache_key(normalize_params(filters))
-                finish_job(job_id, {'metrics': metrics, 'filterKey': filter_key})
-                print(f'[job {job_id[:8]}] Metrics refresh complete', flush=True)
-            except Exception as e:
-                fail_job(job_id, str(e))
-                print(f'[job {job_id[:8]}] Metrics refresh failed: {e}', flush=True)
-
-        _run_background(_run_refresh)
-
+    if not force:
+        cached = get_cached_metrics_bundle(filters)
         if cached and cached.get('kpis'):
-            return jsonify(metrics_bundle_to_console_payload(cached, {
-                '_job_id': job_id,
-                '_refreshing': True,
-                'fromCache': True,
-            }))
+            if not get_fresh_metrics_bundle(filters) and sql_configured():
+                schedule_metrics_refresh(filters)
+            return jsonify(metrics_bundle_to_console_payload(cached, {'fromCache': True}))
 
-        return jsonify({
-            'metrics': None,
-            'dashboard': {},
-            '_cached': True,
-            '_refreshing': True,
-            '_job_id': job_id,
-            '_source': 'loading',
-            'status': 'running',
-        })
-
-    if not console_demo_mode():
+    if not console_demo_mode() and not sql_configured():
         return jsonify({
             'error': (
                 'Live SQL is not configured. Set DATABRICKS_* in .env, '
@@ -380,7 +326,12 @@ def console_data():
 
     try:
         metrics = get_metrics_bundle(filters)
-        return jsonify(metrics_bundle_to_console_payload(metrics))
+        if not metrics or not metrics.get('kpis'):
+            raise RuntimeError('No metrics returned from SQL')
+        meta = metrics.get('meta') or {}
+        return jsonify(metrics_bundle_to_console_payload(metrics, {
+            'fromCache': meta.get('source') in ('cache',),
+        }))
     except Exception as e:
         return jsonify({
             'error': str(e),
