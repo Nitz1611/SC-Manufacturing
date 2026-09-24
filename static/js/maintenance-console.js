@@ -707,6 +707,16 @@
     return 'good';
   }
 
+  function formatLastShiftPct(kpi) {
+    if (!kpi || !kpi.last_shift || kpi.last_shift.pct == null) {
+      if (kpi && kpi.last_shift && kpi.last_shift.display) return kpi.last_shift.display;
+      return null;
+    }
+    var n = Number(kpi.last_shift.pct);
+    if (!isFinite(n)) return null;
+    return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+  }
+
   function renderPrimaryKpi(kpi) {
     if (!kpi) return '';
     var target = Number(kpi.target || DT_TARGET);
@@ -716,20 +726,16 @@
     var lastPeriodClass = lastPeriodDelta > 0 ? 'bad' : lastPeriodDelta < 0 ? 'good' : 'neutral';
     var lastPeriodText =
       kpi.last_period_delta_display ||
-      (lastPeriodDelta > 0 ? '+' : '') + lastPeriodDelta.toFixed(2) + ' %';
-    var lastShift =
-      (kpi.last_shift && (kpi.last_shift.display || kpi.last_shift.label)) || '—';
-    var lastShiftClass =
-      kpi.last_shift && Number(kpi.last_shift.pct) > target ? 'bad' : 'good';
+      (lastPeriodDelta > 0 ? '+' : '') + lastPeriodDelta.toFixed(2) + '%';
+    var lastShiftVal = formatLastShiftPct(kpi);
     var schedLost = kpi.scheduled_hours ? kpi.scheduled_hours.display : '—';
-    var tfLabel =
-      PERIOD_LABELS[String(state.filters.timeframe || 'ptd').toLowerCase()] || 'Period to date';
+    var dotClass = kpi.value > target ? 'critical' : statusDotClass(kpi.value, target);
 
     return (
-      '<article class="maint-kpi-card primary" data-kpi="primary">' +
+      '<article class="maint-kpi-card primary maint-kpi-card-design" data-kpi="primary">' +
       '<div class="maint-kpi-head">' +
       '<span class="maint-status-dot ' +
-      statusDotClass(kpi.value, target) +
+      dotClass +
       '" aria-hidden="true"></span>' +
       '<span class="maint-kpi-title">Total Unplanned Downtime %</span>' +
       '</div>' +
@@ -738,13 +744,15 @@
       '<div class="maint-kpi-value">' +
       esc(kpi.value_display || fmtPct(kpi.value)) +
       '</div>' +
-      '<div class="maint-kpi-target-row">Target <strong>' +
+      '<div class="maint-kpi-target-row">' +
+      '<span class="maint-kpi-target-label">Target</span> ' +
+      '<strong class="maint-kpi-target-value">' +
       esc(kpi.target_display || fmtPct(target)) +
       '</strong>' +
       '<span class="maint-kpi-delta ' +
       deltaClass +
       '">' +
-      esc(kpi.delta_vs_target_display || Math.abs(kpi.delta_vs_target).toFixed(2) + ' %') +
+      esc(kpi.delta_vs_target_display || Math.abs(kpi.delta_vs_target).toFixed(2) + '%') +
       ' ' +
       deltaArrow +
       '</span></div>' +
@@ -753,22 +761,23 @@
       '<span class="maint-trend-period-delta ' +
       lastPeriodClass +
       '">Last Period ' +
-      esc(lastPeriodText) +
+      esc(String(lastPeriodText).replace(/\s+%/g, '%')) +
       '</span>' +
       '<canvas id="maint-spark-primary" aria-label="Unplanned DT YTD trend"></canvas></div>' +
       '</div>' +
-      '<div class="maint-period-delta">' +
-      esc(tfLabel) +
-      ' <span>Unplanned downtime for selected timeframe</span></div>' +
-      '<div class="maint-kpi-footer-stats">' +
-      '<span>Last Shift <span class="' +
-      lastShiftClass +
+      '<div class="maint-kpi-footer-stats maint-kpi-footer-visible">' +
+      '<span class="maint-footer-left">' +
+      '<span class="maint-footer-label">Last Shift </span>' +
+      '<span class="maint-footer-value ' +
+      (lastShiftVal ? 'bad' : 'muted') +
       '">' +
-      esc(lastShift) +
+      esc(lastShiftVal || '—') +
       '</span></span>' +
-      '<span class="bad"><strong>' +
+      '<span class="maint-footer-right">' +
+      '<strong class="maint-footer-value bad">' +
       esc(schedLost) +
-      '</strong> Scheduled Hours Lost</span>' +
+      '</strong>' +
+      ' <span class="maint-footer-label">Scheduled Hours Lost</span></span>' +
       '</div>' +
       '</article>'
     );
@@ -986,8 +995,8 @@
     });
     var ctx = canvas.getContext('2d');
     var grad = ctx.createLinearGradient(0, 0, 0, 80);
-    grad.addColorStop(0, 'rgba(220,38,38,0.35)');
-    grad.addColorStop(1, 'rgba(220,38,38,0)');
+    grad.addColorStop(0, 'rgba(229,57,53,0.28)');
+    grad.addColorStop(1, 'rgba(229,57,53,0.02)');
     state.charts[canvasId] = new Chart(canvas, {
       type: 'line',
       data: {
@@ -995,10 +1004,10 @@
         datasets: [
           {
             data: data,
-            borderColor: '#dc2626',
+            borderColor: '#e53935',
             backgroundColor: grad,
             fill: true,
-            tension: 0.4,
+            tension: 0.45,
             pointRadius: 0,
             borderWidth: 2,
           },

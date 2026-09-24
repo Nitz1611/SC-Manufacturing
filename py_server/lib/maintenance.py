@@ -210,7 +210,9 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
         f"P{i + 1}" for i in range(len(ytd_trend))
     ]
 
-    last_shift_pct = _parse_pct(card.get("last_shift_dt_pct"))
+    last_shift_pct = 0.0
+    if card.get("last_shift_dt_pct") is not None:
+        last_shift_pct = float(card.get("last_shift_dt_pct") or 0)
     sched_lost = float(card.get("last_shift_sched_hours") or 0)
     if not sched_lost and card.get("last_shift_unplanned_hrs") and last_shift_pct > 0:
         sched_lost = _estimate_sched_hours(
@@ -230,9 +232,9 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
             "target": target,
             "target_display": f"{target:.2f} %",
             "delta_vs_target": delta_vs_target,
-            "delta_vs_target_display": f"{abs(delta_vs_target):.2f} %",
+            "delta_vs_target_display": f"{abs(delta_vs_target):.2f}%",
             "last_period_delta": last_period_delta,
-            "last_period_delta_display": f"{last_period_delta:+.2f} %",
+            "last_period_delta_display": f"{last_period_delta:+.2f}%",
             "period_delta": {
                 "label": period_label,
                 "text": dt.get("delta") or period_label,
@@ -252,9 +254,12 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
                 "display": dt_hrs.get("value") or f"{_locale_number(hours)} h",
             },
             "last_shift": {
-                "pct": last_shift_pct,
-                "display": f"{last_shift_pct:+.2f} %" if last_shift_pct else "—",
-                "label": f"{last_shift_pct:+.2f} %" if last_shift_pct else "—",
+                "pct": last_shift_pct if card.get("last_shift_dt_pct") is not None else None,
+                "display": (
+                    f"{float(card.get('last_shift_dt_pct')):+.2f}%"
+                    if card.get("last_shift_dt_pct") is not None
+                    else None
+                ),
             },
             "direction": "bad" if dt_pct > target else "good",
             "stops": {
