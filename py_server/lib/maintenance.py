@@ -119,6 +119,36 @@ def _period_delta_labels(filters: dict[str, Any] | None) -> tuple[str, str]:
     return PERIOD_DELTA_MAP.get(tf, ("vs prior period", tf.upper()))
 
 
+def _lookup_site_nested(
+    root: dict[str, Any] | None,
+    site: str,
+) -> tuple[str | None, dict[str, Any]]:
+    """Case-insensitive lookup of a site's nested dict in metrics pivots."""
+    if not root or not site:
+        return None, {}
+    if site in root:
+        return site, root[site] or {}
+    site_upper = str(site).upper()
+    for key, value in root.items():
+        if str(key).upper() == site_upper:
+            return str(key), value or {}
+    return None, {}
+
+
+def _sum_period_values(vals: list[Any] | None) -> float:
+    clean = [
+        float(v)
+        for v in (vals or [])
+        if v is not None and math.isfinite(float(v)) and float(v) > 0
+    ]
+    return round(sum(clean), 1) if clean else 0.0
+
+
+def _avg_period_values(vals: list[Any] | None) -> float:
+    clean = [float(v) for v in (vals or []) if v is not None and math.isfinite(float(v))]
+    return round(sum(clean) / len(clean), 2) if clean else 0.0
+
+
 def _resolve_site_kpis(metrics: MetricsPayload) -> dict[str, dict[str, Any]]:
     site_kpis = metrics.get("site_kpis") or {}
     if site_kpis:
@@ -586,20 +616,14 @@ def _executive_bullets_for_site(
         f"({DT_TARGET_PCT}% target would save ~{_locale_number(max(0, sched * (dt_pct - DT_TARGET_PCT) / 100))} h).",
         f"STOPS at site: {_locale_number(site_row.get('stops') or 0)} — correlate with equipment events.",
     ]
-    site_lines = (metrics.get("site_line_by_period") or {}).get(site) or {}
+    site_lines = _lookup_site_nested(metrics.get("site_line_by_period"), site)[1]
     if site_lines:
         worst = max(site_lines.items(), key=lambda item: sum(item[1]))
         bullets.append(
             f"Top line at {site}: {worst[0]} averaging "
             f"{sum(worst[1]) / len(worst[1]):.2f}% unplanned DT across periods."
         )
-    else:
-        top_lines = metrics.get("top_lines") or {}
-        if top_lines:
-            line_name, line_pct = max(top_lines.items(), key=lambda item: item[1])
-            bullets.append(f"Network line hotspot: {line_name} at {line_pct:.1f}% share.")
-
-    if reasons:
+    elif reasons:
         r = reasons[0]
         bullets.append(
             f"Primary reason network-wide: {r['reason']} "
@@ -613,7 +637,7 @@ def _executive_bullets_for_site(
 
 
 def _worst_line_for_site(metrics: MetricsPayload, site: str) -> tuple[str, float]:
-    site_lines = (metrics.get("site_line_by_period") or {}).get(site) or {}
+    site_lines = _lookup_site_nested(metrics.get("site_line_by_period"), site)[1]
     if site_lines:
         ranked = sorted(
             site_lines.items(),
@@ -624,11 +648,7 @@ def _worst_line_for_site(metrics: MetricsPayload, site: str) -> tuple[str, float
             name, vals = ranked[0]
             avg = sum(vals) / len(vals) if vals else 0.0
             return name, round(avg, 2)
-    top_lines = metrics.get("top_lines") or {}
-    if top_lines:
-        name, pct = max(top_lines.items(), key=lambda item: item[1])
-        return name, float(pct)
-    return "Network", 0.0
+    return "", 0.0
 
 
 def _build_alerts(metrics: MetricsPayload) -> list[dict[str, Any]]:
@@ -666,8 +686,9 @@ def _build_alerts(metrics: MetricsPayload) -> list[dict[str, Any]]:
             }
             for r in reasons[:5]
         ]
+        line_clause = f" line {line_name}" if line_name else ""
         summary = (
-            f"{site} line {line_name} recorded {dt_pct:.2f}% unplanned downtime, "
+            f"{site}{line_clause} recorded {dt_pct:.2f}% unplanned downtime, "
             f"accumulating {_locale_number(dt_hrs)} unplanned downtime hours across "
             f"{_locale_number(sched)} scheduled hours"
             + (f", driven by {_locale_number(stops)} line stops" if stops else "")
@@ -744,43 +765,40 @@ def _build_sites_at_risk(metrics: MetricsPayload) -> list[dict[str, Any]]:
 
 
 def _build_site_lines(metrics: MetricsPayload) -> list[dict[str, Any]]:
-    """Line rows from site_line_by_period / site_line_by_period_hrs (Line Desc × Production Period)."""
+    """Top lines for the #1 at-risk site — only from site×line SQL pivots (no network fallback)."""
     sites_at_risk = _build_sites_at_risk(metrics)
     if not sites_at_risk:
         return []
     top_site = sites_at_risk[0]["site"]
-    top_lines = metrics.get("top_lines") or {}
-    site_lines = (metrics.get("site_line_by_period") or {}).get(top_site) or {}
-    site_line_hrs = (metrics.get("site_line_by_period_hrs") or {}).get(top_site) or {}
+    _, site_lines = _lookup_site_nested(metrics.get("site_line_by_period"), top_site)
+    _, site_line_hrs = _lookup_site_nested(metrics.get("site_line_by_period_hrs"), top_site)
+    if not site_lines:
+        return []
 
-    lines: list[tuple[str, float, float]] = []
-    if site_lines:
-        for name, vals in site_lines.items():
-            pct_vals = [float(v) for v in (vals or []) if v is not None and math.isfinite(float(v))]
-            if not pct_vals:
-                continue
-            pct = sum(pct_vals) / len(pct_vals)
-            hrs_vals = site_line_hrs.get(name) or []
-            hrs_clean = [
-                float(v) for v in hrs_vals if v is not None and math.isfinite(float(v)) and float(v) > 0
-            ]
-            hrs = round(sum(hrs_clean) / len(hrs_clean), 1) if hrs_clean else 0.0
-            lines.append((name, pct, hrs))
-    elif top_lines:
-        for name, pct in top_lines.items():
-            lines.append((name, float(pct or 0), 0.0))
+    lines: list[tuple[str, float, float, float]] = []
+    for name, vals in site_lines.items():
+        hrs = _sum_period_values(site_line_hrs.get(name))
+        if hrs <= 0:
+            continue
+        avg_pct = _avg_period_values(vals)
+        sched = _estimate_sched_hours(hrs, avg_pct) if avg_pct > 0 else 0.0
+        if sched > 0:
+            exposure_pct = round(hrs / sched * 100.0, 2)
+        else:
+            exposure_pct = avg_pct
+        if exposure_pct <= 0:
+            continue
+        lines.append((name, exposure_pct, hrs, sched))
 
-    lines.sort(key=lambda item: item[1], reverse=True)
+    lines.sort(key=lambda item: item[2], reverse=True)
     out: list[dict[str, Any]] = []
-    for name, pct, hrs in lines[:5]:
-        pct_r = round(pct, 2)
-        sched = _estimate_sched_hours(hrs, pct_r) if hrs > 0 and pct_r > 0 else 0.0
+    for name, pct_r, hrs, sched in lines[:5]:
         out.append({
             "site": top_site,
             "line": name,
             "dt_pct": pct_r,
             "hours": hrs,
-            "sched_hrs": sched,
+            "sched_hrs": round(sched, 1),
         })
     return out
 
