@@ -167,10 +167,10 @@
     }
   }
 
-  function reloadConsoleMetrics() {
+  function reloadConsoleMetrics(force) {
     var mc = window.ManufacturingConsole;
     if (mc && typeof mc.reloadMetrics === 'function') {
-      mc.reloadMetrics(false, { background: state.page !== 'kpi-overview' });
+      mc.reloadMetrics(!!force, { background: state.page !== 'kpi-overview' && !force });
     }
   }
 
@@ -1629,7 +1629,7 @@
     if (fromEl) state.filters.dateFrom = fromEl.value;
     if (toEl) state.filters.dateTo = toEl.value;
     syncToConsoleFilters();
-    reloadConsoleMetrics();
+    reloadConsoleMetrics(true);
     fetchMaintenanceData(false, true);
   }
 

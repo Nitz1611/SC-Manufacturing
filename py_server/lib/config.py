@@ -124,28 +124,38 @@ def region_column() -> str:
 
 
 def department_column() -> str:
-    return _resolve_column("DATABRICKS_DEPARTMENT_COLUMN", GOLD_NAMES["department"])
+    raw = (os.environ.get("DATABRICKS_DEPARTMENT_COLUMN") or "").strip()
+    if raw:
+        return _resolve_column("DATABRICKS_DEPARTMENT_COLUMN", GOLD_NAMES["department"])
+    # Gold view exposes DEPT_CD as DECIMAL — always compare as string in filters.
+    return "CAST(DEPT_CD AS STRING)"
+
+
+def _sql_string_expr(column_expr: str) -> str:
+    """Expression safe for TRIM/UPPER in WHERE (handles DECIMAL dimensions like DEPT_CD)."""
+    expr = column_expr.strip()
+    if re.search(r"\bAS STRING\b", expr, re.I):
+        return expr
+    return f"CAST({expr} AS STRING)"
 
 
 def build_optional_eq_filter(column_expr: str, value: str | None) -> str:
     if not value or str(value).strip().lower() in ("all", ""):
         return "1=1"
     escaped = str(value).strip().replace("'", "''")
-    return f"UPPER(TRIM({column_expr})) = UPPER('{escaped}')"
+    col = _sql_string_expr(column_expr)
+    return f"UPPER(TRIM({col})) = UPPER('{escaped}')"
 
 
 def build_shift_filter_sql(shift: str | None) -> str:
     if not shift or str(shift).strip().lower() in ("all", ""):
         return "1=1"
-    col = quote_ident(GOLD_NAMES["shift"])
+    col = _sql_string_expr(quote_ident(GOLD_NAMES["shift"]))
     raw = str(shift).strip().replace("'", "''")
     digit = re.search(r"\d+", raw)
     if digit:
         d = digit.group()
-        return (
-            f"(TRIM(CAST({col} AS STRING)) = '{d}' "
-            f"OR UPPER(TRIM({col})) = UPPER('{raw}'))"
-        )
+        return f"(TRIM({col}) = '{d}' OR UPPER(TRIM({col})) = UPPER('{raw}'))"
     return f"UPPER(TRIM({col})) = UPPER('{raw}')"
 
 
@@ -244,9 +254,6 @@ def _apply_sql_fragments(sql: str) -> str:
         .replace("{{dt_pct_filter}}", dt_measure_context_filter())
         .replace("{{dt_hours_filter}}", dt_measure_context_filter())
         .replace("{{dt_stops_filter}}", dt_measure_context_filter())
-        .replace("{{line_filter}}", "1=1")
-        .replace("{{department_filter}}", "1=1")
-        .replace("{{shift_filter}}", "1=1")
     )
 
 
