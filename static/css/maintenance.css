@@ -742,6 +742,15 @@ body.maint-report-open { overflow: hidden; }
   height: 172px;
   min-height: 168px;
 }
+.maint-donut-visual-panel {
+  background: linear-gradient(165deg, #fde2e2 0%, #fce8ea 42%, #fdf0f0 100%);
+  border-radius: 10px;
+  padding: 10px 8px 8px;
+  border: 1px solid rgba(229, 57, 53, 0.12);
+}
+.maint-donut-visual-panel .maint-donut-wrap-report {
+  background: transparent;
+}
 
 .maint-report-section-head {
   display: flex;

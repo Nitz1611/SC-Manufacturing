@@ -230,6 +230,13 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
     if not hours and card.get("last_shift_unplanned_hrs"):
         hours = float(card.get("last_shift_unplanned_hrs") or 0)
 
+    tf_sched = float(card.get("current_sched_hours") or 0)
+    if tf_sched <= 0 and hours > 0 and dt_pct > 0:
+        tf_sched = _estimate_sched_hours(hours, dt_pct)
+
+    total_dt_pct_raw = card.get("total_downtime_pct")
+    total_dt_pct = _parse_pct(total_dt_pct_raw) if total_dt_pct_raw is not None else None
+
     return {
         "primary": {
             "label": "Unplanned DT %",
@@ -254,6 +261,18 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
                 "estimate": sched_lost,
                 "display": f"{sched_lost:,.1f}" if sched_lost > 0 else None,
                 "method": "last_shift_scheduled_hours",
+            },
+            "timeframe_scheduled_hours": {
+                "value": tf_sched,
+                "display": f"{tf_sched:,.2f}" if tf_sched > 0 else None,
+            },
+            "total_downtime_pct": {
+                "value": total_dt_pct if total_dt_pct is not None else 0.0,
+                "display": (
+                    f"{total_dt_pct:.2f} %"
+                    if total_dt_pct is not None
+                    else None
+                ),
             },
             "downtime_hours": {
                 "value": hours,

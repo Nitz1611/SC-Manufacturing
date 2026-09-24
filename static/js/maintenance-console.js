@@ -1316,7 +1316,8 @@
       '<div class="maint-snapshot-grid">' +
       '<div class="maint-snapshot-col-left">' +
       '<div class="maint-report-donut-card maint-donut-card-plain">' +
-      '<div class="maint-donut-wrap maint-skeleton-donut-wrap">' +
+      '<div class="maint-donut-visual-panel maint-skeleton-donut-panel">' +
+      '<div class="maint-donut-wrap maint-skeleton-donut-wrap maint-donut-wrap-report">' +
       '<div class="maint-skeleton-donut" aria-hidden="true"></div></div>' +
       '<div class="maint-donut-meta-stack">' +
       '<div class="maint-skeleton-pill maint-donut-pill-skeleton"></div>' +
@@ -1535,9 +1536,16 @@
 
   function renderReportSnapshot(kpi, p) {
     var dtHrs = (kpi && kpi.downtime_hours && kpi.downtime_hours.display) || '—';
-    var sched = (kpi && kpi.scheduled_hours && kpi.scheduled_hours.display) || '—';
-    var pctVal = kpi ? kpi.value : 0;
-    var pct = fmtPct(pctVal);
+    var sched =
+      (kpi && kpi.timeframe_scheduled_hours && kpi.timeframe_scheduled_hours.display) ||
+      (kpi && kpi.scheduled_hours && kpi.scheduled_hours.display) ||
+      '—';
+    var pctDowntime =
+      (kpi && kpi.total_downtime_pct && kpi.total_downtime_pct.display) ||
+      (kpi && kpi.total_downtime_pct && kpi.total_downtime_pct.value != null
+        ? fmtPct(kpi.total_downtime_pct.value)
+        : null) ||
+      '—';
     var target = kpi ? kpi.target : DT_TARGET;
     var delta = kpi ? Math.abs(kpi.delta_vs_target).toFixed(2) : '0.00';
     var deltaArrow = kpi && kpi.delta_vs_target > 0 ? '▲' : '▼';
@@ -1551,7 +1559,8 @@
       '<div class="maint-snapshot-grid">' +
       '<div class="maint-snapshot-col-left">' +
       '<div class="maint-report-donut-card maint-donut-card-plain">' +
-      '<div class="maint-donut-wrap maint-donut-wrap-report"><canvas id="report-donut"></canvas></div>' +
+      '<div class="maint-donut-visual-panel">' +
+      '<div class="maint-donut-wrap maint-donut-wrap-report"><canvas id="report-donut"></canvas></div></div>' +
       '<div class="maint-donut-meta-stack">' +
       '<div class="maint-donut-pill maint-donut-pill-target">' +
       '<span class="maint-donut-pill-label">Target</span>' +
@@ -1571,7 +1580,7 @@
       '<div class="maint-stat-stack maint-stat-stack-report">' +
       reportStatCard('Schedule Hours', sched.replace(' h', ''), REPORT_ICONS.schedule) +
       reportStatCard('Unplanned Downtime Hours', dtHrs.replace(' h', ''), REPORT_ICONS.downtime) +
-      reportStatCard('Percentage Downtime', pct, REPORT_ICONS.percent) +
+      reportStatCard('Percentage Downtime', pctDowntime.replace(' h', ''), REPORT_ICONS.percent) +
       '</div></div>' +
       '<div class="maint-bar-section maint-bar-section-compact">' +
       '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
