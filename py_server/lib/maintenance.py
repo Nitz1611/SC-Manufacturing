@@ -882,7 +882,7 @@ def _metrics_for_timeframe(filters: dict[str, Any] | None, timeframe: str) -> Me
     return get_metrics_bundle(scoped)
 
 
-def _build_maintenance_payload_from_filters(
+def build_maintenance_payload_from_filters(
     metrics: MetricsPayload,
     filters: dict[str, Any] | None,
 ) -> dict[str, Any]:
