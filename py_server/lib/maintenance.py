@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from py_server.lib.metrics_transform import MetricsPayload, build_tab_insights
 
 DT_TARGET_PCT = 4.5  # Demo/offline fallback only — live target comes from SQL (see _resolve_unplanned_target).
+MTBF_TARGET_HRS = 12.0
 
 PERIOD_DELTA_MAP: Dict[str, tuple[str, str]] = {
     "ptd": ("vs prior period", "Period to date"),
@@ -146,6 +147,44 @@ def _resolve_unplanned_target(metrics: MetricsPayload) -> float:
     if _metrics_is_live(metrics):
         return 0.0
     return DT_TARGET_PCT
+
+
+def _env_float_target(*keys: str, default: float) -> float:
+    for key in keys:
+        raw = (os.environ.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            val = float(raw)
+            return val if math.isfinite(val) else default
+        except ValueError:
+            continue
+    return default
+
+
+def _resolve_mtbf_target(_metrics: MetricsPayload) -> float:
+    return _env_float_target(
+        "MAINTENANCE_MTBF_TARGET_HRS",
+        "DATABRICKS_MTBF_TARGET_HRS",
+        default=MTBF_TARGET_HRS,
+    )
+
+
+def _kpi_status_dot(value: float, target: float, *, higher_is_better: bool = False) -> str:
+    if higher_is_better:
+        return "critical" if value < target else "good"
+    if value > target + 1.0:
+        return "critical"
+    if value > target:
+        return "warning"
+    return "good"
+
+
+def _trend_labels(metrics: MetricsPayload, trend: list[float], periods_key: str) -> list[str]:
+    periods = metrics.get(periods_key) or metrics.get("ytd_periods") or []
+    if periods:
+        return periods[: len(trend)]
+    return [f"P{i + 1}" for i in range(len(trend))]
 
 
 def _resolve_primary_dt_pct(metrics: MetricsPayload) -> float:
@@ -470,15 +509,94 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
     }
 
 
-def _build_secondary_kpis(metrics: MetricsPayload) -> list[dict[str, Any]]:
-    site_kpis = _resolve_site_kpis(metrics)
-    stops_total = sum(int(row.get("stops") or 0) for row in site_kpis.values())
-    dt_hrs = _parse_hours((metrics.get("kpis") or {}).get("downtime_hrs", {}).get("value"))
-    sched = _estimate_sched_hours(
-        dt_hrs,
-        _parse_pct((metrics.get("kpis") or {}).get("downtime_pct", {}).get("value")),
+def _build_mtbf_kpi_card(
+    metrics: MetricsPayload,
+    filters: dict[str, Any] | None,
+) -> dict[str, Any]:
+    card = metrics.get("maintenance_mtbf") or {}
+    kpis = metrics.get("kpis") or {}
+    raw_mtbf = _metric_row_value(card, "current_mtbf_hrs")
+    if raw_mtbf is not None:
+        mtbf = float(raw_mtbf or 0)
+    else:
+        stops = int(
+            float(
+                _metric_row_value(card, "current_stops")
+                or (kpis.get("stops") or {}).get("value")
+                or 0
+            )
+        )
+        sched = float(
+            _metric_row_value(card, "current_sched_hours")
+            or _metric_row_value(metrics.get("kpi_raw") or {}, "scheduled_hours")
+            or 0
+        )
+        mtbf = round(sched / max(stops, 1), 2) if sched and stops else 0.0
+
+    target = _resolve_mtbf_target(metrics)
+    prev_mtbf = float(_metric_row_value(card, "prev_period_mtbf_hrs") or 0)
+    latest_week_raw = _metric_row_value(card, "latest_week_mtbf_hrs")
+    latest_week = float(latest_week_raw) if latest_week_raw is not None else None
+
+    ytd_trend = metrics.get("mtbf_ytd_period_trend") or []
+    tf_key = _timeframe_key(filters, metrics)
+    last_period_delta, last_period_label = _compute_last_period_delta(
+        tf_key,
+        mtbf,
+        prev_mtbf,
+        ytd_trend,
+        latest_week_pct=latest_week,
     )
-    mtbf_hrs = round(sched / max(stops_total, 1), 2) if sched and stops_total else None
+
+    delta_vs_target = round(mtbf - target, 2)
+    trend_labels = _trend_labels(metrics, ytd_trend, "mtbf_ytd_periods")
+
+    stops_val = int(
+        float(
+            _metric_row_value(card, "current_stops")
+            or str((kpis.get("stops") or {}).get("value") or "0").replace(",", "")
+            or 0
+        )
+    )
+    unplanned_hrs = float(
+        _metric_row_value(card, "current_unplanned_hrs")
+        or _parse_hours((kpis.get("downtime_hrs") or {}).get("value"))
+        or 0
+    )
+    mttr = round(unplanned_hrs / max(stops_val, 1), 2) if stops_val else 0.0
+
+    last_shift_mtbf = _metric_row_value(card, "last_shift_mtbf_hrs")
+    last_shift_display = None
+    if last_shift_mtbf is not None:
+        shift_delta = round(float(last_shift_mtbf) - mtbf, 2)
+        last_shift_display = f"{shift_delta:+.2f} hrs"
+
+    has_live = raw_mtbf is not None or (mtbf > 0 and stops_val > 0)
+    last_period_class = (
+        "bad" if last_period_delta < 0 else "good" if last_period_delta > 0 else "neutral"
+    )
+
+    return {
+        "label": "Mean Time Between Failure (MTBF)",
+        "value": mtbf,
+        "value_display": f"{mtbf:.2f} hrs" if has_live else None,
+        "target": target,
+        "target_display": f"{target:.2f} hrs",
+        "delta_vs_target": delta_vs_target,
+        "delta_vs_target_display": f"{abs(delta_vs_target):.2f}",
+        "last_period_delta": last_period_delta,
+        "last_period_delta_display": f"{last_period_delta:+.2f} hrs",
+        "last_period_label": last_period_label,
+        "last_period_class": last_period_class,
+        "trend": {"labels": trend_labels, "data": ytd_trend},
+        "last_shift": {"display": last_shift_display},
+        "footer_right": f"{_locale_number(stops_val)} Stops / MTTR {mttr:.2f} hrs",
+        "status_dot": _kpi_status_dot(mtbf, target, higher_is_better=True),
+        "wip": not has_live,
+    }
+
+
+def _build_secondary_kpis(metrics: MetricsPayload) -> list[dict[str, Any]]:
     return [
         {
             "id": "backlog",
@@ -486,13 +604,6 @@ def _build_secondary_kpis(metrics: MetricsPayload) -> list[dict[str, Any]]:
             "value": None,
             "target": "< 10.0 %",
             "wip": True,
-        },
-        {
-            "id": "mtbf",
-            "label": "Mean Time Between Failure (MTBF)",
-            "value": f"{mtbf_hrs:.2f} hrs" if mtbf_hrs else None,
-            "target": "12.00 hrs",
-            "wip": not mtbf_hrs,
         },
         {
             "id": "planned",
@@ -1059,6 +1170,7 @@ def build_maintenance_payload(
     sites_at_risk = _build_sites_at_risk(metrics)
     top_site = sites_at_risk[0]["site"] if sites_at_risk else ""
     kpis_block = _build_kpis(metrics, effective_filters)
+    kpis_block["mtbf"] = _build_mtbf_kpi_card(metrics, effective_filters)
     primary_target = float((kpis_block.get("primary") or {}).get("target") or 0)
 
     return {

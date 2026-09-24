@@ -958,6 +958,82 @@
     );
   }
 
+  function renderMtbfKpi(kpi) {
+    if (!kpi || kpi.wip) return '';
+    var target = Number(kpi.target || 12);
+    var deltaVal = Number(kpi.delta_vs_target || 0);
+    var deltaClass = deltaVal < 0 ? 'bad' : 'good';
+    var deltaArrow = deltaVal < 0 ? '▼' : '▲';
+    var lastPeriodClass =
+      kpi.last_period_class ||
+      (Number(kpi.last_period_delta) < 0
+        ? 'bad'
+        : Number(kpi.last_period_delta) > 0
+          ? 'good'
+          : 'neutral');
+    var lastPeriodValue =
+      kpi.last_period_delta_display ||
+      (Number(kpi.last_period_delta) > 0 ? '+' : '') + Number(kpi.last_period_delta || 0).toFixed(2);
+    var lastPeriodLabel = kpi.last_period_label || 'Last Period';
+    var lastShiftVal = (kpi.last_shift && kpi.last_shift.display) || null;
+    var dotClass = kpi.status_dot || (kpi.value < target ? 'critical' : 'good');
+    var lastShiftClass =
+      lastShiftVal && String(lastShiftVal).indexOf('-') === 0 ? 'bad' : lastShiftVal ? 'warning' : 'muted';
+
+    return (
+      '<article class="maint-kpi-card maint-kpi-mtbf maint-kpi-card-design" data-kpi="mtbf">' +
+      '<div class="maint-kpi-head">' +
+      '<span class="maint-status-dot ' +
+      dotClass +
+      '" aria-hidden="true"></span>' +
+      '<span class="maint-kpi-title">Mean Time Between Failure (MTBF)</span>' +
+      '</div>' +
+      '<div class="maint-kpi-body">' +
+      '<div class="maint-kpi-main">' +
+      '<div class="maint-kpi-value">' +
+      esc(kpi.value_display || kpi.value + ' hrs') +
+      '</div>' +
+      '<div class="maint-kpi-target-row">' +
+      '<span class="maint-kpi-target-label">Target</span> ' +
+      '<strong class="maint-kpi-target-value">' +
+      esc(kpi.target_display || target.toFixed(2) + ' hrs') +
+      '</strong>' +
+      '<span class="maint-kpi-delta ' +
+      deltaClass +
+      '">' +
+      esc(kpi.delta_vs_target_display || Math.abs(deltaVal).toFixed(2)) +
+      ' ' +
+      deltaArrow +
+      '</span></div></div>' +
+      '<div class="maint-kpi-trend">' +
+      '<div class="maint-kpi-trend-chart">' +
+      '<div class="maint-kpi-trend-canvas-wrap">' +
+      '<canvas id="maint-spark-mtbf" aria-label="MTBF by period for fiscal year"></canvas>' +
+      '</div>' +
+      '<div class="maint-trend-period-delta">' +
+      '<span class="maint-trend-period-label">' +
+      esc(lastPeriodLabel) +
+      '</span> ' +
+      '<span class="maint-trend-period-value ' +
+      lastPeriodClass +
+      '">' +
+      esc(String(lastPeriodValue)) +
+      '</span></div></div></div></div>' +
+      '<div class="maint-kpi-footer-stats maint-kpi-footer-visible">' +
+      '<span class="maint-footer-left">' +
+      '<span class="maint-footer-label">Last Shift </span>' +
+      '<span class="maint-footer-value ' +
+      lastShiftClass +
+      '">' +
+      esc(lastShiftVal || '—') +
+      '</span></span>' +
+      '<span class="maint-footer-right">' +
+      '<span class="maint-footer-value bad">' +
+      esc(kpi.footer_right || '—') +
+      '</span></span></div></article>'
+    );
+  }
+
   function renderSecondaryKpis(list) {
     return (list || [])
       .map(function (k, i) {
@@ -1163,10 +1239,12 @@
     root.classList.remove('maint-loading');
     var p = state.payload;
     var kpi = p.kpis && p.kpis.primary;
+    var mtbf = p.kpis && p.kpis.mtbf;
 
     root.innerHTML =
       '<div class="maint-kpi-row" id="maint-kpi-row">' +
       renderPrimaryKpi(kpi) +
+      renderMtbfKpi(mtbf) +
       renderSecondaryKpis(p.secondary_kpis) +
       '</div>' +
       '<div class="maint-insights-panel-wrap">' +
@@ -1186,9 +1264,7 @@
     }
     requestAnimationFrame(function () {
       drawSparkline('maint-spark-primary', kpi && kpi.trend);
-      (p.secondary_kpis || []).forEach(function (_, i) {
-        drawSparkline('maint-spark-sec-' + i, kpi && kpi.trend);
-      });
+      drawSparkline('maint-spark-mtbf', mtbf && mtbf.trend);
       if (state.openAlert != null && p.alerts && p.alerts[state.openAlert]) {
         drawAlertChart(state.openAlert, p.alerts[state.openAlert].detail);
       }

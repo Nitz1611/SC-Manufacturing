@@ -93,9 +93,12 @@ class MetricsPayload(TypedDict, total=False):
     shift_comparison: List[ShiftComparisonRow]
     key_insights: List[KeyInsight]
     maintenance_unplanned: Dict[str, Any]
+    maintenance_mtbf: Dict[str, Any]
     kpi_raw: Dict[str, Any]
     ytd_period_trend: List[float]
     ytd_periods: List[str]
+    mtbf_ytd_period_trend: List[float]
+    mtbf_ytd_periods: List[str]
 
 
 class SqlQueryResults(TypedDict):
@@ -116,6 +119,8 @@ class SqlQueryResults(TypedDict):
     filterDimensions: List[Dict[str, Any]]
     maintenanceUnplannedCard: List[Dict[str, Any]]
     maintenanceDtTrendYtd: List[Dict[str, Any]]
+    maintenanceMtbfCard: List[Dict[str, Any]]
+    maintenanceMtbfTrendYtd: List[Dict[str, Any]]
 
 
 PERIODS: List[str] = [f"P{i + 1}" for i in range(10)]
@@ -1019,6 +1024,9 @@ def build_metrics_from_sql(
     dow_by_shift = _build_dow_by_shift(results["dowByShift"], "dt_pct")
     dow_by_shift_hrs = _build_dow_by_shift(results["dowByShift"], "dt_hours")
 
+    maintenance_unplanned = (results.get("maintenanceUnplannedCard") or [{}])[0]
+    maintenance_mtbf = (results.get("maintenanceMtbfCard") or [{}])[0]
+
     ytd_period_labels = _sort_periods([
         str(r.get("period_label") or "")
         for r in results.get("maintenanceDtTrendYtd") or []
@@ -1032,7 +1040,18 @@ def build_metrics_from_sql(
         )
         ytd_period_trend.append(_round2(float(row.get("dt_pct") or 0)) if row else 0.0)
 
-    maintenance_unplanned = (results.get("maintenanceUnplannedCard") or [{}])[0]
+    mtbf_ytd_period_labels = _sort_periods([
+        str(r.get("period_label") or "")
+        for r in results.get("maintenanceMtbfTrendYtd") or []
+        if r.get("period_label")
+    ])
+    mtbf_ytd_period_trend: List[float] = []
+    for p in mtbf_ytd_period_labels:
+        row = next(
+            (r for r in (results.get("maintenanceMtbfTrendYtd") or []) if str(r.get("period_label")) == p),
+            None,
+        )
+        mtbf_ytd_period_trend.append(_round2(float(row.get("mtbf_hrs") or 0)) if row else 0.0)
     filter_options = build_filter_options(results["filterOptions"])
     departments: set[str] = set()
     lines: set[str] = set()
@@ -1106,8 +1125,11 @@ def build_metrics_from_sql(
         "top_sites_trend_hrs": top_sites_trend_hrs,
         "shift_comparison": shift_comparison,
         "maintenance_unplanned": maintenance_unplanned,
+        "maintenance_mtbf": maintenance_mtbf,
         "ytd_period_trend": ytd_period_trend,
         "ytd_periods": ytd_period_labels,
+        "mtbf_ytd_period_trend": mtbf_ytd_period_trend,
+        "mtbf_ytd_periods": mtbf_ytd_period_labels,
     }
     m["tab_insights"] = build_tab_insights(m)
     return m

@@ -60,6 +60,8 @@ WAVE1_CHART_KEYS = (
     'dashboard_filter_dimensions',
     'maintenance_unplanned_card',
     'maintenance_dt_trend_ytd',
+    'maintenance_mtbf_card',
+    'maintenance_mtbf_trend_ytd',
 )
 WAVE2_QUERY_KEYS = (
     'dashboard_dt_category_by_period',
@@ -308,6 +310,8 @@ def load_metrics_from_sql(
         'filterDimensions': w1['dashboard_filter_dimensions'],
         'maintenanceUnplannedCard': w1['maintenance_unplanned_card'],
         'maintenanceDtTrendYtd': w1['maintenance_dt_trend_ytd'],
+        'maintenanceMtbfCard': w1['maintenance_mtbf_card'],
+        'maintenanceMtbfTrendYtd': w1['maintenance_mtbf_trend_ytd'],
     }
 
     metrics = build_metrics_from_sql(results, norm)
