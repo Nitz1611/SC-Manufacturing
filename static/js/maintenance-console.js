@@ -695,6 +695,93 @@
     );
   }
 
+  function exposureChartScaleMax(rows, targetPct) {
+    var peak = Math.max(
+      targetPct,
+      12,
+      Math.max.apply(
+        null,
+        (rows || []).map(function (r) {
+          return Number(r.dt_pct) || 0;
+        })
+      )
+    );
+    return Math.max(10, Math.ceil(peak / 5) * 5);
+  }
+
+  function renderMaintExposureChart(rows, options) {
+    options = options || {};
+    if (!rows || !rows.length) {
+      return '<p class="maint-empty-note">No data for the current filter selection.</p>';
+    }
+    var targetPct = options.targetPct != null ? Number(options.targetPct) : DT_TARGET;
+    var maxVal = options.maxValue || exposureChartScaleMax(rows, targetPct);
+    var targetTick = Math.min(100, (targetPct / maxVal) * 100);
+    var axisTicks = [];
+    for (var t = 0; t <= maxVal; t += maxVal <= 15 ? 5 : 10) {
+      axisTicks.push(t);
+    }
+    if (axisTicks[axisTicks.length - 1] !== maxVal) axisTicks.push(maxVal);
+
+    var plotRows = rows
+      .map(function (row, i) {
+        var val = Number(row.dt_pct) || 0;
+        var width = Math.max(val > 0 ? 2 : 0, (val / maxVal) * 100);
+        var color = PEACOCK_EXPOSURE_COLORS[i] || CHART_COLORS[i % CHART_COLORS.length];
+        var detail =
+          val.toFixed(2) +
+          '% (' +
+          fmtNum(row.hours) +
+          ' Unplanned DT Hrs / ' +
+          fmtNum(row.sched_hrs) +
+          ' Sched Hrs)';
+        var labelClass = width >= 38 ? 'maint-exposure-bar-label maint-exposure-bar-label-in' : 'maint-exposure-bar-label maint-exposure-bar-label-out';
+        return (
+          '<div class="maint-exposure-row">' +
+          '<div class="maint-exposure-site">' +
+          esc(row.site || row.line || '') +
+          '</div>' +
+          '<div class="maint-exposure-bar-col">' +
+          '<div class="maint-exposure-track">' +
+          '<span class="maint-exposure-target-tick" style="left:' +
+          targetTick +
+          '%" title="Target ' +
+          targetPct.toFixed(2) +
+          '%"></span>' +
+          '<div class="maint-exposure-bar" style="width:' +
+          width +
+          '%;background-color:' +
+          color +
+          '">' +
+          (width >= 22 ? '<span class="' + labelClass + '">' + esc(detail) + '</span>' : '') +
+          '</div></div>' +
+          (width < 22 ? '<span class="' + labelClass + '">' + esc(detail) + '</span>' : '') +
+          '</div></div>'
+        );
+      })
+      .join('');
+
+    return (
+      '<div class="maint-exposure-chart">' +
+      '<div class="maint-exposure-plot">' +
+      '<div class="maint-exposure-bars-panel">' +
+      plotRows +
+      '</div></div>' +
+      '<div class="maint-exposure-xaxis">' +
+      axisTicks
+        .map(function (n) {
+          return '<span>' + n + '</span>';
+        })
+        .join('') +
+      '</div>' +
+      '<div class="maint-target-legend">' +
+      '<span class="maint-target-swatch maint-target-swatch-dash" aria-hidden="true"></span>' +
+      'FLNA Target: ' +
+      targetPct.toFixed(2) +
+      '%</div></div>'
+    );
+  }
+
   function renderLoading() {
     var root = $('#maint-root');
     if (!root || !state.loading) return;
@@ -1357,15 +1444,7 @@
   }
 
   function siteExposureTable(sites, targetPct) {
-    return renderRankedExposureTable((sites || []).slice(0, 5), {
-      nameHeader: 'Site',
-      barHeader: 'Unplanned DT Exposure Rate',
-      targetPct: targetPct,
-      detailFn: siteTableDetail,
-      barValueFn: function (row) {
-        return fmtNum(row.hours) + ' h';
-      },
-    });
+    return renderMaintExposureChart((sites || []).slice(0, 5), { targetPct: targetPct });
   }
 
   function lineExposureTable(lines) {
@@ -1397,16 +1476,21 @@
       '<div class="maint-report-donut-card maint-donut-card-plain">' +
       '<div class="maint-donut-wrap"><canvas id="report-donut"></canvas></div></div>' +
       '<div class="maint-donut-meta maint-donut-meta-stack">' +
-      '<div class="maint-donut-meta-item">Target <strong>' +
+      '<div class="maint-donut-pill maint-donut-pill-target">' +
+      '<span class="maint-donut-pill-label">Target</span>' +
+      '<span class="maint-donut-pill-value">' +
       fmtPct(target) +
-      '</strong> <span class="bad">' +
+      '</span>' +
+      '<span class="maint-donut-pill-delta bad">' +
       delta +
       'pp ' +
       deltaArrow +
       '</span></div>' +
-      '<div class="maint-donut-meta-item bad">Total Stops <strong>' +
+      '<div class="maint-donut-pill maint-donut-pill-stops">' +
+      '<span class="maint-donut-pill-label">Total Stops</span>' +
+      '<span class="maint-donut-pill-value bad">' +
       esc(stops) +
-      '</strong></div></div></div>' +
+      '</span></div></div></div>' +
       '<div class="maint-stat-stack">' +
       reportStatCard('Schedule Hours', sched.replace(' h', ''), REPORT_ICONS.schedule) +
       reportStatCard('Unplanned Downtime Hours', dtHrs.replace(' h', ''), REPORT_ICONS.downtime) +
