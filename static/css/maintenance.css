@@ -279,37 +279,51 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 .maint-kpi-card.primary .maint-kpi-trend {
   flex: 1;
   min-width: 0;
-  height: 84px;
+  height: 88px;
   position: relative;
-  align-self: center;
+  align-self: stretch;
+  display: block;
 }
 
-.maint-kpi-trend { flex: 1; min-width: 0; height: 72px; position: relative; }
-.maint-kpi-trend canvas { width: 100% !important; height: 100% !important; }
+.maint-kpi-card.primary .maint-kpi-trend-chart {
+  position: absolute;
+  inset: 0 0 0 0;
+  z-index: 1;
+}
+
+.maint-kpi-card.primary .maint-kpi-trend-chart canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
 
 .maint-kpi-card.primary .maint-trend-period-delta {
-  top: 50%;
-  left: 50%;
-  right: auto;
-  transform: translate(-50%, -50%);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  text-shadow: 0 0 6px rgba(255, 255, 255, 0.9);
+  position: absolute;
+  bottom: 4px;
+  right: 2px;
+  left: 6px;
+  z-index: 2;
+  text-align: right;
+  line-height: 1.25;
+  pointer-events: none;
+  transform: none;
+  top: auto;
 }
 
-.maint-trend-period-delta {
-  position: absolute;
-  top: 2px;
-  right: 0;
+.maint-trend-period-label {
+  color: #64748b;
   font-size: 11px;
-  font-weight: 700;
-  z-index: 2;
-  pointer-events: none;
+  font-weight: 500;
 }
-.maint-trend-period-delta.bad { color: #e53935; }
-.maint-trend-period-delta.good { color: #15803d; }
-.maint-trend-period-delta.neutral { color: #64748b; }
+
+.maint-trend-period-value {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.maint-trend-period-value.bad { color: #e53935; }
+.maint-trend-period-value.good { color: #15803d; }
+.maint-trend-period-value.neutral { color: #64748b; }
 
 .maint-insights-grid {
   display: grid;

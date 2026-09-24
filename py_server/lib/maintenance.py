@@ -213,12 +213,17 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
     last_shift_pct = 0.0
     if card.get("last_shift_dt_pct") is not None:
         last_shift_pct = float(card.get("last_shift_dt_pct") or 0)
+
     sched_lost = float(card.get("last_shift_sched_hours") or 0)
-    if not sched_lost and card.get("last_shift_unplanned_hrs") and last_shift_pct > 0:
-        sched_lost = _estimate_sched_hours(
-            float(card.get("last_shift_unplanned_hrs") or 0),
-            last_shift_pct,
-        )
+    unplanned_shift_hrs = float(card.get("last_shift_unplanned_hrs") or 0)
+    if sched_lost <= 0 and unplanned_shift_hrs > 0 and last_shift_pct > 0:
+        sched_lost = _estimate_sched_hours(unplanned_shift_hrs, last_shift_pct)
+    elif sched_lost <= 0 and unplanned_shift_hrs > 0:
+        sched_lost = round(unplanned_shift_hrs, 1)
+
+    if card.get("last_shift_dt_pct") is None and sched_lost > 0 and unplanned_shift_hrs > 0:
+        last_shift_pct = round(unplanned_shift_hrs * 100.0 / sched_lost, 2)
+        card = {**card, "last_shift_dt_pct": last_shift_pct}
 
     hours = _parse_hours(dt_hrs.get("value"))
     if not hours and card.get("last_shift_unplanned_hrs"):
@@ -246,7 +251,7 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
             },
             "scheduled_hours": {
                 "estimate": sched_lost,
-                "display": f"{sched_lost:,.1f}",
+                "display": f"{sched_lost:,.1f}" if sched_lost > 0 else None,
                 "method": "last_shift_scheduled_hours",
             },
             "downtime_hours": {
@@ -255,10 +260,11 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
             },
             "last_shift": {
                 "pct": last_shift_pct if card.get("last_shift_dt_pct") is not None else None,
+                "shift": card.get("last_shift_num"),
                 "display": (
                     f"{float(card.get('last_shift_dt_pct')):+.2f}%"
                     if card.get("last_shift_dt_pct") is not None
-                    else None
+                    else (f"{last_shift_pct:+.2f}%" if unplanned_shift_hrs > 0 else None)
                 ),
             },
             "direction": "bad" if dt_pct > target else "good",

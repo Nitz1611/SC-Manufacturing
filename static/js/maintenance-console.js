@@ -724,11 +724,14 @@
     var deltaArrow = kpi.delta_vs_target > 0 ? '▲' : '▼';
     var lastPeriodDelta = Number(kpi.last_period_delta != null ? kpi.last_period_delta : 0);
     var lastPeriodClass = lastPeriodDelta > 0 ? 'bad' : lastPeriodDelta < 0 ? 'good' : 'neutral';
-    var lastPeriodText =
+    var lastPeriodValueClass = lastPeriodClass;
+    var lastPeriodValue =
       kpi.last_period_delta_display ||
       (lastPeriodDelta > 0 ? '+' : '') + lastPeriodDelta.toFixed(2) + '%';
     var lastShiftVal = formatLastShiftPct(kpi);
-    var schedLost = kpi.scheduled_hours ? kpi.scheduled_hours.display : '—';
+    var schedRaw = kpi.scheduled_hours && kpi.scheduled_hours.display;
+    var schedLost =
+      schedRaw && parseFloat(String(schedRaw).replace(/,/g, '')) > 0 ? schedRaw : null;
     var dotClass = kpi.value > target ? 'critical' : statusDotClass(kpi.value, target);
 
     return (
@@ -758,12 +761,16 @@
       '</span></div>' +
       '</div>' +
       '<div class="maint-kpi-trend">' +
-      '<span class="maint-trend-period-delta ' +
-      lastPeriodClass +
-      '">Last Period ' +
-      esc(String(lastPeriodText).replace(/\s+%/g, '%')) +
-      '</span>' +
-      '<canvas id="maint-spark-primary" aria-label="Unplanned DT YTD trend"></canvas></div>' +
+      '<div class="maint-kpi-trend-chart">' +
+      '<canvas id="maint-spark-primary" aria-label="Unplanned DT by period for fiscal year"></canvas>' +
+      '</div>' +
+      '<div class="maint-trend-period-delta">' +
+      '<span class="maint-trend-period-label">Last Period</span> ' +
+      '<span class="maint-trend-period-value ' +
+      lastPeriodValueClass +
+      '">' +
+      esc(String(lastPeriodValue).replace(/\s+%/g, '%')) +
+      '</span></div></div>' +
       '</div>' +
       '<div class="maint-kpi-footer-stats maint-kpi-footer-visible">' +
       '<span class="maint-footer-left">' +
@@ -775,7 +782,7 @@
       '</span></span>' +
       '<span class="maint-footer-right">' +
       '<strong class="maint-footer-value bad">' +
-      esc(schedLost) +
+      esc(schedLost || '—') +
       '</strong>' +
       ' <span class="maint-footer-label">Scheduled Hours Lost</span></span>' +
       '</div>' +
@@ -1016,6 +1023,7 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        layout: { padding: { top: 4, bottom: 20, left: 0, right: 0 } },
         plugins: { legend: { display: false }, tooltip: { enabled: true } },
         scales: { x: { display: false }, y: { display: false } },
         animation: { duration: 600 },

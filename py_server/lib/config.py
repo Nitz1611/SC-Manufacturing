@@ -148,6 +148,16 @@ def yesterday_flag_filter() -> str:
     return _flag_filter("Yesterday Flag")
 
 
+def yesterday_slice_filter() -> str:
+    """Rows for yesterday: flag column and/or calendar yesterday on Production Date."""
+    override = (os.environ.get("DATABRICKS_YESTERDAY_SLICE_FILTER") or "").strip()
+    if override:
+        return override
+    dt = date_column()
+    yflag = quote_ident("Yesterday Flag")
+    return f"({yflag} = 1 OR CAST({dt} AS DATE) = DATE_SUB(CURRENT_DATE(), 1))"
+
+
 TIMEFRAME_FLAG_COLUMNS: dict[str, str] = {
     "ptd": "PTD Flag",
     "wtd": "WTD Flag",
@@ -307,6 +317,7 @@ def _apply_sql_fragments(sql: str) -> str:
         .replace("{{ytd_flag_filter}}", ytd_flag_filter())
         .replace("{{prev_period_flag_filter}}", prev_period_flag_filter())
         .replace("{{yesterday_flag_filter}}", yesterday_flag_filter())
+        .replace("{{yesterday_slice_filter}}", yesterday_slice_filter())
         .replace("{{dt_type_filter}}", dt_measure_context_filter())
         .replace("{{dt_pct_filter}}", dt_measure_context_filter())
         .replace("{{dt_hours_filter}}", dt_measure_context_filter())
