@@ -194,12 +194,29 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 }
 
 .maint-kpi-card.primary.maint-kpi-card-design {
-  border: 1.5px solid #e53935;
+  border: 2px solid #aeb8c7;
   border-radius: 12px;
-  box-shadow: 0 1px 4px rgba(229, 57, 53, 0.12);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  background: #ffffff;
+}
+
+.maint-kpi-card.primary.maint-kpi-card-clickable {
+  cursor: pointer;
+}
+
+.maint-kpi-card.primary.maint-kpi-card-clickable:focus {
+  outline: 2px solid #0066cc;
+  outline-offset: 2px;
+}
+
+.maint-kpi-row .maint-kpi-card.primary.maint-kpi-card-design:hover,
+.maint-kpi-row .maint-kpi-card.primary.maint-kpi-card-design:focus-within {
+  border-color: #8f9bb0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  transform: none;
 }
 
 .maint-kpi-head {

@@ -735,7 +735,7 @@
     var dotClass = kpi.value > target ? 'critical' : statusDotClass(kpi.value, target);
 
     return (
-      '<article class="maint-kpi-card primary maint-kpi-card-design" data-kpi="primary">' +
+      '<article class="maint-kpi-card primary maint-kpi-card-design maint-kpi-card-clickable" data-kpi="primary" data-action="my-report" role="button" tabindex="0" aria-label="Total Unplanned Downtime percent — open My Report">' +
       '<div class="maint-kpi-head">' +
       '<span class="maint-status-dot ' +
       dotClass +
@@ -982,6 +982,16 @@
       '</div></section></div>';
 
     bindMaintenanceEvents();
+    var primaryCard = document.querySelector('.maint-kpi-card-design[data-action="my-report"]');
+    if (primaryCard && !primaryCard.dataset.reportKeyBound) {
+      primaryCard.dataset.reportKeyBound = '1';
+      primaryCard.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          openMyReport();
+        }
+      });
+    }
     requestAnimationFrame(function () {
       drawSparkline('maint-spark-primary', kpi && kpi.trend);
       (p.secondary_kpis || []).forEach(function (_, i) {
@@ -1103,11 +1113,17 @@
   }
 
   function handleKnowMoreAction(e) {
-    var btn = e.target.closest('[data-action]');
-    if (!btn || !btn.closest('.maint-know-actions')) return false;
+    var actionable = e.target.closest('[data-action]');
+    if (!actionable) return false;
+    var action = actionable.getAttribute('data-action');
+    if (actionable.classList.contains('maint-kpi-card-design')) {
+      e.preventDefault();
+      if (action === 'my-report') openMyReport();
+      return true;
+    }
+    if (!actionable.closest('.maint-know-actions')) return false;
     e.preventDefault();
     e.stopPropagation();
-    var action = btn.getAttribute('data-action');
     if (action === 'my-report') openMyReport();
     else if (action === 'drill-down') openDrillDown();
     else if (action === 'kpi-overview') goToKpiOverview();
