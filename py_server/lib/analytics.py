@@ -425,7 +425,10 @@ def _filter_lock(norm: dict[str, str | None]) -> threading.Lock:
 
 
 def _metrics_is_partial(metrics: dict[str, Any] | None) -> bool:
-    return bool((metrics or {}).get('meta') or {}).get('partial')
+    meta = (metrics or {}).get('meta') or {}
+    if not isinstance(meta, dict):
+        return False
+    return bool(meta.get('partial'))
 
 
 def _filters_dict_from_norm(norm: dict[str, str | None]) -> dict[str, Any]:

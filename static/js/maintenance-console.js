@@ -219,6 +219,19 @@
       }),
     })
       .then(function (r) {
+        var ct = (r.headers.get('Content-Type') || '').toLowerCase();
+        if (!r.ok || ct.indexOf('application/json') === -1) {
+          return r.text().then(function (text) {
+            var msg = 'Request failed (' + r.status + ')';
+            try {
+              var parsed = JSON.parse(text);
+              if (parsed && parsed.error) msg = parsed.error;
+            } catch (e) {
+              if (text && text.length < 200) msg = text;
+            }
+            throw new Error(msg);
+          });
+        }
         return r.json();
       })
       .then(function (data) {

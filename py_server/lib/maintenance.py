@@ -874,20 +874,32 @@ def _build_insights_bullets(metrics: MetricsPayload) -> list[str]:
     return bullets
 
 
-def _metrics_for_timeframe(filters: dict[str, Any] | None, timeframe: str) -> MetricsPayload:
-    from py_server.lib.analytics import get_metrics_bundle
+def _metrics_for_timeframe(
+    filters: dict[str, Any] | None,
+    timeframe: str,
+    fallback: MetricsPayload | None = None,
+) -> MetricsPayload:
+    from py_server.lib.analytics import get_cached_metrics_bundle, get_metrics_bundle
 
     scoped = dict(filters or {})
     scoped["timeframe"] = timeframe
-    return get_metrics_bundle(scoped)
+    cached = get_cached_metrics_bundle(scoped)
+    if cached and cached.get("kpis"):
+        return cached
+    try:
+        return get_metrics_bundle(scoped)
+    except Exception:
+        if fallback is not None:
+            return fallback
+        raise
 
 
 def build_maintenance_payload_from_filters(
     metrics: MetricsPayload,
     filters: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    alerts_m = _metrics_for_timeframe(filters, "yesterday")
-    insights_m = _metrics_for_timeframe(filters, "ptd")
+    alerts_m = _metrics_for_timeframe(filters, "yesterday", fallback=metrics)
+    insights_m = _metrics_for_timeframe(filters, "ptd", fallback=metrics)
     return build_maintenance_payload(
         metrics,
         filters,

@@ -117,53 +117,45 @@ def maintenance_data():
     filters = _filters_from_body(body)
     force_refresh = bool(body.get('forceRefresh') or body.get('refresh'))
 
-    if not force_refresh:
-        cached = get_cached_metrics_bundle(filters)
-        if cached and cached.get('kpis'):
-            payload = build_maintenance_payload_from_filters(cached, filters)
-            meta = cached.get('meta') or {}
-            partial = bool(meta.get('partial'))
-            if partial:
-                schedule_extended_metrics_load(filters)
-            elif not get_fresh_metrics_bundle(filters):
-                schedule_metrics_refresh(filters)
-            return jsonify({
-                **payload,
-                '_source': meta.get('source', 'cache'),
-                '_live': meta.get('source') in ('sql', 'cache'),
-                '_cached': True,
-                '_partial': partial,
-                '_refreshing': partial,
-            })
-
-    try:
-        metrics = get_metrics_bundle(filters)
+    def _respond(metrics: dict[str, Any], *, source: str, cached: bool) -> Any:
         payload = build_maintenance_payload_from_filters(metrics, filters)
         meta = metrics.get('meta') or {}
         partial = bool(meta.get('partial'))
         if partial:
             schedule_extended_metrics_load(filters)
+        elif cached and not get_fresh_metrics_bundle(filters):
+            schedule_metrics_refresh(filters)
         return jsonify({
             **payload,
-            '_source': meta.get('source', 'live'),
+            '_source': meta.get('source', source),
             '_live': meta.get('source') in ('sql', 'cache'),
-            '_cached': meta.get('source') in ('cache',),
+            '_cached': cached,
             '_sql_warning': meta.get('sql_warning'),
             '_partial': partial,
             '_refreshing': partial,
         })
+
+    try:
+        if not force_refresh:
+            cached = get_cached_metrics_bundle(filters)
+            if cached and cached.get('kpis'):
+                return _respond(cached, source='cache', cached=True)
+
+        metrics = get_metrics_bundle(filters)
+        meta = metrics.get('meta') or {}
+        return _respond(
+            metrics,
+            source=str(meta.get('source') or 'live'),
+            cached=meta.get('source') in ('cache',),
+        )
     except Exception as e:
         cached = get_cached_metrics_bundle(filters)
         if cached and cached.get('kpis'):
-            payload = build_maintenance_payload_from_filters(cached, filters)
-            return jsonify({
-                **payload,
-                '_source': 'cache',
-                '_live': True,
-                '_cached': True,
-                '_sql_warning': str(e)[:240],
-            })
-        return jsonify({'error': str(e)}), 500
+            try:
+                return _respond(cached, source='cache', cached=True)
+            except Exception as inner:
+                return jsonify({'error': str(inner)[:500]}), 500
+        return jsonify({'error': str(e)[:500]}), 500
 
 
 @bp.post('/maintenance/insights')
