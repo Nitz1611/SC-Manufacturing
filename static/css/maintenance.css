@@ -986,9 +986,10 @@ body.maint-report-open { overflow: hidden; }
   z-index: 6;
   pointer-events: none;
   margin-left: -1px;
-  opacity: 0;
+  opacity: 1;
 }
 .maint-report-animate-in .maint-exposure-target-tick {
+  opacity: 0;
   animation: maintTargetFadeIn 0.5s ease 0.55s forwards;
 }
 .maint-exposure-row {

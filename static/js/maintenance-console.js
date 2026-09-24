@@ -1541,11 +1541,7 @@
       (kpi && kpi.scheduled_hours && kpi.scheduled_hours.display) ||
       '—';
     var pctDowntime =
-      (kpi && kpi.total_downtime_pct && kpi.total_downtime_pct.display) ||
-      (kpi && kpi.total_downtime_pct && kpi.total_downtime_pct.value != null
-        ? fmtPct(kpi.total_downtime_pct.value)
-        : null) ||
-      '—';
+      (kpi && kpi.total_downtime_pct && kpi.total_downtime_pct.display) || '—';
     var target = kpi ? kpi.target : DT_TARGET;
     var delta = kpi ? Math.abs(kpi.delta_vs_target).toFixed(2) : '0.00';
     var deltaArrow = kpi && kpi.delta_vs_target > 0 ? '▲' : '▼';

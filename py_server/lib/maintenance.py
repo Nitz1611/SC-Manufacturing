@@ -49,7 +49,18 @@ def _locale_number(value: float | int) -> str:
 def _estimate_sched_hours(dt_hrs: float, dt_pct: float) -> float:
     if dt_pct <= 0 or dt_hrs <= 0:
         return 0.0
-    return round(dt_hrs * 100.0 / dt_pct)
+    return round(dt_hrs * 100.0 / dt_pct, 2)
+
+
+def _metric_row_value(row: dict[str, Any] | None, *keys: str) -> Any:
+    """Read a SQL row field case-insensitively (Databricks column casing varies)."""
+    if not row:
+        return None
+    index = {str(k).lower(): v for k, v in row.items() if k is not None}
+    for key in keys:
+        if key.lower() in index and index[key.lower()] is not None:
+            return index[key.lower()]
+    return None
 
 
 def _period_delta_labels(filters: dict[str, Any] | None) -> tuple[str, str]:
@@ -230,11 +241,24 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
     if not hours and card.get("last_shift_unplanned_hrs"):
         hours = float(card.get("last_shift_unplanned_hrs") or 0)
 
-    tf_sched = float(card.get("current_sched_hours") or 0)
-    if tf_sched <= 0 and hours > 0 and dt_pct > 0:
-        tf_sched = _estimate_sched_hours(hours, dt_pct)
+    tf_sched_raw = _metric_row_value(
+        card,
+        "current_sched_hours",
+    )
+    if tf_sched_raw is None:
+        tf_sched_raw = _metric_row_value(
+            metrics.get("kpi_raw") or {},
+            "scheduled_hours",
+            "current_sched_hours",
+        )
+    tf_sched = float(tf_sched_raw or 0)
 
-    total_dt_pct_raw = card.get("total_downtime_pct")
+    total_dt_pct_raw = _metric_row_value(card, "total_downtime_pct")
+    if total_dt_pct_raw is None:
+        total_dt_pct_raw = _metric_row_value(
+            metrics.get("kpi_raw") or {},
+            "total_downtime_pct",
+        )
     total_dt_pct = _parse_pct(total_dt_pct_raw) if total_dt_pct_raw is not None else None
 
     return {
@@ -267,7 +291,7 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
                 "display": f"{tf_sched:,.2f}" if tf_sched > 0 else None,
             },
             "total_downtime_pct": {
-                "value": total_dt_pct if total_dt_pct is not None else 0.0,
+                "value": total_dt_pct if total_dt_pct is not None else None,
                 "display": (
                     f"{total_dt_pct:.2f} %"
                     if total_dt_pct is not None

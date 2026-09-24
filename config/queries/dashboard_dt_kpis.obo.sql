@@ -33,4 +33,26 @@ SELECT
      AND {{department_filter}}
      AND {{shift_filter}}
      AND {{timeframe_filter}}
-  ) AS stops
+  ) AS stops,
+  (SELECT ROUND({{scheduled_hours_m}}, 2)
+   FROM {{catalog}}.pgt_plnt_prodtn_metric_view
+   WHERE {{dt_pct_filter}}
+     AND {{year_filter}}
+     AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
+     AND {{region_filter}}
+     AND {{line_filter}}
+     AND {{department_filter}}
+     AND {{shift_filter}}
+     AND {{timeframe_filter}}
+  ) AS scheduled_hours,
+  (SELECT ROUND({{total_dt_pct_m}}, 2)
+   FROM {{catalog}}.pgt_plnt_prodtn_metric_view
+   WHERE {{dt_pct_filter}}
+     AND {{year_filter}}
+     AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
+     AND {{region_filter}}
+     AND {{line_filter}}
+     AND {{department_filter}}
+     AND {{shift_filter}}
+     AND {{timeframe_filter}}
+  ) AS total_downtime_pct

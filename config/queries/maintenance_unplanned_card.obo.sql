@@ -23,7 +23,7 @@ SELECT
      AND {{shift_filter}}
      AND {{timeframe_filter}}
   ) AS current_sched_hours,
-  (SELECT ROUND({{total_dt_pct_m}} * 100, 2)
+  (SELECT ROUND({{total_dt_pct_m}}, 2)
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view
    WHERE {{dt_pct_filter}}
      AND {{year_filter}}

@@ -93,6 +93,7 @@ class MetricsPayload(TypedDict, total=False):
     shift_comparison: List[ShiftComparisonRow]
     key_insights: List[KeyInsight]
     maintenance_unplanned: Dict[str, Any]
+    kpi_raw: Dict[str, Any]
     ytd_period_trend: List[float]
     ytd_periods: List[str]
 
@@ -918,6 +919,7 @@ def build_core_metrics_from_sql(
         "periods": PERIODS,
         "weeks": WEEKS,
         "kpis": kpis,
+        "kpi_raw": dict(k) if k else {},
         "site_kpis": site_kpis,
         "tab_insights": {},
     }
@@ -1077,6 +1079,7 @@ def build_metrics_from_sql(
         "periods": periods,
         "weeks": dow_weeks,
         "kpis": kpis,
+        "kpi_raw": dict(k) if k else {},
         "site_kpis": site_kpis,
         "tab_insights": {},
         "filter_options": filter_options,
