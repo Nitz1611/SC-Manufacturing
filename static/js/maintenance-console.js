@@ -720,6 +720,8 @@
     var targetPct = options.targetPct != null ? Number(options.targetPct) : DT_TARGET;
     var maxVal = options.maxValue || exposureChartScaleMax(rows, targetPct);
     var targetTick = Math.min(100, (targetPct / maxVal) * 100);
+    var nameKey = options.nameKey || 'site';
+    var labelClassName = options.labelClass || 'maint-exposure-site';
     var axisTicks = [];
     for (var t = 0; t <= maxVal; t += maxVal <= 15 ? 5 : 10) {
       axisTicks.push(t);
@@ -731,18 +733,23 @@
         var val = Number(row.dt_pct) || 0;
         var width = Math.max(val > 0 ? 2 : 0, (val / maxVal) * 100);
         var color = PEACOCK_EXPOSURE_COLORS[i] || CHART_COLORS[i % CHART_COLORS.length];
-        var detail =
-          val.toFixed(2) +
-          '% (' +
-          fmtNum(row.hours) +
-          ' Unplanned DT Hrs / ' +
-          fmtNum(row.sched_hrs) +
-          ' Sched Hrs)';
+        var detailFn = options.detailFn;
+        var detail = detailFn
+          ? detailFn(row)
+          : val.toFixed(2) +
+            '% (' +
+            fmtNum(row.hours) +
+            ' Unplanned DT Hrs / ' +
+            fmtNum(row.sched_hrs) +
+            ' Sched Hrs)';
         var labelClass = width >= 38 ? 'maint-exposure-bar-label maint-exposure-bar-label-in' : 'maint-exposure-bar-label maint-exposure-bar-label-out';
+        var rowLabel = row[nameKey] || row.site || row.line || '';
         return (
           '<div class="maint-exposure-row">' +
-          '<div class="maint-exposure-site">' +
-          esc(row.site || row.line || '') +
+          '<div class="' +
+          labelClassName +
+          '">' +
+          esc(rowLabel) +
           '</div>' +
           '<div class="maint-exposure-bar-col">' +
           '<div class="maint-exposure-track">' +
@@ -1529,12 +1536,11 @@
     return renderMaintExposureChart((sites || []).slice(0, 5), { targetPct: targetPct });
   }
 
-  function lineExposureTable(lines) {
-    return renderRankedExposureTable((lines || []).slice(0, 5), {
+  function lineExposureTable(lines, targetPct) {
+    return renderMaintExposureChart((lines || []).slice(0, 5), {
       nameKey: 'line',
-      nameHeader: 'Line',
-      barHeader: 'Unplanned DT Rate',
-      maxValue: 70,
+      labelClass: 'maint-exposure-site maint-exposure-line-label',
+      targetPct: targetPct,
     });
   }
 
@@ -1591,10 +1597,11 @@
 
   function renderReportSites(p) {
     var topSite = (p.sites_at_risk && p.sites_at_risk[0] && p.sites_at_risk[0].site) || 'Top Site';
+    var target = (p.kpis && p.kpis.primary && p.kpis.primary.target) || DT_TARGET;
     return (
       '<div class="maint-bar-section maint-bar-section-compact">' +
       '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
-      siteExposureTable(p.sites_at_risk, (p.kpis && p.kpis.primary && p.kpis.primary.target) || DT_TARGET) +
+      siteExposureTable(p.sites_at_risk, target) +
       '</div>' +
       '<div class="maint-bar-section maint-bar-section-compact">' +
       '<div class="maint-report-section-head" style="margin-bottom:10px">' +
@@ -1602,7 +1609,7 @@
       esc(topSite) +
       ' — Top 5 Lines by Unplanned Downtime Hours</h4>' +
       '<span class="maint-severity critical">HIGH LOSS</span></div>' +
-      lineExposureTable(p.site_lines) +
+      lineExposureTable(p.site_lines, target) +
       '</div>'
     );
   }

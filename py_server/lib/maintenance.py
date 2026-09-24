@@ -752,25 +752,38 @@ def _build_site_lines(metrics: MetricsPayload) -> list[dict[str, Any]]:
     top_site = sites_at_risk[0]["site"]
     top_lines = metrics.get("top_lines") or {}
     site_lines = (metrics.get("site_line_by_period") or {}).get(top_site) or {}
+    site_line_hrs = (metrics.get("site_line_by_period_hrs") or {}).get(top_site) or {}
 
-    lines: list[tuple[str, float]] = []
+    lines: list[tuple[str, float, float]] = []
     if site_lines:
-        lines = [
-            (name, sum(vals) / len(vals) if vals else 0.0)
-            for name, vals in site_lines.items()
-        ]
+        for name, vals in site_lines.items():
+            pct_vals = [float(v) for v in (vals or []) if v is not None and math.isfinite(float(v))]
+            if not pct_vals:
+                continue
+            pct = sum(pct_vals) / len(pct_vals)
+            hrs_vals = site_line_hrs.get(name) or []
+            hrs_clean = [
+                float(v) for v in hrs_vals if v is not None and math.isfinite(float(v)) and float(v) > 0
+            ]
+            hrs = round(sum(hrs_clean) / len(hrs_clean), 1) if hrs_clean else 0.0
+            lines.append((name, pct, hrs))
     elif top_lines:
-        lines = list(top_lines.items())
+        for name, pct in top_lines.items():
+            lines.append((name, float(pct or 0), 0.0))
 
     lines.sort(key=lambda item: item[1], reverse=True)
-    return [
-        {
+    out: list[dict[str, Any]] = []
+    for name, pct, hrs in lines[:5]:
+        pct_r = round(pct, 2)
+        sched = _estimate_sched_hours(hrs, pct_r) if hrs > 0 and pct_r > 0 else 0.0
+        out.append({
             "site": top_site,
             "line": name,
-            "dt_pct": round(pct, 2),
-        }
-        for name, pct in lines[:5]
-    ]
+            "dt_pct": pct_r,
+            "hours": hrs,
+            "sched_hrs": sched,
+        })
+    return out
 
 
 def _build_downtime_drivers(metrics: MetricsPayload) -> list[dict[str, Any]]:

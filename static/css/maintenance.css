@@ -1012,6 +1012,10 @@ body.maint-report-open { overflow: hidden; }
   line-height: 1.3;
   padding-right: 4px;
 }
+.maint-exposure-line-label {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
 .maint-exposure-bar-col {
   position: relative;
   min-width: 0;
