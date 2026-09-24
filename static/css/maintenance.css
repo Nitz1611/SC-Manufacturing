@@ -1262,7 +1262,7 @@ body.maint-report-open { overflow: hidden; }
 }
 .maint-insights-panel h4 { font-size: 13px; font-weight: 700; color: #1e40af; margin-bottom: 10px; }
 .maint-insights-panel ul { margin: 0; padding-left: 18px; }
-.maint-insights-panel li { font-size: 12.5px; line-height: 1.6; color: #374151; margin-bottom: 8px; }
+.maint-insights-panel li { font-size: 13px; line-height: 1.65; color: #374151; margin-bottom: 10px; }
 
 /* Drill down */
 .maint-drill-overlay {
