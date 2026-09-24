@@ -763,14 +763,13 @@
       '<div class="maint-kpi-trend">' +
       '<div class="maint-kpi-trend-chart">' +
       '<canvas id="maint-spark-primary" aria-label="Unplanned DT by period for fiscal year"></canvas>' +
-      '</div>' +
       '<div class="maint-trend-period-delta">' +
       '<span class="maint-trend-period-label">Last Period</span> ' +
       '<span class="maint-trend-period-value ' +
       lastPeriodValueClass +
       '">' +
       esc(String(lastPeriodValue).replace(/\s+%/g, '%')) +
-      '</span></div></div>' +
+      '</span></div></div></div>' +
       '</div>' +
       '<div class="maint-kpi-footer-stats maint-kpi-footer-visible">' +
       '<span class="maint-footer-left">' +
@@ -1023,7 +1022,7 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 4, bottom: 20, left: 0, right: 0 } },
+        layout: { padding: { top: 2, bottom: 4, left: 0, right: 0 } },
         plugins: { legend: { display: false }, tooltip: { enabled: true } },
         scales: { x: { display: false }, y: { display: false } },
         animation: { duration: 600 },
