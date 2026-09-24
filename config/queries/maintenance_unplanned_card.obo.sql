@@ -56,6 +56,50 @@ SELECT
      AND {{shift_filter}}
      AND {{prev_period_flag_filter}}
   ) AS prev_period_dt_pct,
+  -- Latest fiscal week in scope (max production period, then max week): baseline for WTD "Last Week" delta.
+  (SELECT ROUND({{dt_pct_m}} * 100, 2)
+   FROM {{catalog}}.pgt_plnt_prodtn_metric_view v
+   WHERE {{dt_pct_filter}}
+     AND {{year_filter}}
+     AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
+     AND {{region_filter}}
+     AND {{line_filter}}
+     AND {{department_filter}}
+     AND {{shift_filter}}
+     AND CAST(v.{{period_sort}} AS INT) = (
+       SELECT MAX(CAST({{period_sort}} AS INT))
+       FROM {{catalog}}.pgt_plnt_prodtn_metric_view
+       WHERE {{dt_pct_filter}}
+         AND {{year_filter}}
+         AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
+         AND {{region_filter}}
+         AND {{line_filter}}
+         AND {{department_filter}}
+         AND {{shift_filter}}
+     )
+     AND CAST(v.{{week_sort}} AS INT) = (
+       SELECT MAX(CAST({{week_sort}} AS INT))
+       FROM {{catalog}}.pgt_plnt_prodtn_metric_view w
+       WHERE {{dt_pct_filter}}
+         AND {{year_filter}}
+         AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
+         AND {{region_filter}}
+         AND {{line_filter}}
+         AND {{department_filter}}
+         AND {{shift_filter}}
+         AND CAST(w.{{period_sort}} AS INT) = (
+           SELECT MAX(CAST({{period_sort}} AS INT))
+           FROM {{catalog}}.pgt_plnt_prodtn_metric_view
+           WHERE {{dt_pct_filter}}
+             AND {{year_filter}}
+             AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
+             AND {{region_filter}}
+             AND {{line_filter}}
+             AND {{department_filter}}
+             AND {{shift_filter}}
+         )
+     )
+  ) AS latest_week_dt_pct,
   (SELECT ROUND({{dt_pct_m}} * 100, 2)
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view
    WHERE {{dt_pct_filter}}

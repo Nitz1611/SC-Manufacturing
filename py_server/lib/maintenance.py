@@ -91,13 +91,15 @@ def _compute_last_period_delta(
     dt_pct: float,
     prev_period_pct: float,
     ytd_trend: list[float],
+    latest_week_pct: float | None = None,
 ) -> tuple[float, str]:
     """Return (delta pp, UI label suffix) aligned with the selected timeframe."""
     if timeframe == "ytd" and len(ytd_trend) >= 2:
         delta = round(float(ytd_trend[-1]) - float(ytd_trend[-2]), 2)
         return delta, "Last Period"
     if timeframe == "wtd":
-        return round(dt_pct - prev_period_pct, 2), "Last Week"
+        baseline = latest_week_pct if latest_week_pct is not None else prev_period_pct
+        return round(dt_pct - baseline, 2), "Last Week"
     if timeframe == "prev_week":
         return round(dt_pct - prev_period_pct, 2), "Prior Week"
     if timeframe == "prev_period":
@@ -285,6 +287,10 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
         target = DT_TARGET_PCT
 
     prev_period_pct = _parse_pct(card.get("prev_period_dt_pct"))
+    latest_week_raw = card.get("latest_week_dt_pct")
+    latest_week_pct = (
+        _parse_pct(latest_week_raw) if latest_week_raw is not None else None
+    )
 
     ytd_periods = metrics.get("ytd_periods") or []
     ytd_trend = metrics.get("ytd_period_trend") or []
@@ -294,6 +300,7 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
         dt_pct,
         prev_period_pct,
         ytd_trend,
+        latest_week_pct=latest_week_pct,
     )
 
     delta_vs_target = round(dt_pct - target, 2)

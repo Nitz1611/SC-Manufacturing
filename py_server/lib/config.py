@@ -85,6 +85,10 @@ def period_sort_column() -> str:
     return quote_ident(GOLD_NAMES["period"])
 
 
+def week_sort_column() -> str:
+    return quote_ident(GOLD_NAMES["week"])
+
+
 def week_expression() -> str:
     raw = (os.environ.get("DATABRICKS_WEEK_EXPR") or "").strip()
     if raw:
@@ -308,6 +312,7 @@ def _apply_sql_fragments(sql: str) -> str:
         sql.replace("{{year_filter}}", yf)
         .replace("{{period_expr}}", period_expression())
         .replace("{{period_sort}}", period_sort_column())
+        .replace("{{week_sort}}", week_sort_column())
         .replace("{{week_expr}}", week_expression())
         .replace("{{shift_expr}}", shift_expression())
         .replace("{{date_col}}", date_column())
