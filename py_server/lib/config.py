@@ -166,6 +166,7 @@ TIMEFRAME_FLAG_COLUMNS: dict[str, str] = {
     "prev_week": "Prev Week Flag",
     "prev_period": "Prev Period Flag",
     "today": "Today Flag",
+    "yesterday": "Yesterday Flag",
 }
 
 
@@ -415,6 +416,7 @@ def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
         "prev_week": "prev_week",
         "prev_period": "prev_period",
         "today": "today",
+        "yesterday": "yesterday",
         "custom": "custom",
     }
     period = tf_map.get(timeframe, timeframe)

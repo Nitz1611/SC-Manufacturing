@@ -972,13 +972,8 @@
           '<div class="ai-summary-icon" aria-hidden="true">✦</div>' +
           '<div class="maint-ai-content">' +
           '<div class="maint-ai-head">' +
-          '<span class="maint-severity ' +
-          esc(s.severity || 'info') +
-          '">' +
-          esc(severityLabel(s.severity)) +
-          '</span>' +
           '<span class="maint-insight-time">' +
-          esc(s.timestamp || 'Just now') +
+          esc(s.timestamp || 'Period to date') +
           '</span>' +
           '</div>' +
           '<div class="ai-summary-label">' +
@@ -990,6 +985,44 @@
         );
       })
       .join('');
+  }
+
+  function renderInsightsTabs() {
+    var tab = state.insightTab || 'alerts';
+    return (
+      '<div class="maint-insights-tabs" role="tablist">' +
+      '<button type="button" class="maint-insights-tab' +
+      (tab === 'alerts' ? ' active' : '') +
+      '" data-tab="alerts" role="tab" aria-selected="' +
+      (tab === 'alerts' ? 'true' : 'false') +
+      '">Alerts</button>' +
+      '<button type="button" class="maint-insights-tab' +
+      (tab === 'insights' ? ' active' : '') +
+      '" data-tab="insights" role="tab" aria-selected="' +
+      (tab === 'insights' ? 'true' : 'false') +
+      '">Key Insights</button></div>'
+    );
+  }
+
+  function renderInsightsPanel(p) {
+    var tab = state.insightTab || 'alerts';
+    var scopeNote =
+      tab === 'alerts'
+        ? 'Previous day · respects site, region, line, department, and shift filters'
+        : 'Period to date (PTD) · respects site, region, line, department, and shift filters';
+    var body =
+      tab === 'alerts'
+        ? '<div class="maint-alerts-list" id="maint-alerts-list">' + renderAlerts(p.alerts) + '</div>'
+        : '<div class="maint-insights-list" id="maint-insights-list">' +
+          renderAiSummaries(p.ai_summaries) +
+          '</div>';
+    return (
+      renderInsightsTabs() +
+      '<p class="maint-insights-scope">' +
+      esc(scopeNote) +
+      '</p>' +
+      body
+    );
   }
 
   function renderAlerts(alerts) {
@@ -1077,17 +1110,9 @@
       renderPrimaryKpi(kpi) +
       renderSecondaryKpis(p.secondary_kpis) +
       '</div>' +
-      '<div class="maint-insights-grid">' +
-      '<section class="maint-insights-section maint-alerts-section" aria-label="Alerts">' +
-      '<h3 class="maint-section-title">Alerts</h3>' +
-      '<div class="maint-alerts-list" id="maint-alerts-list">' +
-      renderAlerts(p.alerts) +
-      '</div></section>' +
-      '<section class="maint-insights-section maint-key-insights-section" aria-label="Key Insights">' +
-      '<h3 class="maint-section-title">Key Insights</h3>' +
-      '<div class="maint-insights-list" id="maint-insights-list">' +
-      renderAiSummaries(p.ai_summaries) +
-      '</div></section></div>';
+      '<div class="maint-insights-panel-wrap">' +
+      renderInsightsPanel(p) +
+      '</div>';
 
     bindMaintenanceEvents();
     var primaryCard = document.querySelector('.maint-kpi-card-design[data-action="my-report"]');
@@ -1185,7 +1210,7 @@
   }
 
   function bindMaintenanceEvents() {
-    $$('.maint-tab[data-tab]').forEach(function (tab) {
+    $$('.maint-insights-tab[data-tab], .maint-tab[data-tab]').forEach(function (tab) {
       tab.addEventListener('click', function () {
         state.insightTab = tab.getAttribute('data-tab');
         renderMaintenance();
@@ -1598,6 +1623,7 @@
   function renderReportSites(p) {
     var topSite = (p.sites_at_risk && p.sites_at_risk[0] && p.sites_at_risk[0].site) || 'Top Site';
     var target = (p.kpis && p.kpis.primary && p.kpis.primary.target) || DT_TARGET;
+    var badge = p.site_lines_badge || { label: 'HIGH LOSS', class: 'critical' };
     return (
       '<div class="maint-bar-section maint-bar-section-compact">' +
       '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
@@ -1608,7 +1634,11 @@
       '<h4 style="margin:0">' +
       esc(topSite) +
       ' — Top 5 Lines by Unplanned Downtime Hours</h4>' +
-      '<span class="maint-severity critical">HIGH LOSS</span></div>' +
+      '<span class="maint-severity ' +
+      esc(badge.class || 'critical') +
+      '">' +
+      esc(badge.label || 'HIGH LOSS') +
+      '</span></div>' +
       lineExposureTable(p.site_lines, target) +
       '</div>'
     );
@@ -1825,33 +1855,24 @@
     var bar = $('#maint-filter-bar');
     if (!bar || bar.dataset.built) return;
     bar.dataset.built = '1';
-    bar.className = 'maint-filter-bar filter-bar maint-filter-bar-stacked';
+    bar.className = 'maint-filter-bar filter-bar';
     bar.replaceChildren();
 
-    var row1 = document.createElement('div');
-    row1.className = 'maint-filter-row';
-    var row2 = document.createElement('div');
-    row2.className = 'maint-filter-row';
-
-    row1.appendChild(
+    bar.appendChild(
       createSlicerGroup('timeframe', 'Timeframe', TIMEFRAME_OPTIONS, state.filters.timeframe, false)
     );
-    row1.appendChild(
+    bar.appendChild(
       createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
     );
-    row1.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, false, true));
-    row1.appendChild(
+    bar.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, false, true));
+    bar.appendChild(
       createSlicerGroup('region', 'Region', regionSlicerOptions(), state.filters.region, true)
     );
-
-    row2.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
-    row2.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
-    row2.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
-    row2.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
-    row2.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
-
-    bar.appendChild(row1);
-    bar.appendChild(row2);
+    bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
+    bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
+    bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
+    bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
+    bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
 
     var showInGroup = createSlicerGroup(
       'showIn',

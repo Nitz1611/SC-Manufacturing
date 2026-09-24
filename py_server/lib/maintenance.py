@@ -449,9 +449,8 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
     )
     cards.append({
         "id": "network-impact",
-        "severity": _severity_label(dt_pct),
         "title": f"Network unplanned downtime at {dt_pct:.2f}% — business exposure",
-        "timestamp": now,
+        "timestamp": "Period to date",
         "body": overview_body,
     })
 
@@ -474,9 +473,8 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
         )
         cards.append({
             "id": "site-risk",
-            "severity": _severity_label(float(top["dt_pct"])),
             "title": f"{top['site']} drives network downtime risk",
-            "timestamp": now,
+            "timestamp": "Period to date",
             "body": site_body,
         })
 
@@ -496,9 +494,8 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
         )
         cards.append({
             "id": "root-cause",
-            "severity": _severity_label(dt_pct),
             "title": f"{top3[0]['reason']} leads network loss profile",
-            "timestamp": now,
+            "timestamp": "Period to date",
             "body": reason_body,
         })
 
@@ -516,9 +513,8 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
         )
         cards.append({
             "id": "period-pattern",
-            "severity": _severity_label(max(trend)),
             "title": f"Period volatility — peak at {peak_label}",
-            "timestamp": now,
+            "timestamp": "Period to date",
             "body": period_body,
         })
     elif shifts:
@@ -544,9 +540,8 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
         )
         cards.append({
             "id": "shift-pattern",
-            "severity": "medium",
             "title": f"{top_shift.get('shift')} concentrates downtime hours",
-            "timestamp": now,
+            "timestamp": "Period to date",
             "body": shift_body,
         })
 
@@ -565,9 +560,8 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
     )
     cards.append({
         "id": "recommended-actions",
-        "severity": _severity_label(dt_pct),
         "title": "Recommended actions — quantified recovery path",
-        "timestamp": now,
+        "timestamp": "Period to date",
         "body": action_body,
     })
 
@@ -684,8 +678,12 @@ def _build_alerts(metrics: MetricsPayload) -> list[dict[str, Any]]:
             "line": line_name,
             "title": f"Unplanned Downtime % {site} — Line {line_name}",
             "summary": summary,
-            "timestamp": f"{shift_label} (recent)",
+            "timestamp": "Previous day",
             "severity": severity,
+            "severity_rule": (
+                "Critical if site DT% ≥ network avg + 3pp or ≥ 10%; "
+                "High if ≥ network avg + 1.5pp or ≥ 7%; else Medium"
+            ),
             "dt_pct": dt_pct,
             "downtime_hrs": dt_hrs,
             "network_avg": network_avg,
@@ -746,6 +744,7 @@ def _build_sites_at_risk(metrics: MetricsPayload) -> list[dict[str, Any]]:
 
 
 def _build_site_lines(metrics: MetricsPayload) -> list[dict[str, Any]]:
+    """Line rows from site_line_by_period / site_line_by_period_hrs (Line Desc × Production Period)."""
     sites_at_risk = _build_sites_at_risk(metrics)
     if not sites_at_risk:
         return []
@@ -875,9 +874,46 @@ def _build_insights_bullets(metrics: MetricsPayload) -> list[str]:
     return bullets
 
 
+def _metrics_for_timeframe(filters: dict[str, Any] | None, timeframe: str) -> MetricsPayload:
+    from py_server.lib.analytics import get_metrics_bundle
+
+    scoped = dict(filters or {})
+    scoped["timeframe"] = timeframe
+    return get_metrics_bundle(scoped)
+
+
+def _build_maintenance_payload_from_filters(
+    metrics: MetricsPayload,
+    filters: dict[str, Any] | None,
+) -> dict[str, Any]:
+    alerts_m = _metrics_for_timeframe(filters, "yesterday")
+    insights_m = _metrics_for_timeframe(filters, "ptd")
+    return build_maintenance_payload(
+        metrics,
+        filters,
+        alerts_metrics=alerts_m,
+        insights_metrics=insights_m,
+    )
+
+
+def _line_loss_badge(alerts: list[dict[str, Any]], top_site: str) -> dict[str, str]:
+    for alert in alerts:
+        if str(alert.get("site") or "").upper() == str(top_site or "").upper():
+            sev = str(alert.get("severity") or "High")
+            css = sev.lower()
+            if css == "critical":
+                return {"label": "HIGH LOSS", "class": "critical"}
+            if css == "high":
+                return {"label": "HIGH LOSS", "class": "high"}
+            return {"label": "ELEVATED", "class": "medium"}
+    return {"label": "HIGH LOSS", "class": "critical"}
+
+
 def build_maintenance_payload(
     metrics: MetricsPayload,
     filters: dict[str, Any] | None = None,
+    alerts_metrics: MetricsPayload | None = None,
+    insights_metrics: MetricsPayload | None = None,
 ) -> dict[str, Any]:
     """Build maintenance console dashboard payload from live MetricsPayload."""
     effective_filters = filters
@@ -886,15 +922,26 @@ def build_maintenance_payload(
         if isinstance(meta_filters, dict):
             effective_filters = meta_filters
 
+    alerts_m = alerts_metrics or metrics
+    insights_m = insights_metrics or metrics
+    alerts = _build_alerts(alerts_m)
+    sites_at_risk = _build_sites_at_risk(metrics)
+    top_site = sites_at_risk[0]["site"] if sites_at_risk else ""
+
     return {
-        "meta": metrics.get("meta") or {},
+        "meta": {
+            **(metrics.get("meta") or {}),
+            "alerts_timeframe": "yesterday",
+            "insights_timeframe": "ptd",
+        },
         "kpis": _build_kpis(metrics, effective_filters),
         "secondary_kpis": _build_secondary_kpis(metrics),
         "filter_options": _build_filter_options(metrics),
-        "ai_summaries": _build_ai_summaries(metrics),
-        "alerts": _build_alerts(metrics),
-        "sites_at_risk": _build_sites_at_risk(metrics),
+        "ai_summaries": _build_ai_summaries(insights_m),
+        "alerts": alerts,
+        "sites_at_risk": sites_at_risk,
         "site_lines": _build_site_lines(metrics),
+        "site_lines_badge": _line_loss_badge(alerts, top_site),
         "downtime_drivers": _build_downtime_drivers(metrics),
         "drilldown": _build_drilldown(metrics),
         "insights_bullets": _build_insights_bullets(metrics),
@@ -904,4 +951,5 @@ def build_maintenance_payload(
 __all__ = [
     "DT_TARGET_PCT",
     "build_maintenance_payload",
+    "build_maintenance_payload_from_filters",
 ]
