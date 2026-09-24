@@ -305,6 +305,8 @@
     }
     return DT_TARGET;
   }
+
+  function fetchAiInsights() {
     if (state.insightsLoading) return;
     state.insightsLoading = true;
     return fetch('/api/maintenance/insights', {
@@ -2095,10 +2097,12 @@
   }
 
   function init() {
+    if (window.__maintenanceConsoleInitDone) return;
     if (!window.ManufacturingConsole) {
       setTimeout(init, 50);
       return;
     }
+    window.__maintenanceConsoleInitDone = true;
     syncFromConsoleFilters();
     state.filters.year = state.filters.year || '2026';
     state.filters.timeframe = state.filters.timeframe || 'ptd';
