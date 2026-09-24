@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import math
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from py_server.lib.metrics_transform import MetricsPayload, build_tab_insights
 
-DT_TARGET_PCT = 4.5
+DT_TARGET_PCT = 4.5  # Demo/offline fallback only — live target comes from SQL (see _resolve_unplanned_target).
 
 PERIOD_DELTA_MAP: Dict[str, tuple[str, str]] = {
     "ptd": ("vs prior period", "Period to date"),
@@ -119,6 +120,50 @@ def _period_delta_labels(filters: dict[str, Any] | None) -> tuple[str, str]:
         or "FY"
     ).lower()
     return PERIOD_DELTA_MAP.get(tf, ("vs prior period", tf.upper()))
+
+
+def _env_configured_target() -> float | None:
+    for key in ("DATABRICKS_FLNA_DT_TARGET_PCT", "MAINTENANCE_DT_TARGET_PCT", "DATABRICKS_DT_TARGET_PCT"):
+        raw = (os.environ.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            val = float(raw)
+            return val if math.isfinite(val) else None
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_unplanned_target(metrics: MetricsPayload) -> float:
+    """FLNA / operational target — live SQL first, then env, demo constant last."""
+    card = metrics.get("maintenance_unplanned") or {}
+    if card.get("ytd_target_dt_pct") is not None:
+        return _parse_pct(card.get("ytd_target_dt_pct"))
+    env_target = _env_configured_target()
+    if env_target is not None:
+        return env_target
+    if _metrics_is_live(metrics):
+        return 0.0
+    return DT_TARGET_PCT
+
+
+def _resolve_primary_dt_pct(metrics: MetricsPayload) -> float:
+    card = metrics.get("maintenance_unplanned") or {}
+    if card.get("current_dt_pct") is not None:
+        return _parse_pct(card.get("current_dt_pct"))
+    return _parse_pct((metrics.get("kpis") or {}).get("downtime_pct", {}).get("value"))
+
+
+def _resolve_primary_dt_hrs(metrics: MetricsPayload) -> float:
+    kpis = metrics.get("kpis") or {}
+    hours = _parse_hours((kpis.get("downtime_hrs") or {}).get("value"))
+    if hours > 0:
+        return hours
+    card = metrics.get("maintenance_unplanned") or {}
+    if card.get("last_shift_unplanned_hrs") is not None:
+        return float(card.get("last_shift_unplanned_hrs") or 0)
+    return 0.0
 
 
 def _lookup_site_nested(
@@ -302,10 +347,7 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
     else:
         dt_pct = _parse_pct(dt.get("value"))
 
-    if card.get("ytd_target_dt_pct") is not None:
-        target = _parse_pct(card.get("ytd_target_dt_pct"))
-    else:
-        target = DT_TARGET_PCT
+    target = _resolve_unplanned_target(metrics)
 
     prev_period_pct = _parse_pct(card.get("prev_period_dt_pct"))
     latest_week_raw = card.get("latest_week_dt_pct")
@@ -481,18 +523,19 @@ def _business_impact_hours(dt_pct: float, dt_hrs: float, target: float = DT_TARG
 
 def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    kpis = metrics.get("kpis") or {}
-    dt_pct = _parse_pct((kpis.get("downtime_pct") or {}).get("value"))
-    dt_hrs = _parse_hours((kpis.get("downtime_hrs") or {}).get("value"))
+    dt_pct = _resolve_primary_dt_pct(metrics)
+    dt_hrs = _resolve_primary_dt_hrs(metrics)
+    target = _resolve_unplanned_target(metrics)
     periods = metrics.get("periods") or []
     trend = metrics.get("period_trend") or []
     shifts = metrics.get("shift_comparison") or []
     reasons = metrics.get("reasons") or []
     site_kpis = _resolve_site_kpis(metrics)
     sites_at_risk = _build_sites_at_risk(metrics)
-    gap_pts = round(dt_pct - DT_TARGET_PCT, 2)
-    impact_hrs = _business_impact_hours(dt_pct, dt_hrs)
+    gap_pts = round(dt_pct - target, 2) if target > 0 else 0.0
+    impact_hrs = _business_impact_hours(dt_pct, dt_hrs, target) if target > 0 else 0.0
     sched_hrs = _estimate_sched_hours(dt_hrs, dt_pct)
+    target_label = f"{target:.2f}%" if target > 0 else "the operational target"
 
     cards: list[dict[str, Any]] = []
 
@@ -500,7 +543,7 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
         f"The network is running at {dt_pct:.2f}% unplanned downtime "
         f"({_locale_number(dt_hrs)} machine hours lost), "
         f"{abs(gap_pts):.2f} percentage points {'above' if gap_pts > 0 else 'below'} "
-        f"the {DT_TARGET_PCT:.2f}% operational target. "
+        f"{target_label}. "
         f"Across an estimated {_locale_number(sched_hrs)} scheduled hours, "
         f"this gap represents roughly {_locale_number(impact_hrs)} recoverable production hours "
         f"if performance returns to target — equivalent to sustained capacity risk across the FLNA network."
@@ -604,7 +647,7 @@ def _build_ai_summaries(metrics: MetricsPayload) -> list[dict[str, Any]]:
         })
 
     action_body = (
-        f"Closing the gap from {dt_pct:.2f}% to {DT_TARGET_PCT:.2f}% would recover an estimated "
+        f"Closing the gap from {dt_pct:.2f}% to {target_label} would recover an estimated "
         f"{_locale_number(impact_hrs)} machine hours in this filter window. "
     )
     if sites_at_risk and reasons:
@@ -858,11 +901,11 @@ def _build_drilldown(metrics: MetricsPayload) -> list[dict[str, Any]]:
     return sorted(points, key=lambda p: p["dt_pct"], reverse=True)
 
 
-def _build_insights_bullets(metrics: MetricsPayload) -> list[str]:
-    """Executive-style insight bullets for My Report (template, not Claude)."""
-    kpis = metrics.get("kpis") or {}
-    dt_pct = _parse_pct((kpis.get("downtime_pct") or {}).get("value"))
-    dt_hrs = _parse_hours((kpis.get("downtime_hrs") or {}).get("value"))
+def _build_insights_bullets(metrics: MetricsPayload, target_pct: float | None = None) -> list[str]:
+    """Executive-style insight bullets for My Report — template text, live metric values."""
+    dt_pct = _resolve_primary_dt_pct(metrics)
+    dt_hrs = _resolve_primary_dt_hrs(metrics)
+    target = target_pct if target_pct is not None else _resolve_unplanned_target(metrics)
     site_kpis = _resolve_site_kpis(metrics)
     network_avg = _network_avg_dt_pct(site_kpis)
     reasons = metrics.get("reasons") or []
@@ -870,24 +913,30 @@ def _build_insights_bullets(metrics: MetricsPayload) -> list[str]:
     site_lines = _build_site_lines(metrics)
     trend = metrics.get("period_trend") or []
     periods = metrics.get("periods") or []
-    gap = round(dt_pct - DT_TARGET_PCT, 2)
+    gap = round(dt_pct - target, 2) if target > 0 else 0.0
+    target_phrase = f"the {target:.2f}% target" if target > 0 else "the operational target"
     above_avg = len(
         [s for s in site_kpis.values() if float(s.get("downtime_pct") or 0) > network_avg]
     )
 
     bullets: list[str] = []
 
-    if gap > 0:
+    if target > 0 and gap > 0:
         bullets.append(
             f"In the current view, unplanned downtime stands at {dt_pct:.2f}% "
             f"({_locale_number(dt_hrs)} hours lost)—about {abs(gap):.2f} points above "
-            f"the {DT_TARGET_PCT:.2f}% target and worth treating as a network priority."
+            f"{target_phrase} and worth treating as a network priority."
+        )
+    elif target > 0:
+        bullets.append(
+            f"Unplanned downtime is {dt_pct:.2f}% ({_locale_number(dt_hrs)} hours) in this view, "
+            f"{abs(gap):.2f} points below {target_phrase}. "
+            "Sustain current PM and containment practices to hold the gain."
         )
     else:
         bullets.append(
-            f"Unplanned downtime is {dt_pct:.2f}% ({_locale_number(dt_hrs)} hours) in this view, "
-            f"{abs(gap):.2f} points below the {DT_TARGET_PCT:.2f}% target. "
-            "Sustain current PM and containment practices to hold the gain."
+            f"In the current view, unplanned downtime is {dt_pct:.2f}% "
+            f"({_locale_number(dt_hrs)} hours lost) across the filtered network."
         )
 
     if site_kpis:
@@ -1009,6 +1058,8 @@ def build_maintenance_payload(
     alerts = _build_alerts(alerts_m)
     sites_at_risk = _build_sites_at_risk(metrics)
     top_site = sites_at_risk[0]["site"] if sites_at_risk else ""
+    kpis_block = _build_kpis(metrics, effective_filters)
+    primary_target = float((kpis_block.get("primary") or {}).get("target") or 0)
 
     return {
         "meta": {
@@ -1016,7 +1067,7 @@ def build_maintenance_payload(
             "alerts_timeframe": "yesterday",
             "insights_timeframe": "ptd",
         },
-        "kpis": _build_kpis(metrics, effective_filters),
+        "kpis": kpis_block,
         "secondary_kpis": _build_secondary_kpis(metrics),
         "filter_options": _build_filter_options(metrics),
         "ai_summaries": _build_ai_summaries(insights_m),
@@ -1026,7 +1077,14 @@ def build_maintenance_payload(
         "site_lines_badge": _line_loss_badge(alerts, top_site),
         "downtime_drivers": _build_downtime_drivers(metrics),
         "drilldown": _build_drilldown(metrics),
-        "insights_bullets": _build_insights_bullets(metrics),
+        "insights_bullets": _build_insights_bullets(metrics, target_pct=primary_target),
+        "insights_meta": {
+            "source": "template",
+            "description": "Narrative generated server-side from live metrics payload (not Claude).",
+            "metrics_source": (metrics.get("meta") or {}).get("source"),
+            "target_pct": primary_target,
+            "target_field": "maintenance_unplanned.ytd_target_dt_pct",
+        },
     }
 
 

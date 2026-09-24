@@ -294,7 +294,17 @@
     return [SELECT_ALL].concat(opts);
   }
 
-  function fetchAiInsights() {
+  function maintenanceTargetPct(payload) {
+    var p = payload || state.payload;
+    if (!p) return DT_TARGET;
+    if (p.kpis && p.kpis.primary && p.kpis.primary.target != null) {
+      return Number(p.kpis.primary.target);
+    }
+    if (p.insights_meta && p.insights_meta.target_pct != null) {
+      return Number(p.insights_meta.target_pct);
+    }
+    return DT_TARGET;
+  }
     if (state.insightsLoading) return;
     state.insightsLoading = true;
     return fetch('/api/maintenance/insights', {
