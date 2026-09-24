@@ -238,31 +238,52 @@ def _shift_last_delta(shifts: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
+def _metrics_is_live(metrics: MetricsPayload) -> bool:
+    src = str((metrics.get("meta") or {}).get("source") or "")
+    return src in ("sql", "cache")
+
+
 def _build_filter_options(metrics: MetricsPayload) -> dict[str, Any]:
     fo = metrics.get("filter_options") or {}
+    live = _metrics_is_live(metrics)
     top_lines = metrics.get("top_lines") or {}
-    line_keys = fo.get("lines") or []
-    if not line_keys:
+    line_keys = list(fo.get("lines") or [])
+    if not line_keys and not live:
         line_keys = sorted(top_lines.keys()) if top_lines else []
-    site_line = metrics.get("site_line_by_period") or {}
-    if not line_keys and site_line:
-        for lines in site_line.values():
-            line_keys.extend(lines.keys())
-        line_keys = sorted(set(line_keys))
-    dept_keys = fo.get("departments") or []
-    if not dept_keys:
+        site_line = metrics.get("site_line_by_period") or {}
+        if not line_keys and site_line:
+            for lines in site_line.values():
+                line_keys.extend(lines.keys())
+            line_keys = sorted(set(line_keys))
+    dept_keys = list(fo.get("departments") or [])
+    if not dept_keys and not live:
         dept_keys = sorted((metrics.get("category_by_period") or {}).keys())
-    shift_keys = fo.get("shifts") or sorted(
-        {
-            str(s.get("shift"))
-            for s in (metrics.get("shift_comparison") or [])
-            if s.get("shift")
-        }
-    )
+    shift_keys = list(fo.get("shifts") or [])
+    if not shift_keys and not live:
+        shift_keys = sorted(
+            {
+                str(s.get("shift"))
+                for s in (metrics.get("shift_comparison") or [])
+                if s.get("shift")
+            }
+        )
+    sites = list(fo.get("sites") or [])
+    if not sites and live:
+        sites = sorted(_resolve_site_kpis(metrics).keys())
+    regions = list(fo.get("regions") or [])
+    years = list(fo.get("years") or [])
+    if not years:
+        meta_filters = (metrics.get("meta") or {}).get("filters") or {}
+        y = meta_filters.get("year")
+        if y:
+            try:
+                years = [int(str(y))]
+            except ValueError:
+                pass
     return {
-        "sites": fo.get("sites") or [],
-        "regions": fo.get("regions") or [],
-        "years": fo.get("years") or [],
+        "sites": sites,
+        "regions": regions,
+        "years": years,
         "lines": line_keys,
         "site_regions": fo.get("site_regions") or {},
         "shifts": shift_keys,
@@ -838,6 +859,7 @@ def _build_drilldown(metrics: MetricsPayload) -> list[dict[str, Any]]:
 
 
 def _build_insights_bullets(metrics: MetricsPayload) -> list[str]:
+    """Executive-style insight bullets for My Report (template, not Claude)."""
     kpis = metrics.get("kpis") or {}
     dt_pct = _parse_pct((kpis.get("downtime_pct") or {}).get("value"))
     dt_hrs = _parse_hours((kpis.get("downtime_hrs") or {}).get("value"))
@@ -845,58 +867,81 @@ def _build_insights_bullets(metrics: MetricsPayload) -> list[str]:
     network_avg = _network_avg_dt_pct(site_kpis)
     reasons = metrics.get("reasons") or []
     sites_at_risk = _build_sites_at_risk(metrics)
-    tab = build_tab_insights(metrics)
+    site_lines = _build_site_lines(metrics)
     trend = metrics.get("period_trend") or []
     periods = metrics.get("periods") or []
+    gap = round(dt_pct - DT_TARGET_PCT, 2)
+    above_avg = len(
+        [s for s in site_kpis.values() if float(s.get("downtime_pct") or 0) > network_avg]
+    )
 
-    bullets = [
-        f"Network unplanned DT: {dt_pct:.2f}% ({_locale_number(dt_hrs)} h) "
-        f"vs {DT_TARGET_PCT}% target ({dt_pct - DT_TARGET_PCT:+.2f} pts).",
-        f"Site average: {network_avg:.2f}% — "
-        f"{len([s for s in site_kpis.values() if float(s.get('downtime_pct') or 0) > network_avg])} "
-        "sites above average.",
-    ]
+    bullets: list[str] = []
+
+    if gap > 0:
+        bullets.append(
+            f"In the current view, unplanned downtime stands at {dt_pct:.2f}% "
+            f"({_locale_number(dt_hrs)} hours lost)—about {abs(gap):.2f} points above "
+            f"the {DT_TARGET_PCT:.2f}% target and worth treating as a network priority."
+        )
+    else:
+        bullets.append(
+            f"Unplanned downtime is {dt_pct:.2f}% ({_locale_number(dt_hrs)} hours) in this view, "
+            f"{abs(gap):.2f} points below the {DT_TARGET_PCT:.2f}% target. "
+            "Sustain current PM and containment practices to hold the gain."
+        )
+
+    if site_kpis:
+        bullets.append(
+            f"The network average is {network_avg:.2f}% unplanned downtime; "
+            f"{above_avg} site{'s' if above_avg != 1 else ''} {'are' if above_avg != 1 else 'is'} "
+            f"running above that level and should be reviewed in the weekly maintenance cadence."
+        )
+
     if sites_at_risk:
         top = sites_at_risk[0]
         bullets.append(
-            f"Highest-risk site: {top['site']} at {top['dt_pct']:.2f}% "
-            f"({_locale_number(top['hours'])} h)."
+            f"{top['site']} shows the highest exposure at {top['dt_pct']:.2f}% "
+            f"({_locale_number(top['hours'])} unplanned hours on "
+            f"{_locale_number(top['sched_hrs'])} scheduled hours). "
+            "A focused stabilization plan there will move the network fastest."
         )
+
     if reasons:
-        top3 = reasons[:3]
+        lead = reasons[0]
         bullets.append(
-            "Top drivers: "
-            + "; ".join(f"{r['reason']} ({r['pct']:.1f}%)" for r in top3)
-            + "."
+            f"{lead['reason']} is the leading loss driver "
+            f"({_locale_number(lead['hours'])} h, {lead['pct']:.1f}% of filtered unplanned downtime). "
+            "Pair root-cause reviews with targeted PM on repeat mechanical and sanitation events."
         )
-    elif metrics.get("category_by_period"):
-        top_cat = max(
-            (metrics.get("category_by_period") or {}).items(),
-            key=lambda item: sum(item[1]),
-        )
-        bullets.append(
-            f"Leading category: {top_cat[0]} "
-            f"({sum(top_cat[1]) / len(top_cat[1]):.2f}% avg across periods)."
-        )
-    bullets.append(tab.get("line") or "Review line heatmap for asset-level focus.")
-    bullets.append(tab.get("dow") or "Compare shift patterns to schedule PM windows.")
-    if trend and periods:
+    elif trend and periods:
         peak_i = trend.index(max(trend))
         peak_label = periods[peak_i] if peak_i < len(periods) else f"P{peak_i + 1}"
         bullets.append(
-            f"Period trend peaks at {peak_label} ({max(trend):.2f}%) — "
-            "align maintenance capacity ahead of that window."
+            f"Downtime intensity peaks around {peak_label} ({max(trend):.2f}%). "
+            "Align staffing and spare-parts readiness ahead of that window."
         )
-    elif tab.get("reason"):
-        bullets.append(tab["reason"])
+
+    if site_lines:
+        names = ", ".join(row["line"] for row in site_lines[:3])
+        bullets.append(
+            f"At {site_lines[0]['site']}, the highest unplanned-hour lines are {names}. "
+            "Prioritize those assets for inspections and changeover standard work."
+        )
+    elif metrics.get("shift_comparison"):
+        shifts = metrics.get("shift_comparison") or []
+        top_shift = max(shifts, key=lambda s: float(s.get("hours") or 0))
+        bullets.append(
+            f"{top_shift.get('shift') or 'One shift'} accounts for "
+            f"{_locale_number(float(top_shift.get('hours') or 0))} unplanned hours—"
+            "compare shift handovers and staffing before adding capacity elsewhere."
+        )
     else:
         bullets.append(
-            f"Estimated scheduled hours: {_locale_number(_estimate_sched_hours(dt_hrs, dt_pct))} h "
-            "across the filtered network view."
+            "Use site and line drill-downs to confirm where hours concentrate before "
+            "committing maintenance resources."
         )
-    while len(bullets) < 5:
-        bullets.append(tab.get("overview") or f"Maintain focus on closing the gap to {DT_TARGET_PCT}% target.")
-    return bullets
+
+    return bullets[:5]
 
 
 def _metrics_for_timeframe(

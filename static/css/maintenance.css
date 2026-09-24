@@ -131,13 +131,24 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 .maint-filter-bar .filter-group.maint-filter-group-open,
 .maint-filter-bar .filter-group:has(.slicer.open) { z-index: 10045; }
 .maint-filter-bar .slicer.open .slicer-panel {
-  position: fixed;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: auto;
   z-index: 10050;
   opacity: 1;
   visibility: visible;
-  transform: none;
-  min-width: 260px;
+  transform: none !important;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+  min-width: 100%;
+  width: max(100%, 260px);
   max-height: min(320px, calc(100vh - 120px));
+  margin-top: 0;
+}
+.maint-root .maint-kpi-row,
+.maint-root .maint-content {
+  position: relative;
+  z-index: 1;
 }
 .maint-filter-bar .slicer-options {
   max-height: 240px;

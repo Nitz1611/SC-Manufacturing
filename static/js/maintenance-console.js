@@ -58,16 +58,20 @@
   var BAR_COLORS = CHART_COLORS;
   var DT_TARGET = 4.5;
   var SCATTER_COLORS = { outlier: '#dc2626', normal: '#eab308' };
-  var REGION_OPTIONS = [
-    'North America',
-    'Latin America',
-    'Europe',
-    'Asia Pacific',
-    'Middle East & Africa',
-  ];
   var SHIFT_OPTIONS = ['All', 'Shift 1', 'Shift 2', 'Shift 3'];
   var SHOW_IN_OPTIONS = ['Thousands', 'Actual', 'Percentage'];
   var SELECT_ALL = { value: 'All', label: 'Select All' };
+
+  /** Live filter dimensions from API — never hardcoded demo regions. */
+  var liveFilterOptions = {
+    sites: [],
+    regions: [],
+    years: [],
+    lines: [],
+    departments: [],
+    shifts: [],
+    site_regions: {},
+  };
 
   /** Original console-engine navigators — captured before wrapper patch */
   var engineSwitchPage = null;
@@ -353,15 +357,14 @@
 
   function positionMaintSlicerPanel(slicer) {
     if (!slicer) return;
-    var trigger = slicer.querySelector('.slicer-trigger');
     var panel = slicer.querySelector('.slicer-panel');
-    if (!trigger || !panel) return;
-    var rect = trigger.getBoundingClientRect();
-    panel.style.position = 'fixed';
-    panel.style.top = Math.round(rect.bottom + 6) + 'px';
-    panel.style.left = Math.round(rect.left) + 'px';
-    panel.style.minWidth = Math.max(rect.width, 260) + 'px';
-    panel.style.zIndex = '10050';
+    if (!panel) return;
+    panel.style.position = '';
+    panel.style.top = '';
+    panel.style.left = '';
+    panel.style.minWidth = '';
+    panel.style.width = '';
+    panel.style.zIndex = '';
   }
 
   function resetMaintSlicerPanel(slicer) {
@@ -471,9 +474,21 @@
   }
 
   function regionSlicerOptions() {
-    return REGION_OPTIONS.map(function (r) {
+    return (liveFilterOptions.regions || []).map(function (r) {
       return { value: r, label: r };
     });
+  }
+
+  function sanitizeRegionSelection() {
+    var allowed = liveFilterOptions.regions || [];
+    if (!allowed.length) {
+      state.filters.region = 'All';
+      return;
+    }
+    var list = normalizeRegionList(state.filters.region).filter(function (r) {
+      return allowed.indexOf(r) >= 0;
+    });
+    state.filters.region = list.length ? list.join(', ') : 'All';
   }
 
   function createSlicerGroup(id, label, options, currentValue, multi, searchable) {
@@ -580,6 +595,16 @@
   }
 
   function applyFilterOptions(opts) {
+    opts = opts || {};
+    liveFilterOptions = {
+      sites: opts.sites || [],
+      regions: opts.regions || [],
+      years: opts.years || [],
+      lines: opts.lines || [],
+      departments: opts.departments || [],
+      shifts: opts.shifts || [],
+      site_regions: opts.site_regions || {},
+    };
     if (opts.sites && opts.sites.length) {
       var siteOpts = opts.sites.map(function (s) {
         return { value: s, label: s };
@@ -610,6 +635,15 @@
       });
       populateSlicerOptions('department', deptOpts, state.filters.department, false);
       updateSlicerDisplay('department', state.filters.department);
+    }
+    if (opts.regions && opts.regions.length) {
+      sanitizeRegionSelection();
+      populateSlicerOptions('region', regionSlicerOptions(), state.filters.region, true);
+      updateSlicerDisplay('region', state.filters.region);
+    } else {
+      state.filters.region = 'All';
+      populateSlicerOptions('region', [], 'All', true);
+      updateSlicerDisplay('region', 'All');
     }
     updateDateFilterVisibility();
   }
