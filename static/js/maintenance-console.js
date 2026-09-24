@@ -2041,6 +2041,10 @@
       };
       crumb.textContent = labels[page] || page;
     }
+    var mc = window.ManufacturingConsole;
+    if (mc && mc.state) {
+      mc.state.page = page;
+    }
     updateNavActive();
   }
 
@@ -2126,6 +2130,24 @@
       }
       return engineSwitchKpiTab.call(mc, tab, force);
     };
+
+    if (typeof mc.reloadMetrics === 'function') {
+      var engineReloadMetrics = mc.reloadMetrics.bind(mc);
+      mc.reloadMetrics = function (force, opts) {
+        var out = engineReloadMetrics(force, opts);
+        if (state.page === 'maintenance') {
+          var reassert = function () {
+            updateShellForPage('maintenance');
+          };
+          if (out && typeof out.then === 'function') {
+            out.then(reassert).catch(reassert);
+          } else {
+            setTimeout(reassert, 0);
+          }
+        }
+        return out;
+      };
+    }
 
     updateShellForPage('maintenance');
     fetchMaintenanceData();
