@@ -153,52 +153,86 @@ def _shift_last_delta(shifts: list[dict[str, Any]]) -> dict[str, Any] | None:
 def _build_filter_options(metrics: MetricsPayload) -> dict[str, Any]:
     fo = metrics.get("filter_options") or {}
     top_lines = metrics.get("top_lines") or {}
-    line_keys = sorted(top_lines.keys()) if top_lines else []
+    line_keys = fo.get("lines") or []
+    if not line_keys:
+        line_keys = sorted(top_lines.keys()) if top_lines else []
     site_line = metrics.get("site_line_by_period") or {}
     if not line_keys and site_line:
         for lines in site_line.values():
             line_keys.extend(lines.keys())
         line_keys = sorted(set(line_keys))
+    dept_keys = fo.get("departments") or []
+    if not dept_keys:
+        dept_keys = sorted((metrics.get("category_by_period") or {}).keys())
+    shift_keys = fo.get("shifts") or sorted(
+        {
+            str(s.get("shift"))
+            for s in (metrics.get("shift_comparison") or [])
+            if s.get("shift")
+        }
+    )
     return {
         "sites": fo.get("sites") or [],
         "regions": fo.get("regions") or [],
         "years": fo.get("years") or [],
         "lines": line_keys,
         "site_regions": fo.get("site_regions") or {},
-        "shifts": sorted(
-            {
-                str(s.get("shift"))
-                for s in (metrics.get("shift_comparison") or [])
-                if s.get("shift")
-            }
-        ),
-        "departments": sorted((metrics.get("category_by_period") or {}).keys()),
+        "shifts": shift_keys,
+        "departments": dept_keys,
     }
 
 
 def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict[str, Any]:
+    card = metrics.get("maintenance_unplanned") or {}
     kpis = metrics.get("kpis") or {}
     dt = kpis.get("downtime_pct") or {}
     dt_hrs = kpis.get("downtime_hrs") or {}
-    dt_pct = _parse_pct(dt.get("value"))
-    hours = _parse_hours(dt_hrs.get("value"))
-    target = DT_TARGET_PCT
+
+    if card.get("current_dt_pct") is not None:
+        dt_pct = _parse_pct(card.get("current_dt_pct"))
+    else:
+        dt_pct = _parse_pct(dt.get("value"))
+
+    if card.get("ytd_target_dt_pct") is not None:
+        target = _parse_pct(card.get("ytd_target_dt_pct"))
+    else:
+        target = DT_TARGET_PCT
+
+    prev_period_pct = _parse_pct(card.get("prev_period_dt_pct"))
+    last_period_delta = round(dt_pct - prev_period_pct, 2) if prev_period_pct or card else 0.0
+
     delta_vs_target = round(dt_pct - target, 2)
     period_label, period_text = _period_delta_labels(filters or metrics.get("meta", {}).get("filters"))
-    periods = metrics.get("periods") or []
-    trend = metrics.get("period_trend") or []
-    trend_labels = periods[: len(trend)] if periods else [f"P{i + 1}" for i in range(len(trend))]
-    sched_hrs = _estimate_sched_hours(hours, dt_pct)
-    shift_delta = _shift_last_delta(metrics.get("shift_comparison") or [])
+
+    ytd_periods = metrics.get("ytd_periods") or metrics.get("periods") or []
+    ytd_trend = metrics.get("ytd_period_trend") or metrics.get("period_trend") or []
+    trend_labels = ytd_periods[: len(ytd_trend)] if ytd_periods else [
+        f"P{i + 1}" for i in range(len(ytd_trend))
+    ]
+
+    last_shift_pct = _parse_pct(card.get("last_shift_dt_pct"))
+    sched_lost = float(card.get("last_shift_sched_hours") or 0)
+    if not sched_lost and card.get("last_shift_unplanned_hrs") and last_shift_pct > 0:
+        sched_lost = _estimate_sched_hours(
+            float(card.get("last_shift_unplanned_hrs") or 0),
+            last_shift_pct,
+        )
+
+    hours = _parse_hours(dt_hrs.get("value"))
+    if not hours and card.get("last_shift_unplanned_hrs"):
+        hours = float(card.get("last_shift_unplanned_hrs") or 0)
 
     return {
         "primary": {
             "label": "Unplanned DT %",
             "value": dt_pct,
-            "value_display": dt.get("value") or f"{dt_pct:.2f}%",
+            "value_display": f"{dt_pct:.2f} %",
             "target": target,
+            "target_display": f"{target:.2f} %",
             "delta_vs_target": delta_vs_target,
-            "delta_vs_target_display": f"{delta_vs_target:+.2f} pts vs target",
+            "delta_vs_target_display": f"{abs(delta_vs_target):.2f} %",
+            "last_period_delta": last_period_delta,
+            "last_period_delta_display": f"{last_period_delta:+.2f} %",
             "period_delta": {
                 "label": period_label,
                 "text": dt.get("delta") or period_label,
@@ -206,19 +240,23 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
             },
             "trend": {
                 "labels": trend_labels,
-                "data": trend,
+                "data": ytd_trend,
             },
             "scheduled_hours": {
-                "estimate": sched_hrs,
-                "display": f"{_locale_number(sched_hrs)} h",
-                "method": "dt_hours / dt_pct",
+                "estimate": sched_lost,
+                "display": f"{sched_lost:,.1f}",
+                "method": "last_shift_scheduled_hours",
             },
             "downtime_hours": {
                 "value": hours,
                 "display": dt_hrs.get("value") or f"{_locale_number(hours)} h",
             },
-            "last_shift": shift_delta,
-            "direction": dt.get("direction") or ("bad" if dt_pct > target else "good"),
+            "last_shift": {
+                "pct": last_shift_pct,
+                "display": f"{last_shift_pct:+.2f} %" if last_shift_pct else "—",
+                "label": f"{last_shift_pct:+.2f} %" if last_shift_pct else "—",
+            },
+            "direction": "bad" if dt_pct > target else "good",
             "stops": {
                 "value": int(str((kpis.get("stops") or {}).get("value") or "0").replace(",", "") or 0),
                 "display": (kpis.get("stops") or {}).get("value") or "0",

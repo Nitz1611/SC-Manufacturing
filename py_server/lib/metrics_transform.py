@@ -22,11 +22,14 @@ class SiteKpiRow(TypedDict):
     stops: float
 
 
-class FilterOptions(TypedDict):
+class FilterOptions(TypedDict, total=False):
     sites: List[str]
     regions: List[str]
     years: List[int]
     site_regions: Dict[str, str]
+    departments: List[str]
+    lines: List[str]
+    shifts: List[str]
 
 
 class MetricsMeta(TypedDict, total=False):
@@ -89,6 +92,9 @@ class MetricsPayload(TypedDict, total=False):
     top_sites_trend_hrs: Dict[str, List[float]]
     shift_comparison: List[ShiftComparisonRow]
     key_insights: List[KeyInsight]
+    maintenance_unplanned: Dict[str, Any]
+    ytd_period_trend: List[float]
+    ytd_periods: List[str]
 
 
 class SqlQueryResults(TypedDict):
@@ -106,6 +112,9 @@ class SqlQueryResults(TypedDict):
     topLines: List[Dict[str, Any]]
     shiftComparison: List[Dict[str, Any]]
     filterOptions: List[Dict[str, Any]]
+    filterDimensions: List[Dict[str, Any]]
+    maintenanceUnplannedCard: List[Dict[str, Any]]
+    maintenanceDtTrendYtd: List[Dict[str, Any]]
 
 
 PERIODS: List[str] = [f"P{i + 1}" for i in range(10)]
@@ -1007,7 +1016,41 @@ def build_metrics_from_sql(
 
     dow_by_shift = _build_dow_by_shift(results["dowByShift"], "dt_pct")
     dow_by_shift_hrs = _build_dow_by_shift(results["dowByShift"], "dt_hours")
+
+    ytd_period_labels = _sort_periods([
+        str(r.get("period_label") or "")
+        for r in results.get("maintenanceDtTrendYtd") or []
+        if r.get("period_label")
+    ])
+    ytd_period_trend: List[float] = []
+    for p in ytd_period_labels:
+        row = next(
+            (r for r in (results.get("maintenanceDtTrendYtd") or []) if str(r.get("period_label")) == p),
+            None,
+        )
+        ytd_period_trend.append(_round2(float(row.get("dt_pct") or 0)) if row else 0.0)
+
+    maintenance_unplanned = (results.get("maintenanceUnplannedCard") or [{}])[0]
     filter_options = build_filter_options(results["filterOptions"])
+    departments: set[str] = set()
+    lines: set[str] = set()
+    shifts: set[str] = set()
+    for row in results.get("filterDimensions") or []:
+        dept = str(row.get("department") or "").strip()
+        line = str(row.get("line") or "").strip()
+        shift = str(row.get("shift") or "").strip()
+        if dept:
+            departments.add(dept)
+        if line:
+            lines.add(line)
+        if shift:
+            shifts.add(shift)
+    if departments:
+        filter_options["departments"] = sorted(departments)
+    if lines:
+        filter_options["lines"] = sorted(lines)
+    if shifts:
+        filter_options["shifts"] = sorted(shifts)
     if not filter_options["sites"]:
         filter_options["sites"] = sorted(site_by_period.keys())
         for site in filter_options["sites"]:
@@ -1059,6 +1102,9 @@ def build_metrics_from_sql(
         "top_sites_trend": top_sites_trend,
         "top_sites_trend_hrs": top_sites_trend_hrs,
         "shift_comparison": shift_comparison,
+        "maintenance_unplanned": maintenance_unplanned,
+        "ytd_period_trend": ytd_period_trend,
+        "ytd_periods": ytd_period_labels,
     }
     m["tab_insights"] = build_tab_insights(m)
     return m

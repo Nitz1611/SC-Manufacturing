@@ -14,19 +14,23 @@
   ];
 
   var TIMEFRAME_OPTIONS = [
-    { value: 'shift', label: 'Shift (Last Completed)', short: 'Shift' },
-    { value: 'wtd', label: 'WTD (Week to Date)', short: 'WTD' },
     { value: 'ptd', label: 'PTD (Period to Date)', short: 'PTD' },
+    { value: 'wtd', label: 'WTD (Week to Date)', short: 'WTD' },
     { value: 'ytd', label: 'YTD (Year to Date)', short: 'YTD' },
-    { value: 'custom', label: 'Custom Range', short: 'Custom Range' },
+    { value: 'prev_week', label: 'Prev Week', short: 'Prev Week' },
+    { value: 'prev_period', label: 'Prev Period', short: 'Prev Period' },
+    { value: 'today', label: 'Today', short: 'Today' },
+    { value: 'custom', label: 'Custom Range', short: 'Custom' },
   ];
 
   var PERIOD_LABELS = {
-    ptd: 'Current Period',
-    wtd: 'Current Week',
-    ytd: 'Current Year',
-    shift: 'Last Completed Shift',
-    custom: 'Custom Range',
+    ptd: 'Period to date',
+    wtd: 'Week to date',
+    ytd: 'Year to date',
+    prev_week: 'Previous week',
+    prev_period: 'Previous period',
+    today: 'Today',
+    custom: 'Custom range',
   };
 
   /* KPI Overview chart palette — keep identical across Maintenance + KPI Overview */
@@ -66,7 +70,7 @@
   var state = {
     page: 'maintenance',
     filters: {
-      timeframe: 'FY',
+      timeframe: 'ptd',
       year: '2026',
       site: 'All',
       region: 'All',
@@ -80,7 +84,7 @@
     payload: null,
     loading: false,
     insightsLoading: false,
-    insightTab: 'ai-summary',
+    insightTab: 'alerts',
     reportTab: 'snapshot',
     charts: {},
     openAlert: null,
@@ -141,7 +145,10 @@
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state || !mc.state.filters) return;
     var f = mc.state.filters;
-    if (f.timeframe) state.filters.timeframe = String(f.timeframe).toLowerCase() === 'fy' ? 'FY' : f.timeframe;
+    if (f.timeframe) {
+      var tf = String(f.timeframe).toLowerCase();
+      state.filters.timeframe = tf === 'fy' ? 'ytd' : tf;
+    }
     if (f.year) state.filters.year = f.year;
     if (f.site) state.filters.site = f.site;
     state.filters.region = regionFilterLabel(f.region);
@@ -151,7 +158,7 @@
   function syncToConsoleFilters() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
-    mc.state.filters.timeframe = 'FY';
+    mc.state.filters.timeframe = String(state.filters.timeframe || 'ptd').toLowerCase();
     mc.state.filters.year = state.filters.year === 'All' ? '2026' : state.filters.year;
     mc.state.filters.site = state.filters.site;
     mc.state.filters.region = normalizeRegionList(state.filters.region);
@@ -176,13 +183,17 @@
 
   function buildFilterPayload() {
     var f = state.filters;
+    var custom = isCustomTimeframe();
     return {
+      timeframe: String(f.timeframe || 'ptd').toLowerCase(),
       year: f.year === 'All' ? '2026' : f.year,
       site: f.site === 'All' ? null : f.site,
       region: normalizeRegionList(f.region).join(',') || null,
       department: f.department === 'All' ? null : f.department,
       line: f.line === 'All' ? null : f.line,
       shift: f.shift === 'All' ? null : f.shift,
+      dateFrom: custom && f.dateFrom ? f.dateFrom : null,
+      dateTo: custom && f.dateTo ? f.dateTo : null,
     };
   }
 
@@ -271,10 +282,8 @@
       .then(function (data) {
         if (data.error || !data.ai_summaries) return;
         if (state.payload) state.payload.ai_summaries = data.ai_summaries;
-        if (state.insightTab === 'ai-summary') {
-          var el = $('#maint-tab-ai-summary');
-          if (el) el.innerHTML = renderAiSummaries(data.ai_summaries);
-        }
+        var el = $('#maint-insights-list');
+        if (el) el.innerHTML = renderAiSummaries(data.ai_summaries);
       })
       .catch(function (err) {
         console.warn('[maintenance insights]', err);
@@ -700,19 +709,27 @@
 
   function renderPrimaryKpi(kpi) {
     if (!kpi) return '';
+    var target = Number(kpi.target || DT_TARGET);
     var deltaClass = kpi.delta_vs_target > 0 ? 'bad' : 'good';
-    var periodLabel = 'FY 2026';
-    var periodText = (kpi.period_delta && kpi.period_delta.text) || '';
-    var lastShift = kpi.last_shift
-      ? (kpi.last_shift.label || kpi.last_shift.shift || '')
-      : '—';
+    var deltaArrow = kpi.delta_vs_target > 0 ? '▲' : '▼';
+    var lastPeriodDelta = Number(kpi.last_period_delta != null ? kpi.last_period_delta : 0);
+    var lastPeriodClass = lastPeriodDelta > 0 ? 'bad' : lastPeriodDelta < 0 ? 'good' : 'neutral';
+    var lastPeriodText =
+      kpi.last_period_delta_display ||
+      (lastPeriodDelta > 0 ? '+' : '') + lastPeriodDelta.toFixed(2) + ' %';
+    var lastShift =
+      (kpi.last_shift && (kpi.last_shift.display || kpi.last_shift.label)) || '—';
+    var lastShiftClass =
+      kpi.last_shift && Number(kpi.last_shift.pct) > target ? 'bad' : 'good';
     var schedLost = kpi.scheduled_hours ? kpi.scheduled_hours.display : '—';
+    var tfLabel =
+      PERIOD_LABELS[String(state.filters.timeframe || 'ptd').toLowerCase()] || 'Period to date';
 
     return (
       '<article class="maint-kpi-card primary" data-kpi="primary">' +
       '<div class="maint-kpi-head">' +
       '<span class="maint-status-dot ' +
-      statusDotClass(kpi.value, kpi.target) +
+      statusDotClass(kpi.value, target) +
       '" aria-hidden="true"></span>' +
       '<span class="maint-kpi-title">Total Unplanned Downtime %</span>' +
       '</div>' +
@@ -722,32 +739,37 @@
       esc(kpi.value_display || fmtPct(kpi.value)) +
       '</div>' +
       '<div class="maint-kpi-target-row">Target <strong>' +
-      fmtPct(kpi.target) +
+      esc(kpi.target_display || fmtPct(target)) +
       '</strong>' +
       '<span class="maint-kpi-delta ' +
       deltaClass +
       '">' +
-      esc(Math.abs(kpi.delta_vs_target).toFixed(2)) +
-      ' pts ' +
-      (kpi.delta_vs_target > 0 ? '▲' : '▼') +
+      esc(kpi.delta_vs_target_display || Math.abs(kpi.delta_vs_target).toFixed(2) + ' %') +
+      ' ' +
+      deltaArrow +
       '</span></div>' +
       '</div>' +
-      '<div class="maint-kpi-trend"><canvas id="maint-spark-primary" aria-label="Unplanned DT trend"></canvas></div>' +
+      '<div class="maint-kpi-trend">' +
+      '<span class="maint-trend-period-delta ' +
+      lastPeriodClass +
+      '">Last Period ' +
+      esc(lastPeriodText) +
+      '</span>' +
+      '<canvas id="maint-spark-primary" aria-label="Unplanned DT YTD trend"></canvas></div>' +
       '</div>' +
       '<div class="maint-period-delta">' +
-      periodLabel +
-      ' <span>' +
-      esc(periodText) +
-      '</span></div>' +
+      esc(tfLabel) +
+      ' <span>Unplanned downtime for selected timeframe</span></div>' +
       '<div class="maint-kpi-footer-stats">' +
-      '<span>Last Shift <span class="bad">' +
+      '<span>Last Shift <span class="' +
+      lastShiftClass +
+      '">' +
       esc(lastShift) +
       '</span></span>' +
       '<span class="bad"><strong>' +
-      esc(schedLost.replace(' h', '')) +
+      esc(schedLost) +
       '</strong> Scheduled Hours Lost</span>' +
       '</div>' +
-      renderKnowMore() +
       '</article>'
     );
   }
@@ -930,27 +952,17 @@
       renderPrimaryKpi(kpi) +
       renderSecondaryKpis(p.secondary_kpis) +
       '</div>' +
-      '<div class="maint-tabs" role="tablist">' +
-      '<button type="button" class="maint-tab' +
-      (state.insightTab === 'ai-summary' ? ' active' : '') +
-      '" data-tab="ai-summary" role="tab">AI Summary</button>' +
-      '<button type="button" class="maint-tab' +
-      (state.insightTab === 'alerts' ? ' active' : '') +
-      '" data-tab="alerts" role="tab">Alerts' +
-      (p.alerts && p.alerts.length
-        ? ' <span class="badge">' + p.alerts.length + '</span>'
-        : '') +
-      '</button></div>' +
-      '<div id="maint-tab-ai-summary"' +
-      (state.insightTab === 'ai-summary' ? '' : ' class="maint-hidden"') +
-      '>' +
-      renderAiSummaries(p.ai_summaries) +
-      '</div>' +
-      '<div id="maint-tab-alerts"' +
-      (state.insightTab === 'alerts' ? '' : ' class="maint-hidden"') +
-      '>' +
+      '<div class="maint-insights-grid">' +
+      '<section class="maint-insights-section maint-alerts-section" aria-label="Alerts">' +
+      '<h3 class="maint-section-title">Alerts</h3>' +
+      '<div class="maint-alerts-list" id="maint-alerts-list">' +
       renderAlerts(p.alerts) +
-      '</div>';
+      '</div></section>' +
+      '<section class="maint-insights-section maint-key-insights-section" aria-label="Key Insights">' +
+      '<h3 class="maint-section-title">Key Insights</h3>' +
+      '<div class="maint-insights-list" id="maint-insights-list">' +
+      renderAiSummaries(p.ai_summaries) +
+      '</div></section></div>';
 
     bindMaintenanceEvents();
     requestAnimationFrame(function () {
@@ -1571,26 +1583,38 @@
     });
   }
 
-  function createWipTimeframeGroup() {
-    var group = document.createElement('div');
-    group.className = 'maint-filter-group maint-filter-wip';
-    group.innerHTML =
-      '<span class="filter-label">Timeframe <span class="maint-wip-badge">WIP</span></span>' +
-      '<div class="slicer slicer-disabled" data-slicer-id="timeframe">' +
-      '<button type="button" class="slicer-trigger" disabled aria-disabled="true">' +
-      '<span class="slicer-value">FY 2026</span>' +
-      '</button></div>';
-    return group;
-  }
-
   function buildFilterBar() {
     var bar = $('#maint-filter-bar');
     if (!bar || bar.dataset.built) return;
     bar.dataset.built = '1';
-    bar.className = 'maint-filter-bar filter-bar';
+    bar.className = 'maint-filter-bar filter-bar maint-filter-bar-stacked';
     bar.replaceChildren();
 
-    bar.appendChild(createWipTimeframeGroup());
+    var row1 = document.createElement('div');
+    row1.className = 'maint-filter-row';
+    var row2 = document.createElement('div');
+    row2.className = 'maint-filter-row';
+
+    row1.appendChild(
+      createSlicerGroup('timeframe', 'Timeframe', TIMEFRAME_OPTIONS, state.filters.timeframe, false)
+    );
+    row1.appendChild(
+      createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
+    );
+    row1.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, false, true));
+    row1.appendChild(
+      createSlicerGroup('region', 'Region', regionSlicerOptions(), state.filters.region, true)
+    );
+
+    row2.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
+    row2.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
+    row2.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
+    row2.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
+    row2.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
+
+    bar.appendChild(row1);
+    bar.appendChild(row2);
+
     var showInGroup = createSlicerGroup(
       'showIn',
       'Show in',
@@ -1602,16 +1626,8 @@
     );
     showInGroup.classList.add('maint-showin-group', 'maint-hidden');
     bar.appendChild(showInGroup);
-    bar.appendChild(
-      createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
-    );
-    bar.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, false, true));
-    bar.appendChild(
-      createSlicerGroup('region', 'Region', regionSlicerOptions(), state.filters.region, true)
-    );
-    bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
-    bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
-    bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
+
+    updateDateFilterVisibility();
 
     if (!document.body.dataset.maintSlicerCloseBound) {
       document.body.dataset.maintSlicerCloseBound = '1';
@@ -1765,7 +1781,7 @@
     }
     syncFromConsoleFilters();
     state.filters.year = state.filters.year || '2026';
-    state.filters.timeframe = 'FY';
+    state.filters.timeframe = state.filters.timeframe || 'ptd';
     buildPrimaryNav();
     buildFilterBar();
     initDates();

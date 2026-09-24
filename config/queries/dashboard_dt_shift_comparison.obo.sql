@@ -10,5 +10,6 @@ WHERE {{dt_hours_filter}}
      AND {{line_filter}}
      AND {{department_filter}}
      AND {{shift_filter}}
+     AND {{timeframe_filter}}
 GROUP BY {{shift_expr}}
 ORDER BY hours DESC

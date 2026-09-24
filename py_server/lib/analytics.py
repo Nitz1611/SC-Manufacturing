@@ -57,6 +57,9 @@ WAVE1_CHART_KEYS = (
     'dashboard_dt_top_lines',
     'dashboard_dt_shift_comparison',
     'dashboard_filter_options',
+    'dashboard_filter_dimensions',
+    'maintenance_unplanned_card',
+    'maintenance_dt_trend_ytd',
 )
 WAVE2_QUERY_KEYS = (
     'dashboard_dt_category_by_period',
@@ -112,11 +115,15 @@ def disk_cache_key(norm: dict[str, str | None]) -> str:
 
 
 def _has_extra_sql_filters(norm: dict[str, str | None]) -> bool:
+    tf = str(norm.get("timeframe") or "ptd").lower()
     return bool(
-        norm.get('regions')
-        or norm.get('line')
-        or norm.get('department')
-        or norm.get('shift_filter')
+        norm.get("regions")
+        or norm.get("line")
+        or norm.get("department")
+        or norm.get("shift_filter")
+        or tf not in ("ptd", "")
+        or norm.get("date_from")
+        or norm.get("date_to")
     )
 
 
@@ -298,6 +305,9 @@ def load_metrics_from_sql(
         'topLines': w1['dashboard_dt_top_lines'],
         'shiftComparison': w1['dashboard_dt_shift_comparison'],
         'filterOptions': w1['dashboard_filter_options'],
+        'filterDimensions': w1['dashboard_filter_dimensions'],
+        'maintenanceUnplannedCard': w1['maintenance_unplanned_card'],
+        'maintenanceDtTrendYtd': w1['maintenance_dt_trend_ytd'],
     }
 
     metrics = build_metrics_from_sql(results, norm)

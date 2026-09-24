@@ -13,5 +13,6 @@ WHERE {{dt_pct_filter}}
      AND {{line_filter}}
      AND {{department_filter}}
      AND {{shift_filter}}
+     AND {{timeframe_filter}}
 GROUP BY {{category_col}}, {{period_expr}}
 ORDER BY category, MIN({{period_sort}})

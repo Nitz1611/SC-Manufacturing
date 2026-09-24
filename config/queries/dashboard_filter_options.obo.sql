@@ -9,4 +9,5 @@ WHERE {{year_filter}}
      AND {{line_filter}}
      AND {{department_filter}}
      AND {{shift_filter}}
+     AND {{timeframe_filter}}
 ORDER BY site

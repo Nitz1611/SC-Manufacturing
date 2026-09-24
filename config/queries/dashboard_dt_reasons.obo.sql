@@ -11,6 +11,7 @@ WHERE {{dt_pct_filter}}
      AND {{line_filter}}
      AND {{department_filter}}
      AND {{shift_filter}}
+     AND {{timeframe_filter}}
 GROUP BY {{reason_col}}
 ORDER BY hours DESC
 LIMIT 25

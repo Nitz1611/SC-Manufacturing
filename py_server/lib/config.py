@@ -25,7 +25,8 @@ GOLD_NAMES = {
     "stops": "STOPS",
     "site": "Site",
     "region": "Region",
-    "department": "Department",
+    "department": "Department Name",
+    "scheduledHours": "Scheduled Hours",
 }
 
 
@@ -124,11 +125,58 @@ def region_column() -> str:
 
 
 def department_column() -> str:
-    raw = (os.environ.get("DATABRICKS_DEPARTMENT_COLUMN") or "").strip()
-    if raw:
-        return _resolve_column("DATABRICKS_DEPARTMENT_COLUMN", GOLD_NAMES["department"])
-    # Gold view exposes DEPT_CD as DECIMAL — always compare as string in filters.
-    return "CAST(DEPT_CD AS STRING)"
+    return _resolve_column("DATABRICKS_DEPARTMENT_COLUMN", GOLD_NAMES["department"])
+
+
+def scheduled_hours_column() -> str:
+    return _resolve_column("DATABRICKS_SCHEDULED_HOURS_COLUMN", GOLD_NAMES["scheduledHours"])
+
+
+def _flag_filter(flag_column: str) -> str:
+    return f"{quote_ident(flag_column)} = 1"
+
+
+def ytd_flag_filter() -> str:
+    return _flag_filter("YTD Flag")
+
+
+def prev_period_flag_filter() -> str:
+    return _flag_filter("Prev Period Flag")
+
+
+def yesterday_flag_filter() -> str:
+    return _flag_filter("Yesterday Flag")
+
+
+TIMEFRAME_FLAG_COLUMNS: dict[str, str] = {
+    "ptd": "PTD Flag",
+    "wtd": "WTD Flag",
+    "ytd": "YTD Flag",
+    "prev_week": "Prev Week Flag",
+    "prev_period": "Prev Period Flag",
+    "today": "Today Flag",
+}
+
+
+def build_timeframe_filter_sql(
+    timeframe: str | None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str:
+    tf = str(timeframe or "ptd").strip().lower()
+    if tf in ("fy", "fiscal_year", "year"):
+        tf = "ytd"
+    if tf == "custom":
+        if date_from and date_to:
+            dcol = date_column()
+            esc_from = str(date_from).strip().replace("'", "''")
+            esc_to = str(date_to).strip().replace("'", "''")
+            return f"{dcol} >= DATE '{esc_from}' AND {dcol} <= DATE '{esc_to}'"
+        return "1=1"
+    flag_col = TIMEFRAME_FLAG_COLUMNS.get(tf)
+    if flag_col:
+        return _flag_filter(flag_col)
+    return "1=1"
 
 
 def _sql_string_expr(column_expr: str) -> str:
@@ -226,6 +274,10 @@ def stops_measure() -> str:
     return _measure_expr(stops_column())
 
 
+def scheduled_hours_measure() -> str:
+    return _measure_expr(scheduled_hours_column())
+
+
 def year_filter_expression() -> str:
     return f"(:year IS NULL OR YEAR({date_column()}) = :year)"
 
@@ -244,12 +296,17 @@ def _apply_sql_fragments(sql: str) -> str:
         .replace("{{reason_col}}", reason_column())
         .replace("{{site_col}}", site_column())
         .replace("{{region_col}}", region_column())
+        .replace("{{department_col}}", department_column())
         .replace("{{dt_pct}}", dt_pct_column())
         .replace("{{dt_hours}}", dt_hours_column())
         .replace("{{stops_col}}", stops_column())
         .replace("{{dt_pct_m}}", dt_pct_measure())
         .replace("{{dt_hours_m}}", dt_hours_measure())
         .replace("{{stops_m}}", stops_measure())
+        .replace("{{scheduled_hours_m}}", scheduled_hours_measure())
+        .replace("{{ytd_flag_filter}}", ytd_flag_filter())
+        .replace("{{prev_period_flag_filter}}", prev_period_flag_filter())
+        .replace("{{yesterday_flag_filter}}", yesterday_flag_filter())
         .replace("{{dt_type_filter}}", dt_measure_context_filter())
         .replace("{{dt_pct_filter}}", dt_measure_context_filter())
         .replace("{{dt_hours_filter}}", dt_measure_context_filter())
@@ -288,12 +345,18 @@ def bind_sql_params(sql: str, params: dict[str, str | None]) -> str:
     line_filter = build_optional_eq_filter(line_column(), params.get("line"))
     department_filter = build_optional_eq_filter(department_column(), params.get("department"))
     shift_filter = build_shift_filter_sql(params.get("shift_filter"))
+    timeframe_filter = build_timeframe_filter_sql(
+        params.get("timeframe"),
+        params.get("date_from"),
+        params.get("date_to"),
+    )
     sql = re.sub(r":year\b", year_lit, sql)
     sql = re.sub(r":site\b", site_lit, sql)
     sql = sql.replace("{{region_filter}}", region_filter)
     sql = sql.replace("{{line_filter}}", line_filter)
     sql = sql.replace("{{department_filter}}", department_filter)
     sql = sql.replace("{{shift_filter}}", shift_filter)
+    sql = sql.replace("{{timeframe_filter}}", timeframe_filter)
     return sql
 
 
@@ -308,24 +371,32 @@ def _optional_filter_value(raw: dict, *keys: str) -> str | None:
     return None
 
 
+def _canonical_timeframe(raw: dict) -> str:
+    tf = str(raw.get("timeframe") or raw.get("timeframe_mode") or "ptd").strip().lower()
+    aliases = {
+        "fy": "ytd",
+        "fiscal_year": "ytd",
+        "year": "ytd",
+        "week": "wtd",
+        "mtd": "ptd",
+        "qtd": "ptd",
+    }
+    return aliases.get(tf, tf)
+
+
 def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
     raw = raw or {}
-    timeframe = str(raw.get("timeframe") or raw.get("timeframe_mode") or "Week")
+    timeframe = _canonical_timeframe(raw)
     tf_map = {
-        "week": "week",
         "wtd": "week",
-        "month": "month",
-        "mtd": "month",
-        "quarter": "quarter",
-        "qtd": "quarter",
-        "fy": "fiscal_year",
-        "year": "fiscal_year",
         "ytd": "fiscal_year",
         "ptd": "period",
-        "shift": "shift",
+        "prev_week": "prev_week",
+        "prev_period": "prev_period",
+        "today": "today",
         "custom": "custom",
     }
-    period = tf_map.get(timeframe.lower(), timeframe.lower())
+    period = tf_map.get(timeframe, timeframe)
     year_val = raw.get("year")
     if year_val and str(year_val).lower() != "all":
         year = str(year_val)
@@ -370,7 +441,7 @@ def console_demo_mode() -> bool:
 
 
 def filter_cache_key(params: dict[str, str | None]) -> str:
-    """Cache key for all SQL-bound slicers (timeframe remains UI-only / WIP)."""
+    """Cache key for all SQL-bound slicers including timeframe and custom dates."""
     payload = {
         "year": params.get("year") or "2026",
         "site": params.get("site"),
@@ -378,6 +449,9 @@ def filter_cache_key(params: dict[str, str | None]) -> str:
         "line": params.get("line"),
         "department": params.get("department"),
         "shift": params.get("shift_filter"),
+        "timeframe": params.get("timeframe") or "ptd",
+        "date_from": params.get("date_from"),
+        "date_to": params.get("date_to"),
     }
     return json.dumps(payload, sort_keys=True)
 

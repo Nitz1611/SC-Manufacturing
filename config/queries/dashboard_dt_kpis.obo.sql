@@ -10,6 +10,7 @@ SELECT
      AND {{line_filter}}
      AND {{department_filter}}
      AND {{shift_filter}}
+     AND {{timeframe_filter}}
   ) AS downtime_pct,
   (SELECT ROUND({{dt_hours_m}}, 0)
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view
@@ -20,6 +21,7 @@ SELECT
      AND {{line_filter}}
      AND {{department_filter}}
      AND {{shift_filter}}
+     AND {{timeframe_filter}}
   ) AS downtime_hrs,
   (SELECT {{stops_m}}
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view
@@ -30,4 +32,5 @@ SELECT
      AND {{line_filter}}
      AND {{department_filter}}
      AND {{shift_filter}}
+     AND {{timeframe_filter}}
   ) AS stops

@@ -12,5 +12,6 @@ WHERE {{dt_pct_filter}}
      AND {{line_filter}}
      AND {{department_filter}}
      AND {{shift_filter}}
+     AND {{timeframe_filter}}
 GROUP BY DATE_FORMAT({{date_col}}, 'EEEE'), {{week_expr}}
 ORDER BY week_label, day_name
