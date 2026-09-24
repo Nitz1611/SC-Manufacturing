@@ -93,6 +93,7 @@
     insightsLoading: false,
     insightTab: 'alerts',
     reportTab: 'snapshot',
+    reportAnimateIn: false,
     charts: {},
     openAlert: null,
   };
@@ -228,6 +229,7 @@
         renderMaintenance();
         fetchAiInsights();
         if ($('#maint-report-modal') && $('#maint-report-modal').classList.contains('open')) {
+          state.reportAnimateIn = true;
           renderReportModal();
         }
         if (data._partial || data._refreshing) {
@@ -1256,9 +1258,83 @@
     var overlay = $('#maint-report-modal');
     if (!overlay) return;
     state.reportTab = 'snapshot';
+    state.reportAnimateIn = true;
     overlay.classList.add('open');
     document.body.classList.add('maint-report-open');
     renderReportModal();
+  }
+
+  function reportModalTabsHtml() {
+    return (
+      '<div class="maint-modal-tabs">' +
+      ['snapshot', 'sites', 'drivers']
+        .map(function (t) {
+          var labels = { snapshot: 'KPI Snapshot', sites: 'Sites at Risk', drivers: 'Top Downtime Drivers' };
+          return (
+            '<button type="button" class="maint-modal-tab' +
+            (state.reportTab === t ? ' active' : '') +
+            '" data-report-tab="' +
+            t +
+            '">' +
+            labels[t] +
+            '</button>'
+          );
+        })
+        .join('') +
+      '</div>'
+    );
+  }
+
+  function bindReportTabHandlers() {
+    $$('[data-report-tab]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        state.reportTab = btn.getAttribute('data-report-tab');
+        state.reportAnimateIn = true;
+        renderReportModal();
+      });
+    });
+  }
+
+  function renderReportSnapshotLoading() {
+    var barSkel = [92, 74, 48, 32, 26]
+      .map(function (w) {
+        return (
+          '<div class="maint-exposure-row maint-skeleton-row">' +
+          '<div class="maint-skeleton-line maint-skeleton-site"></div>' +
+          '<div class="maint-exposure-bar-col">' +
+          '<div class="maint-exposure-track maint-skeleton-track">' +
+          '<div class="maint-skeleton-bar" style="width:' +
+          w +
+          '%"></div></div></div></div>'
+        );
+      })
+      .join('');
+    return (
+      '<div class="maint-report-section-head">' +
+      '<h4>Total Unplanned Downtime %</h4>' +
+      '<div class="maint-skeleton-pill" style="width:108px;height:32px"></div></div>' +
+      '<div class="maint-snapshot-grid">' +
+      '<div class="maint-snapshot-col-left">' +
+      '<div class="maint-report-donut-card maint-donut-card-plain">' +
+      '<div class="maint-donut-wrap maint-skeleton-donut-wrap">' +
+      '<div class="maint-skeleton-donut" aria-hidden="true"></div></div>' +
+      '<div class="maint-donut-meta-stack">' +
+      '<div class="maint-skeleton-pill maint-donut-pill-skeleton"></div>' +
+      '<div class="maint-skeleton-pill maint-donut-pill-skeleton"></div></div></div></div>' +
+      '<div class="maint-stat-stack maint-stat-stack-report">' +
+      [1, 2, 3]
+        .map(function () {
+          return '<div class="maint-stat-card maint-skeleton-stat"><div class="maint-skeleton-line"></div></div>';
+        })
+        .join('') +
+      '</div></div>' +
+      '<div class="maint-bar-section maint-bar-section-compact">' +
+      '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
+      '<div class="maint-exposure-chart maint-skeleton-chart">' +
+      '<div class="maint-exposure-bars-panel">' +
+      barSkel +
+      '</div></div></div>'
+    );
   }
 
   function closeMyReport() {
@@ -1272,7 +1348,7 @@
 
   function reportStatCard(label, value, iconSvg) {
     return (
-      '<div class="maint-stat-card">' +
+      '<div class="maint-stat-card maint-stat-card-report">' +
       '<div class="maint-stat-card-content">' +
       '<label>' +
       esc(label) +
@@ -1280,7 +1356,7 @@
       '<strong>' +
       esc(value) +
       '</strong></div>' +
-      '<div class="maint-stat-icon" aria-hidden="true">' +
+      '<div class="maint-stat-icon maint-stat-icon-report" aria-hidden="true">' +
       iconSvg +
       '</div></div>'
     );
@@ -1288,11 +1364,11 @@
 
   var REPORT_ICONS = {
     schedule:
-      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+      '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
     downtime:
-      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18h16M6 14l3-6 3 4 3-7 3 9"/><circle cx="18" cy="6" r="2"/></svg>',
+      '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18h16M6 14l3-6 3 4 3-7 3 9"/><circle cx="18" cy="6" r="2"/></svg>',
     percent:
-      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M9 15l6-6"/></svg>',
+      '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M9 15l6-6"/></svg>',
   };
 
   function modernChartBase() {
@@ -1363,7 +1439,10 @@
     };
   }
 
-  function donutCenterPlugin(mainText, subText, mainColor) {
+  function donutCenterPlugin(mainText, subText, mainColor, sizes) {
+    sizes = sizes || {};
+    var mainSize = sizes.main || 26;
+    var subSize = sizes.sub || 11;
     return {
       id: 'donutCenterText',
       afterDraw: function (chart) {
@@ -1376,12 +1455,12 @@
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = mainColor || '#1a2b4a';
-        ctx.font = '800 26px Inter, sans-serif';
-        ctx.fillText(mainText, x, y - 6);
+        ctx.font = '800 ' + mainSize + 'px Inter, system-ui, sans-serif';
+        ctx.fillText(mainText, x, y - 8);
         if (subText) {
           ctx.fillStyle = '#64748b';
-          ctx.font = '600 11px Inter, sans-serif';
-          ctx.fillText(subText, x, y + 16);
+          ctx.font = '600 ' + subSize + 'px Inter, system-ui, sans-serif';
+          ctx.fillText(subText, x, y + 18);
         }
         ctx.restore();
       },
@@ -1390,44 +1469,42 @@
 
   function renderReportModal() {
     var body = $('#maint-report-body');
-    if (!body || !state.payload) return;
+    if (!body) return;
+
+    if (!state.payload) {
+      body.innerHTML =
+        reportModalTabsHtml() +
+        '<div id="maint-report-content" class="maint-report-content maint-report-loading" role="status" aria-live="polite">' +
+        renderReportSnapshotLoading() +
+        '</div>';
+      bindReportTabHandlers();
+      return;
+    }
+
     var p = state.payload;
     var kpi = p.kpis && p.kpis.primary;
+    var animate = !!state.reportAnimateIn;
+    state.reportAnimateIn = false;
 
-    body.innerHTML =
-      '<div class="maint-modal-tabs">' +
-      ['snapshot', 'sites', 'drivers']
-        .map(function (t) {
-          var labels = { snapshot: 'KPI Snapshot', sites: 'Sites at Risk', drivers: 'Top Downtime Drivers' };
-          return (
-            '<button type="button" class="maint-modal-tab' +
-            (state.reportTab === t ? ' active' : '') +
-            '" data-report-tab="' +
-            t +
-            '">' +
-            labels[t] +
-            '</button>'
-          );
-        })
-        .join('') +
-      '</div>' +
-      '<div id="maint-report-content"></div>';
-
-    $$('[data-report-tab]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        state.reportTab = btn.getAttribute('data-report-tab');
-        renderReportModal();
-      });
-    });
+    body.innerHTML = reportModalTabsHtml() + '<div id="maint-report-content"></div>';
+    bindReportTabHandlers();
 
     var content = $('#maint-report-content');
+    content.className = 'maint-report-content' + (animate ? ' maint-report-animate-in' : '');
     if (state.reportTab === 'snapshot') content.innerHTML = renderReportSnapshot(kpi, p);
     else if (state.reportTab === 'sites') content.innerHTML = renderReportSites(p);
     else content.innerHTML = renderReportDrivers(p);
 
+    if (animate) {
+      window.setTimeout(function () {
+        var el = $('#maint-report-content');
+        if (el) el.classList.remove('maint-report-animate-in');
+      }, 1200);
+    }
+
     requestAnimationFrame(function () {
       if (state.reportTab === 'snapshot') {
-        drawDonut('report-donut', kpi);
+        drawReportDonut('report-donut', kpi, animate);
       } else if (state.reportTab === 'drivers') {
         drawDriversDonut('report-drivers-donut', p.downtime_drivers);
       }
@@ -1474,8 +1551,8 @@
       '<div class="maint-snapshot-grid">' +
       '<div class="maint-snapshot-col-left">' +
       '<div class="maint-report-donut-card maint-donut-card-plain">' +
-      '<div class="maint-donut-wrap"><canvas id="report-donut"></canvas></div></div>' +
-      '<div class="maint-donut-meta maint-donut-meta-stack">' +
+      '<div class="maint-donut-wrap maint-donut-wrap-report"><canvas id="report-donut"></canvas></div>' +
+      '<div class="maint-donut-meta-stack">' +
       '<div class="maint-donut-pill maint-donut-pill-target">' +
       '<span class="maint-donut-pill-label">Target</span>' +
       '<span class="maint-donut-pill-value">' +
@@ -1490,8 +1567,8 @@
       '<span class="maint-donut-pill-label">Total Stops</span>' +
       '<span class="maint-donut-pill-value bad">' +
       esc(stops) +
-      '</span></div></div></div>' +
-      '<div class="maint-stat-stack">' +
+      '</span></div></div></div></div>' +
+      '<div class="maint-stat-stack maint-stat-stack-report">' +
       reportStatCard('Schedule Hours', sched.replace(' h', ''), REPORT_ICONS.schedule) +
       reportStatCard('Unplanned Downtime Hours', dtHrs.replace(' h', ''), REPORT_ICONS.downtime) +
       reportStatCard('Percentage Downtime', pct, REPORT_ICONS.percent) +
@@ -1541,12 +1618,17 @@
   }
 
   function drawDonut(id, kpi) {
+    drawReportDonut(id, kpi, false);
+  }
+
+  function drawReportDonut(id, kpi, immersive) {
     destroyChart(id);
     var canvas = document.getElementById(id);
     if (!canvas || typeof Chart === 'undefined' || !kpi) return;
     var val = kpi.value || 0;
     var rest = Math.max(0, 100 - val);
     var centerColor = val > (kpi.target || DT_TARGET) ? '#e53935' : '#002855';
+    var animMs = immersive ? 1100 : 750;
     state.charts[id] = new Chart(canvas, {
       type: 'doughnut',
       data: {
@@ -1565,9 +1647,20 @@
       options: Object.assign({}, modernChartBase(), {
         cutout: '68%',
         layout: { padding: 8 },
+        animation: {
+          duration: animMs,
+          easing: immersive ? 'easeOutCubic' : 'easeOutQuart',
+          animateRotate: true,
+          animateScale: immersive,
+        },
         plugins: Object.assign({}, modernChartBase().plugins, { tooltip: { enabled: false } }),
       }),
-      plugins: [donutCenterPlugin(val.toFixed(1) + '%', 'Unplanned DT', centerColor)],
+      plugins: [
+        donutCenterPlugin(val.toFixed(1) + '%', 'Unplanned DT', centerColor, {
+          main: id === 'report-donut' ? 34 : 26,
+          sub: id === 'report-donut' ? 12 : 11,
+        }),
+      ],
     });
   }
 
