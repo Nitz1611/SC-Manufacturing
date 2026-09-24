@@ -111,12 +111,22 @@ def disk_cache_key(norm: dict[str, str | None]) -> str:
     return f'{FILTER_PREFIX}{filter_cache_key(norm)}'
 
 
+def _has_extra_sql_filters(norm: dict[str, str | None]) -> bool:
+    return bool(
+        norm.get('regions')
+        or norm.get('line')
+        or norm.get('department')
+        or norm.get('shift_filter')
+    )
+
+
 def _read_disk_cached(norm: dict[str, str | None]) -> dict[str, Any] | None:
     cached = cache_get(disk_cache_key(norm))
     if _valid_sql_cache(cached):
         return cached
-    if norm.get('site') or norm.get('regions'):
-        network_norm = {**norm, 'site': None, 'regions': None}
+    # Site-only fallback: reuse network bundle and slice KPIs client-side (not for region/line/dept/shift).
+    if norm.get('site') and not _has_extra_sql_filters(norm):
+        network_norm = {**norm, 'site': None}
         cached = cache_get(disk_cache_key(network_norm))
         if _valid_sql_cache(cached):
             return cached
@@ -360,6 +370,9 @@ def warm_memory_cache_from_disk() -> int:
                 'year': str(parsed.get('year') or '2026'),
                 'site': parsed.get('site') or None,
                 'regions': parsed.get('regions') or None,
+                'line': parsed.get('line') or None,
+                'department': parsed.get('department') or None,
+                'shift_filter': parsed.get('shift') or None,
                 'period': 'week',
                 'timeframe': 'FY',
             }
@@ -384,7 +397,7 @@ def get_cached_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str
     if disk:
         _set_memory_cached(norm, disk)
         return apply_site_filter(copy.deepcopy(disk), norm.get('site'))
-    return _load_any_disk_cache(norm)
+    return None
 
 
 def get_fresh_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -410,6 +423,9 @@ def _filters_dict_from_norm(norm: dict[str, str | None]) -> dict[str, Any]:
         'year': norm.get('year') or '2026',
         'site': norm.get('site'),
         'region': norm.get('regions'),
+        'line': norm.get('line'),
+        'department': norm.get('department'),
+        'shift': norm.get('shift_filter'),
     }
 
 

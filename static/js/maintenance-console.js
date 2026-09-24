@@ -186,7 +186,7 @@
     };
   }
 
-  function fetchMaintenanceData(silent) {
+  function fetchMaintenanceData(silent, forceRefresh) {
     if (!silent) {
       state.loading = true;
       renderLoading();
@@ -194,7 +194,10 @@
     return fetch('/api/maintenance/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filters: buildFilterPayload() }),
+      body: JSON.stringify({
+        filters: buildFilterPayload(),
+        forceRefresh: !!forceRefresh,
+      }),
     })
       .then(function (r) {
         return r.json();
@@ -1627,7 +1630,7 @@
     if (toEl) state.filters.dateTo = toEl.value;
     syncToConsoleFilters();
     reloadConsoleMetrics();
-    fetchMaintenanceData();
+    fetchMaintenanceData(false, true);
   }
 
   function buildPrimaryNav() {

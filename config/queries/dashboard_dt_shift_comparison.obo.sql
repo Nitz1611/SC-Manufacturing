@@ -7,5 +7,8 @@ WHERE {{dt_hours_filter}}
   AND {{year_filter}}
   AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
   AND {{region_filter}}
+     AND {{line_filter}}
+     AND {{department_filter}}
+     AND {{shift_filter}}
 GROUP BY {{shift_expr}}
 ORDER BY hours DESC

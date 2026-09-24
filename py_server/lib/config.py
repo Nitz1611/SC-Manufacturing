@@ -25,6 +25,7 @@ GOLD_NAMES = {
     "stops": "STOPS",
     "site": "Site",
     "region": "Region",
+    "department": "Department",
 }
 
 
@@ -122,6 +123,32 @@ def region_column() -> str:
     return _resolve_column("DATABRICKS_REGION_COLUMN", GOLD_NAMES["region"])
 
 
+def department_column() -> str:
+    return _resolve_column("DATABRICKS_DEPARTMENT_COLUMN", GOLD_NAMES["department"])
+
+
+def build_optional_eq_filter(column_expr: str, value: str | None) -> str:
+    if not value or str(value).strip().lower() in ("all", ""):
+        return "1=1"
+    escaped = str(value).strip().replace("'", "''")
+    return f"UPPER(TRIM({column_expr})) = UPPER('{escaped}')"
+
+
+def build_shift_filter_sql(shift: str | None) -> str:
+    if not shift or str(shift).strip().lower() in ("all", ""):
+        return "1=1"
+    col = quote_ident(GOLD_NAMES["shift"])
+    raw = str(shift).strip().replace("'", "''")
+    digit = re.search(r"\d+", raw)
+    if digit:
+        d = digit.group()
+        return (
+            f"(TRIM(CAST({col} AS STRING)) = '{d}' "
+            f"OR UPPER(TRIM({col})) = UPPER('{raw}'))"
+        )
+    return f"UPPER(TRIM({col})) = UPPER('{raw}')"
+
+
 def build_region_filter_sql(regions_csv: str | None) -> str:
     if not regions_csv:
         return "1=1"
@@ -217,6 +244,9 @@ def _apply_sql_fragments(sql: str) -> str:
         .replace("{{dt_pct_filter}}", dt_measure_context_filter())
         .replace("{{dt_hours_filter}}", dt_measure_context_filter())
         .replace("{{dt_stops_filter}}", dt_measure_context_filter())
+        .replace("{{line_filter}}", "1=1")
+        .replace("{{department_filter}}", "1=1")
+        .replace("{{shift_filter}}", "1=1")
     )
 
 
@@ -248,9 +278,16 @@ def bind_sql_params(sql: str, params: dict[str, str | None]) -> str:
     site = params.get("site")
     site_lit = f"'{site.replace(chr(39), chr(39) * 2).upper()}'" if site else "NULL"
     region_filter = build_region_filter_sql(params.get("regions"))
+    line_filter = build_optional_eq_filter(line_column(), params.get("line"))
+    department_filter = build_optional_eq_filter(department_column(), params.get("department"))
+    shift_filter = build_shift_filter_sql(params.get("shift_filter"))
     sql = re.sub(r":year\b", year_lit, sql)
     sql = re.sub(r":site\b", site_lit, sql)
-    return sql.replace("{{region_filter}}", region_filter)
+    sql = sql.replace("{{region_filter}}", region_filter)
+    sql = sql.replace("{{line_filter}}", line_filter)
+    sql = sql.replace("{{department_filter}}", department_filter)
+    sql = sql.replace("{{shift_filter}}", shift_filter)
+    return sql
 
 
 def _optional_filter_value(raw: dict, *keys: str) -> str | None:
@@ -326,11 +363,14 @@ def console_demo_mode() -> bool:
 
 
 def filter_cache_key(params: dict[str, str | None]) -> str:
-    """In-memory cache key — only SQL-bound filters (year, site, regions). Timeframe is WIP/UI-only."""
+    """Cache key for all SQL-bound slicers (timeframe remains UI-only / WIP)."""
     payload = {
         "year": params.get("year") or "2026",
         "site": params.get("site"),
         "regions": params.get("regions"),
+        "line": params.get("line"),
+        "department": params.get("department"),
+        "shift": params.get("shift_filter"),
     }
     return json.dumps(payload, sort_keys=True)
 
