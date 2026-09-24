@@ -762,7 +762,9 @@
       '</div>' +
       '<div class="maint-kpi-trend">' +
       '<div class="maint-kpi-trend-chart">' +
+      '<div class="maint-kpi-trend-canvas-wrap">' +
       '<canvas id="maint-spark-primary" aria-label="Unplanned DT by period for fiscal year"></canvas>' +
+      '</div>' +
       '<div class="maint-trend-period-delta">' +
       '<span class="maint-trend-period-label">Last Period</span> ' +
       '<span class="maint-trend-period-value ' +
@@ -1022,7 +1024,7 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 2, bottom: 4, left: 0, right: 0 } },
+        layout: { padding: { top: 4, bottom: 6, left: 0, right: 0 } },
         plugins: { legend: { display: false }, tooltip: { enabled: true } },
         scales: { x: { display: false }, y: { display: false } },
         animation: { duration: 600 },

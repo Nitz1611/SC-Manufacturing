@@ -204,8 +204,9 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
     delta_vs_target = round(dt_pct - target, 2)
     period_label, period_text = _period_delta_labels(filters or metrics.get("meta", {}).get("filters"))
 
-    ytd_periods = metrics.get("ytd_periods") or metrics.get("periods") or []
-    ytd_trend = metrics.get("ytd_period_trend") or metrics.get("period_trend") or []
+    ytd_periods = metrics.get("ytd_periods") or []
+    ytd_trend = metrics.get("ytd_period_trend") or []
+    # Sparkline is fiscal-year-by-period only (maintenance_dt_trend_ytd) — not timeframe-scoped.
     trend_labels = ytd_periods[: len(ytd_trend)] if ytd_periods else [
         f"P{i + 1}" for i in range(len(ytd_trend))
     ]
