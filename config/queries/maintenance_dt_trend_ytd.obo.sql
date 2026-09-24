@@ -1,5 +1,6 @@
 -- maintenance_dt_trend_ytd.obo.sql
--- Unplanned downtime % by production period for the selected fiscal year (sparkline).
+-- Sparkline: unplanned DT%% by production period for the selected fiscal year only.
+-- Intentionally omits {{timeframe_filter}} so the chart is unchanged when PTD/WTD/etc. changes.
 SELECT
   {{period_expr}} AS period_label,
   ROUND({{dt_pct_m}} * 100, 2) AS dt_pct
