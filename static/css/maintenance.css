@@ -167,6 +167,12 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
   flex-shrink: 0;
   accent-color: var(--blue-accent);
 }
+.maint-filter-bar .slicer--single .slicer-option input[type='checkbox'] {
+  display: none;
+}
+.maint-filter-bar .slicer--multi .slicer-option .radio-dot {
+  display: none;
+}
 
 .maint-kpi-row {
   display: grid;

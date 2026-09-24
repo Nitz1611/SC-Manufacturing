@@ -469,8 +469,9 @@
     group.innerHTML = '<span class="filter-label maint-filter-label">' + esc(label) + '</span>';
 
     var slicer = document.createElement('div');
-    slicer.className = 'slicer';
+    slicer.className = 'slicer' + (multi ? ' slicer--multi' : ' slicer--single');
     slicer.dataset.slicerId = id;
+    slicer.dataset.multi = multi ? 'true' : 'false';
 
     var trigger = document.createElement('button');
     trigger.type = 'button';
@@ -825,6 +826,7 @@
     var lastPeriodValue =
       kpi.last_period_delta_display ||
       (lastPeriodDelta > 0 ? '+' : '') + lastPeriodDelta.toFixed(2) + '%';
+    var lastPeriodLabel = (kpi && kpi.last_period_label) || 'Last Period';
     var lastShiftVal = formatLastShiftPct(kpi);
     var schedRaw = kpi.scheduled_hours && kpi.scheduled_hours.display;
     var schedLost =
@@ -863,7 +865,9 @@
       '<canvas id="maint-spark-primary" aria-label="Unplanned DT by period for fiscal year"></canvas>' +
       '</div>' +
       '<div class="maint-trend-period-delta">' +
-      '<span class="maint-trend-period-label">Last Period</span> ' +
+      '<span class="maint-trend-period-label">' +
+      esc(lastPeriodLabel) +
+      '</span> ' +
       '<span class="maint-trend-period-value ' +
       lastPeriodValueClass +
       '">' +

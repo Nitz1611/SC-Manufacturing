@@ -63,6 +63,51 @@ def _metric_row_value(row: dict[str, Any] | None, *keys: str) -> Any:
     return None
 
 
+def _format_report_pct_display(value: float | None) -> str | None:
+    if value is None:
+        return None
+    one = round(value, 1)
+    if abs(value - one) < 0.06:
+        return f"{one:.1f} %"
+    return f"{value:.2f} %"
+
+
+def _timeframe_key(filters: dict[str, Any] | None, metrics: MetricsPayload) -> str:
+    meta_filters = (metrics.get("meta") or {}).get("filters") or {}
+    raw = (
+        (filters or {}).get("timeframe")
+        or (filters or {}).get("timeframe_mode")
+        or meta_filters.get("timeframe")
+        or "ptd"
+    )
+    tf = str(raw).strip().lower()
+    if tf in ("fy", "fiscal_year", "year"):
+        return "ytd"
+    return tf
+
+
+def _compute_last_period_delta(
+    timeframe: str,
+    dt_pct: float,
+    prev_period_pct: float,
+    ytd_trend: list[float],
+) -> tuple[float, str]:
+    """Return (delta pp, UI label suffix) aligned with the selected timeframe."""
+    if timeframe == "ytd" and len(ytd_trend) >= 2:
+        delta = round(float(ytd_trend[-1]) - float(ytd_trend[-2]), 2)
+        return delta, "Last Period"
+    if timeframe == "wtd":
+        return round(dt_pct - prev_period_pct, 2), "Last Week"
+    if timeframe == "prev_week":
+        return round(dt_pct - prev_period_pct, 2), "Prior Week"
+    if timeframe == "prev_period":
+        return round(dt_pct - prev_period_pct, 2), "Prior Period"
+    if timeframe == "today":
+        return round(dt_pct - prev_period_pct, 2), "Prior Day"
+    # PTD / custom: compare current slice to previous fiscal period baseline
+    return round(dt_pct - prev_period_pct, 2), "Last Period"
+
+
 def _period_delta_labels(filters: dict[str, Any] | None) -> tuple[str, str]:
     filters = filters or {}
     tf = str(
@@ -210,13 +255,19 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
         target = DT_TARGET_PCT
 
     prev_period_pct = _parse_pct(card.get("prev_period_dt_pct"))
-    last_period_delta = round(dt_pct - prev_period_pct, 2) if prev_period_pct or card else 0.0
-
-    delta_vs_target = round(dt_pct - target, 2)
-    period_label, period_text = _period_delta_labels(filters or metrics.get("meta", {}).get("filters"))
 
     ytd_periods = metrics.get("ytd_periods") or []
     ytd_trend = metrics.get("ytd_period_trend") or []
+    tf_key = _timeframe_key(filters, metrics)
+    last_period_delta, last_period_label = _compute_last_period_delta(
+        tf_key,
+        dt_pct,
+        prev_period_pct,
+        ytd_trend,
+    )
+
+    delta_vs_target = round(dt_pct - target, 2)
+    period_label, period_text = _period_delta_labels(filters or metrics.get("meta", {}).get("filters"))
     # Sparkline is fiscal-year-by-period only (maintenance_dt_trend_ytd) — not timeframe-scoped.
     trend_labels = ytd_periods[: len(ytd_trend)] if ytd_periods else [
         f"P{i + 1}" for i in range(len(ytd_trend))
@@ -260,6 +311,8 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
             "total_downtime_pct",
         )
     total_dt_pct = _parse_pct(total_dt_pct_raw) if total_dt_pct_raw is not None else None
+    if total_dt_pct is not None and 0 < total_dt_pct < 1.0:
+        total_dt_pct = round(total_dt_pct * 100, 2)
 
     return {
         "primary": {
@@ -272,6 +325,7 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
             "delta_vs_target_display": f"{abs(delta_vs_target):.2f}%",
             "last_period_delta": last_period_delta,
             "last_period_delta_display": f"{last_period_delta:+.2f}%",
+            "last_period_label": last_period_label,
             "period_delta": {
                 "label": period_label,
                 "text": dt.get("delta") or period_label,
@@ -292,11 +346,7 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
             },
             "total_downtime_pct": {
                 "value": total_dt_pct if total_dt_pct is not None else None,
-                "display": (
-                    f"{total_dt_pct:.2f} %"
-                    if total_dt_pct is not None
-                    else None
-                ),
+                "display": _format_report_pct_display(total_dt_pct),
             },
             "downtime_hours": {
                 "value": hours,
