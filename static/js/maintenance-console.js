@@ -34,6 +34,13 @@
   };
 
   /* KPI Overview chart palette — keep identical across Maintenance + KPI Overview */
+  var PEACOCK_EXPOSURE_COLORS = [
+    '#5b2c8f',
+    '#1565c0',
+    '#b84a7a',
+    '#ef6c00',
+    '#78909c',
+  ];
   var CHART_COLORS = [
     '#002855',
     '#004080',
@@ -617,20 +624,21 @@
     var valueKey = options.valueKey || 'dt_pct';
     var nameKey = options.nameKey || 'site';
     var maxVal = options.maxValue;
+    var targetPct = options.targetPct != null ? Number(options.targetPct) : DT_TARGET;
     if (!maxVal) {
       maxVal = Math.max.apply(
         null,
         rows.map(function (r) {
           return Number(r[valueKey]) || 0;
-        }).concat([DT_TARGET, 12])
+        }).concat([targetPct, 12])
       );
     }
-    var targetTick = Math.min(100, (DT_TARGET / maxVal) * 100);
+    var targetTick = Math.min(100, (targetPct / maxVal) * 100);
     var tbody = rows
       .map(function (row, i) {
         var val = Number(row[valueKey]) || 0;
         var width = Math.max(4, (val / maxVal) * 100);
-        var color = CHART_COLORS[i % CHART_COLORS.length];
+        var color = PEACOCK_EXPOSURE_COLORS[i] || CHART_COLORS[i % CHART_COLORS.length];
         var detail = options.detailFn ? options.detailFn(row) : '';
         return (
           '<tr>' +
@@ -646,7 +654,7 @@
           '<span class="maint-target-tick" style="left:' +
           targetTick +
           '%" title="Target ' +
-          DT_TARGET.toFixed(2) +
+          targetPct.toFixed(2) +
           '%"></span>' +
           '<div class="reason-bar" style="width:' +
           width +
@@ -682,7 +690,7 @@
       tbody +
       '</tbody></table></div>' +
       '<div class="maint-target-legend">FLNA Target: ' +
-      DT_TARGET.toFixed(2) +
+      targetPct.toFixed(2) +
       '% <span class="maint-target-swatch"></span></div></div>'
     );
   }
@@ -1268,7 +1276,7 @@
     };
   }
 
-  function donutCenterPlugin(mainText, subText) {
+  function donutCenterPlugin(mainText, subText, mainColor) {
     return {
       id: 'donutCenterText',
       afterDraw: function (chart) {
@@ -1280,7 +1288,7 @@
         ctx.save();
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#1a2b4a';
+        ctx.fillStyle = mainColor || '#1a2b4a';
         ctx.font = '800 26px Inter, sans-serif';
         ctx.fillText(mainText, x, y - 6);
         if (subText) {
@@ -1348,10 +1356,11 @@
     );
   }
 
-  function siteExposureTable(sites) {
+  function siteExposureTable(sites, targetPct) {
     return renderRankedExposureTable((sites || []).slice(0, 5), {
       nameHeader: 'Site',
       barHeader: 'Unplanned DT Exposure Rate',
+      targetPct: targetPct,
       detailFn: siteTableDetail,
       barValueFn: function (row) {
         return fmtNum(row.hours) + ' h';
@@ -1384,9 +1393,10 @@
       '<select class="maint-report-metric-select" aria-label="Metric selector">' +
       '<option>Total DT %</option></select></div>' +
       '<div class="maint-snapshot-grid">' +
-      '<div class="maint-report-donut-card">' +
-      '<div class="maint-donut-wrap"><canvas id="report-donut"></canvas></div>' +
-      '<div class="maint-donut-meta">' +
+      '<div class="maint-snapshot-col-left">' +
+      '<div class="maint-report-donut-card maint-donut-card-plain">' +
+      '<div class="maint-donut-wrap"><canvas id="report-donut"></canvas></div></div>' +
+      '<div class="maint-donut-meta maint-donut-meta-stack">' +
       '<div class="maint-donut-meta-item">Target <strong>' +
       fmtPct(target) +
       '</strong> <span class="bad">' +
@@ -1404,7 +1414,7 @@
       '</div></div>' +
       '<div class="maint-bar-section maint-bar-section-compact">' +
       '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
-      siteExposureTable(p.sites_at_risk) +
+      siteExposureTable(p.sites_at_risk, target) +
       '</div>'
     );
   }
@@ -1414,7 +1424,7 @@
     return (
       '<div class="maint-bar-section maint-bar-section-compact">' +
       '<h4>Unplanned Downtime Exposure Rate: Top 5 Ranked Sites</h4>' +
-      siteExposureTable(p.sites_at_risk) +
+      siteExposureTable(p.sites_at_risk, (p.kpis && p.kpis.primary && p.kpis.primary.target) || DT_TARGET) +
       '</div>' +
       '<div class="maint-bar-section maint-bar-section-compact">' +
       '<div class="maint-report-section-head" style="margin-bottom:10px">' +
@@ -1452,6 +1462,7 @@
     if (!canvas || typeof Chart === 'undefined' || !kpi) return;
     var val = kpi.value || 0;
     var rest = Math.max(0, 100 - val);
+    var centerColor = val > (kpi.target || DT_TARGET) ? '#e53935' : '#002855';
     state.charts[id] = new Chart(canvas, {
       type: 'doughnut',
       data: {
@@ -1459,7 +1470,7 @@
         datasets: [
           {
             data: [val, rest],
-            backgroundColor: [DONUT_DT_COLOR, DONUT_TRACK_COLOR],
+            backgroundColor: [DONUT_DT_COLOR, '#e8eaed'],
             borderWidth: 0,
             spacing: 3,
             borderRadius: 4,
@@ -1472,7 +1483,7 @@
         layout: { padding: 8 },
         plugins: Object.assign({}, modernChartBase().plugins, { tooltip: { enabled: false } }),
       }),
-      plugins: [donutCenterPlugin(val.toFixed(1) + '%', 'Unplanned DT')],
+      plugins: [donutCenterPlugin(val.toFixed(1) + '%', 'Unplanned DT', centerColor)],
     });
   }
 
