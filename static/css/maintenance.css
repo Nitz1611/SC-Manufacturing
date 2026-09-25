@@ -148,6 +148,22 @@ body.maint-filters-applying .metric-strip-root.metric-strip-pending .metric-valu
   color: #78909c;
 }
 
+.maint-custom-apply-btn {
+  appearance: none;
+  border: 1px solid rgba(0, 40, 85, 0.2);
+  background: #002855;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-top: 22px;
+}
+.maint-custom-apply-btn:hover {
+  background: #004080;
+}
+
 .maint-filter-bar-stacked {
   flex-direction: column;
   align-items: stretch;

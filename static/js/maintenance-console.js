@@ -226,7 +226,7 @@
         try {
           var body = JSON.parse(init.body);
           if (body.filters) {
-            body.filters = Object.assign({}, buildConsoleDataFilters(), body.filters, buildConsoleDataFilters());
+            body.filters = Object.assign({}, body.filters, buildConsoleDataFilters());
             init = Object.assign({}, init, { body: JSON.stringify(body) });
           }
         } catch (err) {
@@ -2869,18 +2869,20 @@
     state.filterRequestGen = (state.filterRequestGen || 0) + 1;
     beginFilterLoad();
     syncToConsoleFilters();
-    if (changed || isCustomApply) {
+    if (changed && filterChangeRequiresForceSql()) {
       invalidateConsoleMetricsCache();
     }
     updateEngineFilterContextBar();
-    var forceSql = changed && filterChangeRequiresForceSql();
+    var engineForce = changed && (filterChangeRequiresForceSql() || !!isCustomApply);
     var maintReq = fetchMaintenanceData(false, false);
     var mc = window.ManufacturingConsole;
     var consoleReq = Promise.resolve();
     if (mc && typeof mc.reloadMetrics === 'function') {
-      mc.state.lastDataFilterKey = changed ? null : mc.state.lastDataFilterKey;
-      var out = mc.reloadMetrics(changed || !!isCustomApply, {
-        background: false,
+      if (engineForce) {
+        mc.state.lastDataFilterKey = null;
+      }
+      var out = mc.reloadMetrics(engineForce, {
+        background: !engineForce,
       });
       consoleReq = out && typeof out.then === 'function' ? out : Promise.resolve(out);
     }
