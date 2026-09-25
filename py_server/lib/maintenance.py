@@ -516,8 +516,13 @@ def _build_mtbf_kpi_card(
     card = metrics.get("maintenance_mtbf") or {}
     kpis = metrics.get("kpis") or {}
     raw_mtbf = _metric_row_value(card, "current_mtbf_hrs")
+    value_source = "mtbf_measure"
     if raw_mtbf is not None:
         mtbf = float(raw_mtbf or 0)
+    elif _metrics_is_live(metrics):
+        # Do not substitute sched/stops — that ratio often differs from MEASURE(MTBF (Hours)).
+        mtbf = 0.0
+        value_source = "missing"
     else:
         stops = int(
             float(
@@ -532,6 +537,7 @@ def _build_mtbf_kpi_card(
             or 0
         )
         mtbf = round(sched / max(stops, 1), 2) if sched and stops else 0.0
+        value_source = "ratio_fallback"
 
     target = _resolve_mtbf_target(metrics)
     prev_mtbf = float(_metric_row_value(card, "prev_period_mtbf_hrs") or 0)
@@ -571,7 +577,7 @@ def _build_mtbf_kpi_card(
         shift_delta = round(float(last_shift_mtbf) - mtbf, 2)
         last_shift_display = f"{shift_delta:+.2f} hrs"
 
-    has_live = raw_mtbf is not None or (mtbf > 0 and stops_val > 0)
+    has_live = raw_mtbf is not None and math.isfinite(mtbf) and mtbf > 0
     last_period_class = (
         "bad" if last_period_delta < 0 else "good" if last_period_delta > 0 else "neutral"
     )
@@ -580,6 +586,7 @@ def _build_mtbf_kpi_card(
         "label": "Mean Time Between Failure (MTBF)",
         "value": mtbf,
         "value_display": f"{mtbf:.2f} hrs" if has_live else None,
+        "value_source": value_source,
         "target": target,
         "target_display": f"{target:.2f} hrs",
         "delta_vs_target": delta_vs_target,
