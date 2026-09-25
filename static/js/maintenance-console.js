@@ -246,11 +246,17 @@
     }
   }
 
-  function reloadConsoleMetrics(force) {
+  function reloadConsoleMetricsPromise(force) {
     var mc = window.ManufacturingConsole;
-    if (mc && typeof mc.reloadMetrics === 'function') {
-      mc.reloadMetrics(!!force, { background: state.page !== 'kpi-overview' && !force });
+    if (!mc || typeof mc.reloadMetrics !== 'function') {
+      return Promise.resolve();
     }
+    syncToConsoleFilters();
+    var out = mc.reloadMetrics(!!force, { background: false });
+    if (out && typeof out.then === 'function') {
+      return out;
+    }
+    return Promise.resolve(out);
   }
 
   function buildFilterPayload() {
@@ -307,11 +313,34 @@
     return JSON.stringify(buildConsoleDataFilters());
   }
 
+  function isKpiShellActive() {
+    return state.page === 'kpi-overview' || document.body.classList.contains('mode-kpi-overview');
+  }
+
+  function clearEngineLoadingUi() {
+    var mc = window.ManufacturingConsole;
+    if (!mc || !mc.state) return;
+    mc.state.dataLoading = false;
+    if (mc.state.dataPollTimer) {
+      clearInterval(mc.state.dataPollTimer);
+      mc.state.dataPollTimer = null;
+    }
+    mc.state.metricsJobId = null;
+    var bar = document.getElementById('data-status-bar');
+    if (bar) {
+      bar.style.display = 'none';
+    }
+    document.body.classList.add('app-ready');
+    var splash = document.getElementById('boot-splash');
+    if (splash && !splash.classList.contains('boot-splash-out')) {
+      splash.classList.add('boot-splash-out');
+    }
+  }
+
   function syncConsoleMetricsCacheKey() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
     var sig = consoleFilterSignature();
-    mc.state.lastDataFilterKey = sig;
     mc.state.maintFilterSig = sig;
     if (
       mc.state.metricsBase &&
@@ -372,13 +401,20 @@
       document.body.classList.add('maint-filters-applying');
       var status = $('#maint-filter-status');
       if (status) status.textContent = 'Updating metrics…';
-      if (state.page === 'kpi-overview') {
-        renderKpiOverviewMetricStripPending();
-      }
     }
+    clearTimeout(state._filterLoadWatchdog);
+    state._filterLoadWatchdog = setTimeout(function () {
+      endFilterLoad();
+      clearEngineLoadingUi();
+      var statusEl = $('#maint-filter-status');
+      if (statusEl) {
+        statusEl.textContent = 'Still loading in background — you can keep working.';
+      }
+    }, 90000);
   }
 
   function endFilterLoad() {
+    clearTimeout(state._filterLoadWatchdog);
     state.filterLoadsInFlight = Math.max(0, (state.filterLoadsInFlight || 1) - 1);
     if (state.filterLoadsInFlight <= 0) {
       state.filterLoadsInFlight = 0;
@@ -464,12 +500,15 @@
       })
       .catch(function (err) {
         console.error('[maintenance]', err);
-        var el = $('#maint-root');
-        if (el) {
-          el.innerHTML =
-            '<div class="page-hero"><h2>Maintenance</h2><p>Unable to load data: ' +
-            esc(err.message) +
-            '</p></div>';
+        clearEngineLoadingUi();
+        if (!state.payload) {
+          var el = $('#maint-root');
+          if (el) {
+            el.innerHTML =
+              '<div class="page-hero"><h2>Maintenance</h2><p>Unable to load data: ' +
+              esc(err.message) +
+              '</p></div>';
+          }
         }
       })
       .finally(function () {
@@ -806,7 +845,7 @@
       syncToConsoleFilters();
       applyShowInToEngine();
       if (state.page === 'kpi-overview') {
-        reloadConsoleMetrics(false);
+        reloadConsoleMetricsPromise(false);
         afterKpiOverviewMetricsUpdated();
       }
     });
@@ -919,6 +958,7 @@
       var input = group.querySelector('input');
       if (id === 'from' && input) state.filters.dateFrom = input.value;
       if (id === 'to' && input) state.filters.dateTo = input.value;
+      state._customDateOnlyChange = true;
       updateEngineFilterContextBar();
       updateCustomRangeStatus();
     });
@@ -2197,8 +2237,7 @@
     applyShowInToEngine();
     updateEngineFilterContextBar();
     reflowDashboardCharts();
-    reloadConsoleMetrics(false);
-    afterKpiOverviewMetricsUpdated();
+    applyFiltersNow(false);
   }
 
   function openKpiOverviewFromReport() {
@@ -2840,13 +2879,19 @@
         state._awaitCustomApply = false;
         return;
       }
-      return;
+      if (!customRangeReady()) {
+        return;
+      }
+      if (state._customDateOnlyChange) {
+        state._customDateOnlyChange = false;
+        return;
+      }
     }
 
     clearTimeout(filterChangeTimer);
     filterChangeTimer = setTimeout(function () {
       applyFiltersNow(false);
-    }, 80);
+    }, 120);
   }
 
   function filterChangeRequiresForceSql() {
@@ -2854,7 +2899,6 @@
     if (normalizeMultiList(state.filters.department).length) return true;
     if (normalizeMultiList(state.filters.shift).length) return true;
     if (normalizeMultiList(state.filters.site).length > 1) return true;
-    if (normalizeMultiList(state.filters.region).length) return true;
     return false;
   }
 
@@ -2863,35 +2907,24 @@
       updateCustomRangeStatus();
       return;
     }
-    var sig = consoleFilterSignature();
-    var changed = sig !== state._appliedFilterSig;
-    state._appliedFilterSig = sig;
-    state.filterRequestGen = (state.filterRequestGen || 0) + 1;
     beginFilterLoad();
     syncToConsoleFilters();
-    if (changed && filterChangeRequiresForceSql()) {
-      invalidateConsoleMetricsCache();
-    }
     updateEngineFilterContextBar();
-    var engineForce = changed && (filterChangeRequiresForceSql() || !!isCustomApply);
-    var maintReq = fetchMaintenanceData(false, false);
-    var mc = window.ManufacturingConsole;
-    var consoleReq = Promise.resolve();
-    if (mc && typeof mc.reloadMetrics === 'function') {
-      if (engineForce) {
-        mc.state.lastDataFilterKey = null;
-      }
-      var out = mc.reloadMetrics(engineForce, {
-        background: !engineForce,
-      });
-      consoleReq = out && typeof out.then === 'function' ? out : Promise.resolve(out);
-    }
-    Promise.all([maintReq, consoleReq])
+    var useForce = !!(isCustomApply && isCustomTimeframe());
+    var loadPromise = isKpiShellActive()
+      ? reloadConsoleMetricsPromise(useForce)
+      : fetchMaintenanceData(false, false);
+    loadPromise
       .then(function () {
+        state._appliedFilterSig = consoleFilterSignature();
+        state._consoleFilterSig = state._appliedFilterSig;
         syncConsoleMetricsCacheKey();
         afterKpiOverviewMetricsUpdated();
       })
-      .finally(endFilterLoad);
+      .finally(function () {
+        endFilterLoad();
+        clearEngineLoadingUi();
+      });
   }
 
   function buildPrimaryNav() {
@@ -3073,15 +3106,12 @@
       var engineReloadMetrics = mc.reloadMetrics.bind(mc);
       mc.reloadMetrics = function (force, opts) {
         syncToConsoleFilters();
-        var sig = consoleFilterSignature();
-        if (sig !== state._appliedFilterSig) {
-          mc.state.lastDataFilterKey = null;
-        }
         var out = engineReloadMetrics(force, opts);
         var done = function () {
           syncConsoleMetricsCacheKey();
           updateEngineFilterContextBar();
           afterKpiOverviewMetricsUpdated();
+          clearEngineLoadingUi();
           if (state.page === 'maintenance') {
             updateShellForPage('maintenance');
           }
