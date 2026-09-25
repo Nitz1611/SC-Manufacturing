@@ -57,6 +57,8 @@ MAINTENANCE_KPI_QUERY_KEYS = (
     'maintenance_mtbf_trend_ytd',
     'maintenance_total_dt_card',
     'maintenance_total_dt_trend_ytd',
+    'maintenance_dt_hours_trend_ytd',
+    'maintenance_stops_trend_ytd',
 )
 WAVE1_CHART_KEYS = (
     'dashboard_dt_period_trend',
@@ -73,6 +75,8 @@ WAVE1_CHART_KEYS = (
     'maintenance_mtbf_trend_ytd',
     'maintenance_total_dt_card',
     'maintenance_total_dt_trend_ytd',
+    'maintenance_dt_hours_trend_ytd',
+    'maintenance_stops_trend_ytd',
 )
 WAVE2_QUERY_KEYS = (
     'dashboard_dt_category_by_period',
@@ -325,6 +329,8 @@ def load_metrics_from_sql(
         'maintenanceMtbfTrendYtd': w1['maintenance_mtbf_trend_ytd'],
         'maintenanceTotalDtCard': w1['maintenance_total_dt_card'],
         'maintenanceTotalDtTrendYtd': w1['maintenance_total_dt_trend_ytd'],
+        'maintenanceDtHoursTrendYtd': w1['maintenance_dt_hours_trend_ytd'],
+        'maintenanceStopsTrendYtd': w1['maintenance_stops_trend_ytd'],
     }
 
     metrics = build_metrics_from_sql(results, norm)
@@ -521,6 +527,8 @@ def enrich_metrics_for_maintenance_kpis(
         maintenance_mtbf_trend_ytd=rows.get('maintenance_mtbf_trend_ytd'),
         maintenance_total_dt_card=rows.get('maintenance_total_dt_card'),
         maintenance_total_dt_trend_ytd=rows.get('maintenance_total_dt_trend_ytd'),
+        maintenance_dt_hours_trend_ytd=rows.get('maintenance_dt_hours_trend_ytd'),
+        maintenance_stops_trend_ytd=rows.get('maintenance_stops_trend_ytd'),
     )
     meta = dict(m.get('meta') or {})
     meta['maintenance_kpi_enriched'] = True

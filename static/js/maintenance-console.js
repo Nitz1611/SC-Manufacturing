@@ -510,6 +510,7 @@
         applyShowInToEngine();
         if (state.page === 'kpi-overview') {
           reloadConsoleMetrics(false);
+          afterKpiOverviewMetricsUpdated();
         }
         return;
       }
@@ -1515,6 +1516,219 @@
     });
   }
 
+  function kpiOverviewShowInMode() {
+    return String(state.filters.showIn || 'Thousands').toLowerCase();
+  }
+
+  function parseKpiNumeric(raw) {
+    if (raw == null) return NaN;
+    return parseFloat(String(raw).replace(/,/g, '').replace(/[^\d.-]/g, ''));
+  }
+
+  function formatKpiOverviewHoursDisplay(raw) {
+    var n = parseKpiNumeric(raw);
+    if (!isFinite(n)) return '—';
+    var mode = kpiOverviewShowInMode();
+    if (mode === 'thousands') return (n / 1e6).toFixed(2) + ' M';
+    if (mode === 'percentage') return n.toFixed(2) + ' %';
+    return Math.round(n).toLocaleString('en-US');
+  }
+
+  function formatKpiOverviewHoursTrend(values) {
+    var mode = kpiOverviewShowInMode();
+    return (values || []).map(function (v) {
+      var n = Number(v);
+      if (!isFinite(n)) return 0;
+      if (mode === 'thousands') return n / 1e6;
+      return n;
+    });
+  }
+
+  function deltaClassName(direction) {
+    if (direction === 'good') return 'good';
+    if (direction === 'bad') return 'bad';
+    return 'neutral';
+  }
+
+  function destroyKpiStripCharts() {
+    ['kpi-strip-dt-pct', 'kpi-strip-dt-hrs', 'kpi-strip-stops'].forEach(function (id) {
+      destroyChart(id);
+      var mc = window.ManufacturingConsole;
+      if (mc && mc.state && mc.state.charts && mc.state.charts[id]) {
+        try {
+          mc.state.charts[id].destroy();
+        } catch (e) {
+          /* ignore */
+        }
+        delete mc.state.charts[id];
+      }
+    });
+  }
+
+  function drawKpiStripSparkline(canvasId, labels, data, lineColor, fillTop, fillBottom) {
+    destroyChart(canvasId);
+    var canvas = document.getElementById(canvasId);
+    if (!canvas || typeof Chart === 'undefined' || !data || !data.length) return;
+    var ctx = canvas.getContext('2d');
+    var grad = ctx.createLinearGradient(0, 0, 0, 88);
+    grad.addColorStop(0, fillTop || 'rgba(229,57,53,0.28)');
+    grad.addColorStop(1, fillBottom || 'rgba(229,57,53,0.02)');
+    var chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            data: data,
+            borderColor: lineColor,
+            backgroundColor: grad,
+            fill: true,
+            tension: 0.42,
+            pointRadius: 0,
+            borderWidth: 2,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { top: 4, bottom: 2, left: 0, right: 0 } },
+        plugins: { legend: { display: false }, tooltip: { enabled: true } },
+        scales: { x: { display: false }, y: { display: false } },
+        animation: { duration: 500 },
+      },
+    });
+    state.charts[canvasId] = chart;
+    var mc = window.ManufacturingConsole;
+    if (mc && mc.state && mc.state.charts) {
+      mc.state.charts[canvasId] = chart;
+    }
+  }
+
+  function renderKpiOverviewMetricStrip() {
+    if (state.page !== 'kpi-overview') return;
+    var mc = window.ManufacturingConsole;
+    if (!mc || !mc.state) return;
+    var metrics = mc.state.liveMetrics;
+    if (!metrics || !metrics.kpis) return;
+
+    var kpis = metrics.kpis;
+    var dt = kpis.downtime_pct || {};
+    var hrs = kpis.downtime_hrs || {};
+    var stops = kpis.stops || {};
+    var labels = metrics.ytd_periods || metrics.periods || [];
+    var trendPct = metrics.ytd_period_trend || [];
+    var trendHrs = formatKpiOverviewHoursTrend(metrics.ytd_period_trend_hrs || []);
+    var trendStops = metrics.ytd_stops_period_trend || [];
+
+    if (!labels.length && trendPct.length) {
+      labels = trendPct.map(function (_, i) {
+        return 'P' + (i + 1);
+      });
+    }
+
+    var hoursLabel =
+      kpiOverviewShowInMode() === 'thousands'
+        ? 'Unplanned DT Hours (M)'
+        : kpiOverviewShowInMode() === 'percentage'
+          ? 'Unplanned DT Hours'
+          : 'Unplanned Downtime Hours';
+
+    var html =
+      '<div class="metric-card metric-card-with-trend">' +
+      '<div class="metric-card-main">' +
+      '<div class="metric-label">Unplanned DT %</div>' +
+      '<div class="metric-value">' +
+      esc(dt.value || '—') +
+      '</div>' +
+      '<div class="metric-delta ' +
+      deltaClassName(dt.direction) +
+      '">' +
+      esc(dt.delta || '') +
+      '</div>' +
+      '<div class="metric-trend-caption">YTD by period</div></div>' +
+      '<div class="metric-card-trend"><canvas id="kpi-strip-dt-pct" aria-label="Unplanned downtime percent YTD trend"></canvas></div></div>' +
+      '<div class="metric-card metric-card-with-trend">' +
+      '<div class="metric-card-main">' +
+      '<div class="metric-label">' +
+      esc(hoursLabel) +
+      '</div>' +
+      '<div class="metric-value">' +
+      esc(formatKpiOverviewHoursDisplay(hrs.value)) +
+      '</div>' +
+      '<div class="metric-delta ' +
+      deltaClassName(hrs.direction) +
+      '">' +
+      esc(hrs.delta || '') +
+      '</div>' +
+      '<div class="metric-trend-caption">YTD by period</div></div>' +
+      '<div class="metric-card-trend"><canvas id="kpi-strip-dt-hrs" aria-label="Unplanned downtime hours YTD trend"></canvas></div></div>' +
+      '<div class="metric-card metric-card-with-trend">' +
+      '<div class="metric-card-main">' +
+      '<div class="metric-label">STOPS</div>' +
+      '<div class="metric-value">' +
+      esc(stops.value || '—') +
+      '</div>' +
+      '<div class="metric-delta ' +
+      deltaClassName(stops.direction) +
+      '">' +
+      esc(stops.delta || '') +
+      '</div>' +
+      '<div class="metric-trend-caption">YTD by period</div></div>' +
+      '<div class="metric-card-trend"><canvas id="kpi-strip-stops" aria-label="Stops YTD trend"></canvas></div></div>';
+
+    document.querySelectorAll('.metric-strip-root').forEach(function (strip) {
+      strip.classList.add('metric-strip-ytd-trends');
+      strip.innerHTML = html;
+    });
+
+    requestAnimationFrame(function () {
+      var lbl = labels.slice(0, Math.max(trendPct.length, trendHrs.length, trendStops.length));
+      drawKpiStripSparkline(
+        'kpi-strip-dt-pct',
+        lbl,
+        trendPct,
+        '#e53935',
+        'rgba(229,57,53,0.28)',
+        'rgba(229,57,53,0.02)'
+      );
+      drawKpiStripSparkline(
+        'kpi-strip-dt-hrs',
+        lbl,
+        trendHrs,
+        '#1565c0',
+        'rgba(21,101,192,0.24)',
+        'rgba(21,101,192,0.02)'
+      );
+      drawKpiStripSparkline(
+        'kpi-strip-stops',
+        lbl,
+        trendStops,
+        '#002855',
+        'rgba(0,40,85,0.22)',
+        'rgba(0,40,85,0.02)'
+      );
+    });
+  }
+
+  function afterKpiOverviewMetricsUpdated() {
+    if (state.page !== 'kpi-overview') return;
+    renderKpiOverviewMetricStrip();
+  }
+
+  function patchKpiOverviewMetricStripHooks() {
+    var mc = window.ManufacturingConsole;
+    if (!mc || mc.__kpiStripHooksPatched) return;
+    mc.__kpiStripHooksPatched = true;
+    if (typeof mc.applyShowIn === 'function') {
+      var origApply = mc.applyShowIn.bind(mc);
+      mc.applyShowIn = function () {
+        origApply();
+        afterKpiOverviewMetricsUpdated();
+      };
+    }
+  }
+
   function handleKnowMoreAction(e) {
     var actionable = e.target.closest('[data-action]');
     if (!actionable) return false;
@@ -1559,6 +1773,7 @@
     applyShowInToEngine();
     reflowDashboardCharts();
     reloadConsoleMetrics(true);
+    afterKpiOverviewMetricsUpdated();
   }
 
   function openKpiOverviewFromReport() {
@@ -2338,6 +2553,7 @@
     }
     window.__maintenanceConsoleInitDone = true;
     patchConsoleDataFetch();
+    patchKpiOverviewMetricStripHooks();
     syncFromConsoleFilters();
     state.filters.year = state.filters.year || '2026';
     state.filters.timeframe = state.filters.timeframe || 'ptd';
@@ -2375,15 +2591,16 @@
       mc.reloadMetrics = function (force, opts) {
         syncToConsoleFilters();
         var out = engineReloadMetrics(force, opts);
-        if (state.page === 'maintenance') {
-          var reassert = function () {
+        var done = function () {
+          afterKpiOverviewMetricsUpdated();
+          if (state.page === 'maintenance') {
             updateShellForPage('maintenance');
-          };
-          if (out && typeof out.then === 'function') {
-            out.then(reassert).catch(reassert);
-          } else {
-            setTimeout(reassert, 0);
           }
+        };
+        if (out && typeof out.then === 'function') {
+          out.then(done).catch(done);
+        } else {
+          setTimeout(done, 150);
         }
         return out;
       };

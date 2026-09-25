@@ -104,6 +104,8 @@ class MetricsPayload(TypedDict, total=False):
     mtbf_ytd_periods: List[str]
     total_dt_ytd_period_trend: List[float]
     total_dt_ytd_periods: List[str]
+    ytd_period_trend_hrs: List[float]
+    ytd_stops_period_trend: List[float]
 
 
 class SqlQueryResults(TypedDict):
@@ -128,6 +130,8 @@ class SqlQueryResults(TypedDict):
     maintenanceMtbfTrendYtd: List[Dict[str, Any]]
     maintenanceTotalDtCard: List[Dict[str, Any]]
     maintenanceTotalDtTrendYtd: List[Dict[str, Any]]
+    maintenanceDtHoursTrendYtd: List[Dict[str, Any]]
+    maintenanceStopsTrendYtd: List[Dict[str, Any]]
 
 
 PERIODS: List[str] = [f"P{i + 1}" for i in range(10)]
@@ -948,6 +952,8 @@ def apply_maintenance_kpi_sql_rows(
     maintenance_mtbf_trend_ytd: List[Dict[str, Any]] | None = None,
     maintenance_total_dt_card: List[Dict[str, Any]] | None = None,
     maintenance_total_dt_trend_ytd: List[Dict[str, Any]] | None = None,
+    maintenance_dt_hours_trend_ytd: List[Dict[str, Any]] | None = None,
+    maintenance_stops_trend_ytd: List[Dict[str, Any]] | None = None,
 ) -> None:
     """Merge maintenance KPI card + YTD sparkline SQL into an existing metrics payload."""
     if maintenance_unplanned_card:
@@ -1024,6 +1030,40 @@ def apply_maintenance_kpi_sql_rows(
             )
         metrics["total_dt_ytd_periods"] = total_dt_ytd_period_labels
         metrics["total_dt_ytd_period_trend"] = total_dt_ytd_period_trend
+
+    if maintenance_dt_hours_trend_ytd is not None:
+        labels = _sort_periods([
+            str(r.get("period_label") or "")
+            for r in maintenance_dt_hours_trend_ytd
+            if r.get("period_label")
+        ])
+        trend_hrs: List[float] = []
+        for p in labels:
+            row = next(
+                (r for r in maintenance_dt_hours_trend_ytd if str(r.get("period_label")) == p),
+                None,
+            )
+            trend_hrs.append(_round2(float(row.get("dt_hours") or 0)) if row else 0.0)
+        if labels:
+            metrics["ytd_periods"] = labels
+        metrics["ytd_period_trend_hrs"] = trend_hrs
+
+    if maintenance_stops_trend_ytd is not None:
+        labels = _sort_periods([
+            str(r.get("period_label") or "")
+            for r in maintenance_stops_trend_ytd
+            if r.get("period_label")
+        ])
+        trend_stops: List[float] = []
+        for p in labels:
+            row = next(
+                (r for r in maintenance_stops_trend_ytd if str(r.get("period_label")) == p),
+                None,
+            )
+            trend_stops.append(_round2(float(row.get("stops") or 0)) if row else 0.0)
+        if labels and not metrics.get("ytd_periods"):
+            metrics["ytd_periods"] = labels
+        metrics["ytd_stops_period_trend"] = trend_stops
 
 
 def build_metrics_from_sql(
@@ -1182,6 +1222,30 @@ def build_metrics_from_sql(
         total_dt_ytd_period_trend.append(
             _round2(float(row.get("total_dt_pct") or 0)) if row else 0.0
         )
+
+    ytd_hrs_rows = results.get("maintenanceDtHoursTrendYtd") or []
+    ytd_hrs_labels = _sort_periods([
+        str(r.get("period_label") or "") for r in ytd_hrs_rows if r.get("period_label")
+    ])
+    ytd_period_trend_hrs: List[float] = []
+    for p in ytd_hrs_labels:
+        row = next((r for r in ytd_hrs_rows if str(r.get("period_label")) == p), None)
+        ytd_period_trend_hrs.append(_round2(float(row.get("dt_hours") or 0)) if row else 0.0)
+
+    ytd_stops_rows = results.get("maintenanceStopsTrendYtd") or []
+    ytd_stops_labels = _sort_periods([
+        str(r.get("period_label") or "") for r in ytd_stops_rows if r.get("period_label")
+    ])
+    ytd_stops_period_trend: List[float] = []
+    for p in ytd_stops_labels:
+        row = next((r for r in ytd_stops_rows if str(r.get("period_label")) == p), None)
+        ytd_stops_period_trend.append(_round2(float(row.get("stops") or 0)) if row else 0.0)
+
+    if ytd_hrs_labels and not ytd_period_labels:
+        ytd_period_labels = ytd_hrs_labels
+    elif ytd_stops_labels and not ytd_period_labels:
+        ytd_period_labels = ytd_stops_labels
+
     filter_options = build_filter_options(results["filterOptions"])
     departments: set[str] = set()
     lines: set[str] = set()
@@ -1269,6 +1333,8 @@ def build_metrics_from_sql(
         "mtbf_ytd_periods": mtbf_ytd_period_labels,
         "total_dt_ytd_period_trend": total_dt_ytd_period_trend,
         "total_dt_ytd_periods": total_dt_ytd_period_labels,
+        "ytd_period_trend_hrs": ytd_period_trend_hrs,
+        "ytd_stops_period_trend": ytd_stops_period_trend,
     }
     m["tab_insights"] = build_tab_insights(m)
     return m
