@@ -21,6 +21,7 @@ GOLD_NAMES = {
     "reason": "Downtime Reason",
     "dtPct": "Unplanned Downtime %",
     "totalDtPct": "% Downtime",
+    "totalDtHours": "Downtime Hours",
     "dtHours": "Unplanned Downtime Hours",
     "dtType": "Downtime Type",
     "stops": "STOPS",
@@ -259,6 +260,10 @@ def total_downtime_pct_column() -> str:
     return _resolve_column("DATABRICKS_TOTAL_DT_PCT_COLUMN", GOLD_NAMES["totalDtPct"])
 
 
+def total_downtime_hours_column() -> str:
+    return _resolve_column("DATABRICKS_TOTAL_DT_HOURS_COLUMN", GOLD_NAMES["totalDtHours"])
+
+
 def stops_column() -> str:
     return _resolve_column("DATABRICKS_STOPS_COLUMN", GOLD_NAMES["stops"])
 
@@ -304,6 +309,10 @@ def total_downtime_pct_measure() -> str:
     return _measure_expr(total_downtime_pct_column())
 
 
+def total_downtime_hours_measure() -> str:
+    return _measure_expr(total_downtime_hours_column())
+
+
 def stops_measure() -> str:
     return _measure_expr(stops_column())
 
@@ -346,6 +355,9 @@ def _apply_sql_fragments(sql: str) -> str:
         .replace("{{dt_pct_m}}", dt_pct_measure())
         .replace("{{dt_hours_m}}", dt_hours_measure())
         .replace("{{total_dt_pct_m}}", total_downtime_pct_measure())
+        .replace("{{total_dt_hours_m}}", total_downtime_hours_measure())
+        .replace("{{total_dt_pct_filter}}", dt_measure_context_filter())
+        .replace("{{total_dt_hours_filter}}", dt_measure_context_filter())
         .replace("{{stops_m}}", stops_measure())
         .replace("{{scheduled_hours_m}}", scheduled_hours_measure())
         .replace("{{mtbf_m}}", mtbf_hours_measure())

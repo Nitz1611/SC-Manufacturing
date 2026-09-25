@@ -55,6 +55,8 @@ MAINTENANCE_KPI_QUERY_KEYS = (
     'maintenance_dt_trend_ytd',
     'maintenance_mtbf_card',
     'maintenance_mtbf_trend_ytd',
+    'maintenance_total_dt_card',
+    'maintenance_total_dt_trend_ytd',
 )
 WAVE1_CHART_KEYS = (
     'dashboard_dt_period_trend',
@@ -69,6 +71,8 @@ WAVE1_CHART_KEYS = (
     'maintenance_dt_trend_ytd',
     'maintenance_mtbf_card',
     'maintenance_mtbf_trend_ytd',
+    'maintenance_total_dt_card',
+    'maintenance_total_dt_trend_ytd',
 )
 WAVE2_QUERY_KEYS = (
     'dashboard_dt_category_by_period',
@@ -319,6 +323,8 @@ def load_metrics_from_sql(
         'maintenanceDtTrendYtd': w1['maintenance_dt_trend_ytd'],
         'maintenanceMtbfCard': w1['maintenance_mtbf_card'],
         'maintenanceMtbfTrendYtd': w1['maintenance_mtbf_trend_ytd'],
+        'maintenanceTotalDtCard': w1['maintenance_total_dt_card'],
+        'maintenanceTotalDtTrendYtd': w1['maintenance_total_dt_trend_ytd'],
     }
 
     metrics = build_metrics_from_sql(results, norm)
@@ -466,7 +472,21 @@ def _needs_maintenance_kpi_enrich(metrics: dict[str, Any] | None) -> bool:
             if str(k).lower() == "ytd_target_mtbf_hrs" and v is not None:
                 ytd_mtbf = v
                 break
-    return ytd_mtbf is None
+    if ytd_mtbf is None:
+        return True
+    total_dt = metrics.get("maintenance_total_downtime") or {}
+    if metrics.get("total_dt_ytd_target_pct") is not None:
+        return False
+    ytd_total = total_dt.get("ytd_target_total_dt_pct")
+    if ytd_total is None:
+        for k, v in total_dt.items():
+            if str(k).lower() == "ytd_target_total_dt_pct" and v is not None:
+                ytd_total = v
+                break
+    if ytd_total is None:
+        return True
+    total_trend = metrics.get("total_dt_ytd_period_trend") or []
+    return not bool(total_trend)
 
 
 def enrich_metrics_for_maintenance_kpis(
@@ -498,6 +518,8 @@ def enrich_metrics_for_maintenance_kpis(
         maintenance_dt_trend_ytd=rows.get('maintenance_dt_trend_ytd'),
         maintenance_mtbf_card=rows.get('maintenance_mtbf_card'),
         maintenance_mtbf_trend_ytd=rows.get('maintenance_mtbf_trend_ytd'),
+        maintenance_total_dt_card=rows.get('maintenance_total_dt_card'),
+        maintenance_total_dt_trend_ytd=rows.get('maintenance_total_dt_trend_ytd'),
     )
     meta = dict(m.get('meta') or {})
     meta['maintenance_kpi_enriched'] = True

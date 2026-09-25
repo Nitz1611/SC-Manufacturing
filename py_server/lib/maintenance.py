@@ -195,6 +195,19 @@ def _resolve_mtbf_target(metrics: MetricsPayload) -> float:
     return MTBF_TARGET_HRS
 
 
+def _resolve_total_dt_target(metrics: MetricsPayload) -> float:
+    """YTD total downtime % target — fixed vs timeframe, like unplanned YTD target."""
+    card = metrics.get("maintenance_total_downtime") or {}
+    raw = _metric_row_value(card, "ytd_target_total_dt_pct")
+    if raw is None and metrics.get("total_dt_ytd_target_pct") is not None:
+        raw = metrics.get("total_dt_ytd_target_pct")
+    if raw is not None:
+        return _parse_pct(raw)
+    if _metrics_is_live(metrics):
+        return 0.0
+    return DT_TARGET_PCT
+
+
 def _kpi_status_dot(value: float, target: float, *, higher_is_better: bool = False) -> str:
     if higher_is_better:
         return "critical" if value < target else "good"
@@ -624,6 +637,72 @@ def _build_mtbf_kpi_card(
     }
 
 
+def _build_total_dt_kpi_card(
+    metrics: MetricsPayload,
+    filters: dict[str, Any] | None,
+) -> dict[str, Any]:
+    card = metrics.get("maintenance_total_downtime") or {}
+    raw_pct = _metric_row_value(card, "current_total_dt_pct")
+    has_live = raw_pct is not None
+    dt_pct = _parse_pct(raw_pct) if has_live else 0.0
+
+    target = _resolve_total_dt_target(metrics)
+    prev_period_pct = _parse_pct(_metric_row_value(card, "prev_period_total_dt_pct"))
+    latest_week_raw = _metric_row_value(card, "latest_week_total_dt_pct")
+    latest_week_pct = (
+        _parse_pct(latest_week_raw) if latest_week_raw is not None else None
+    )
+
+    ytd_trend = metrics.get("total_dt_ytd_period_trend") or []
+    tf_key = _timeframe_key(filters, metrics)
+    last_period_delta, last_period_label = _compute_last_period_delta(
+        tf_key,
+        dt_pct,
+        prev_period_pct,
+        ytd_trend,
+        latest_week_pct=latest_week_pct,
+    )
+
+    delta_vs_target = round(dt_pct - target, 2)
+    trend_labels = _trend_labels(metrics, ytd_trend, "total_dt_ytd_periods")
+
+    last_shift_pct = None
+    if _metric_row_value(card, "last_shift_total_dt_pct") is not None:
+        last_shift_pct = float(_metric_row_value(card, "last_shift_total_dt_pct") or 0)
+    last_shift_display = None
+    if last_shift_pct is not None:
+        shift_delta = round(last_shift_pct - dt_pct, 2)
+        last_shift_display = f"{shift_delta:+.2f}%"
+
+    total_hrs_raw = _metric_row_value(card, "current_total_dt_hrs")
+    total_hrs = float(total_hrs_raw or 0) if total_hrs_raw is not None else 0.0
+    footer_hours = f"{total_hrs:,.1f}" if total_hrs > 0 else None
+
+    last_period_class = (
+        "bad" if last_period_delta > 0 else "good" if last_period_delta < 0 else "neutral"
+    )
+
+    return {
+        "label": "Total Downtime %",
+        "value": dt_pct,
+        "value_display": f"{dt_pct:.2f} %" if has_live else None,
+        "target": target,
+        "target_display": f"{target:.2f} %",
+        "delta_vs_target": delta_vs_target,
+        "delta_vs_target_display": f"{abs(delta_vs_target):.2f}%",
+        "last_period_delta": last_period_delta,
+        "last_period_delta_display": f"{last_period_delta:+.2f}%",
+        "last_period_label": last_period_label,
+        "last_period_class": last_period_class,
+        "trend": {"labels": trend_labels, "data": ytd_trend},
+        "last_shift": {"display": last_shift_display},
+        "footer_right": footer_hours,
+        "footer_right_label": "Total Downtime Hours",
+        "status_dot": _kpi_status_dot(dt_pct, target, higher_is_better=False),
+        "wip": not has_live,
+    }
+
+
 def _build_secondary_kpis(metrics: MetricsPayload) -> list[dict[str, Any]]:
     return [
         {
@@ -631,13 +710,6 @@ def _build_secondary_kpis(metrics: MetricsPayload) -> list[dict[str, Any]]:
             "label": "% Backlog Planned Maintenance",
             "value": None,
             "target": "< 10.0 %",
-            "wip": True,
-        },
-        {
-            "id": "planned",
-            "label": "Total Planned Downtime %",
-            "value": None,
-            "target": "3.00 %",
             "wip": True,
         },
     ]
@@ -1203,6 +1275,7 @@ def build_maintenance_payload(
     top_site = sites_at_risk[0]["site"] if sites_at_risk else ""
     kpis_block = _build_kpis(metrics, effective_filters)
     kpis_block["mtbf"] = _build_mtbf_kpi_card(metrics, effective_filters)
+    kpis_block["total_downtime"] = _build_total_dt_kpi_card(metrics, effective_filters)
     primary_target = float((kpis_block.get("primary") or {}).get("target") or 0)
 
     return {

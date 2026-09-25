@@ -1034,6 +1034,82 @@
     );
   }
 
+  function renderTotalDtKpi(kpi) {
+    if (!kpi || kpi.wip) return '';
+    var target = Number(kpi.target || 0);
+    var deltaClass = kpi.delta_vs_target > 0 ? 'bad' : 'good';
+    var deltaArrow = kpi.delta_vs_target > 0 ? '▲' : '▼';
+    var lastPeriodDelta = Number(kpi.last_period_delta != null ? kpi.last_period_delta : 0);
+    var lastPeriodClass =
+      kpi.last_period_class ||
+      (lastPeriodDelta > 0 ? 'bad' : lastPeriodDelta < 0 ? 'good' : 'neutral');
+    var lastPeriodValue =
+      kpi.last_period_delta_display ||
+      (lastPeriodDelta > 0 ? '+' : '') + lastPeriodDelta.toFixed(2) + '%';
+    var lastPeriodLabel = (kpi && kpi.last_period_label) || 'Last Period';
+    var lastShiftVal = (kpi.last_shift && kpi.last_shift.display) || null;
+    var footerVal = kpi.footer_right || null;
+    var footerLabel = kpi.footer_right_label || 'Total Downtime Hours';
+    var dotClass = kpi.status_dot || (kpi.value > target ? 'critical' : statusDotClass(kpi.value, target));
+
+    return (
+      '<article class="maint-kpi-card maint-kpi-total-dt maint-kpi-card-design" data-kpi="total-dt">' +
+      '<div class="maint-kpi-head">' +
+      '<span class="maint-status-dot ' +
+      dotClass +
+      '" aria-hidden="true"></span>' +
+      '<span class="maint-kpi-title">' +
+      esc(kpi.label || 'Total Downtime %') +
+      '</span></div>' +
+      '<div class="maint-kpi-body">' +
+      '<div class="maint-kpi-main">' +
+      '<div class="maint-kpi-value">' +
+      esc(kpi.value_display || fmtPct(kpi.value)) +
+      '</div>' +
+      '<div class="maint-kpi-target-row">' +
+      '<span class="maint-kpi-target-label">Target</span> ' +
+      '<strong class="maint-kpi-target-value">' +
+      esc(kpi.target_display || fmtPct(target)) +
+      '</strong>' +
+      '<span class="maint-kpi-delta ' +
+      deltaClass +
+      '">' +
+      esc(kpi.delta_vs_target_display || Math.abs(kpi.delta_vs_target).toFixed(2) + '%') +
+      ' ' +
+      deltaArrow +
+      '</span></div></div>' +
+      '<div class="maint-kpi-trend">' +
+      '<div class="maint-kpi-trend-chart">' +
+      '<div class="maint-kpi-trend-canvas-wrap">' +
+      '<canvas id="maint-spark-total-dt" aria-label="Total downtime percent by period for fiscal year"></canvas>' +
+      '</div>' +
+      '<div class="maint-trend-period-delta">' +
+      '<span class="maint-trend-period-label">' +
+      esc(lastPeriodLabel) +
+      '</span> ' +
+      '<span class="maint-trend-period-value ' +
+      lastPeriodClass +
+      '">' +
+      esc(String(lastPeriodValue).replace(/\s+%/g, '%')) +
+      '</span></div></div></div></div>' +
+      '<div class="maint-kpi-footer-stats maint-kpi-footer-visible">' +
+      '<span class="maint-footer-left">' +
+      '<span class="maint-footer-label">Last Shift </span>' +
+      '<span class="maint-footer-value ' +
+      (lastShiftVal ? 'bad' : 'muted') +
+      '">' +
+      esc(lastShiftVal || '—') +
+      '</span></span>' +
+      '<span class="maint-footer-right">' +
+      '<strong class="maint-footer-value bad">' +
+      esc(footerVal || '—') +
+      '</strong>' +
+      ' <span class="maint-footer-label">' +
+      esc(footerLabel) +
+      '</span></span></div></article>'
+    );
+  }
+
   function renderSecondaryKpis(list) {
     return (list || [])
       .map(function (k, i) {
@@ -1240,11 +1316,13 @@
     var p = state.payload;
     var kpi = p.kpis && p.kpis.primary;
     var mtbf = p.kpis && p.kpis.mtbf;
+    var totalDt = p.kpis && p.kpis.total_downtime;
 
     root.innerHTML =
       '<div class="maint-kpi-row" id="maint-kpi-row">' +
       renderPrimaryKpi(kpi) +
       renderMtbfKpi(mtbf) +
+      renderTotalDtKpi(totalDt) +
       renderSecondaryKpis(p.secondary_kpis) +
       '</div>' +
       '<div class="maint-insights-panel-wrap">' +
@@ -1265,6 +1343,7 @@
     requestAnimationFrame(function () {
       drawSparkline('maint-spark-primary', kpi && kpi.trend);
       drawSparkline('maint-spark-mtbf', mtbf && mtbf.trend);
+      drawSparkline('maint-spark-total-dt', totalDt && totalDt.trend);
       if (state.openAlert != null && p.alerts && p.alerts[state.openAlert]) {
         drawAlertChart(state.openAlert, p.alerts[state.openAlert].detail);
       }
