@@ -1559,6 +1559,58 @@
     });
   }
 
+  function wrapChartAxisLabel(text, maxLen) {
+    var c = String(text || '').trim();
+    maxLen = maxLen || 14;
+    if (!c || c.length <= maxLen) return c;
+    var parts = c.split(/\s+/);
+    var line = '';
+    var out = [];
+    parts.forEach(function (word) {
+      if (!line) {
+        line = word;
+        return;
+      }
+      if ((line + ' ' + word).length <= maxLen) {
+        line = line + ' ' + word;
+      } else {
+        out.push(line);
+        line = word;
+      }
+    });
+    if (line) out.push(line);
+    return out.join('\n');
+  }
+
+  function registerKpiChartLabelWrapPlugin() {
+    if (window.__maintKpiChartLabelWrap || typeof Chart === 'undefined') return;
+    window.__maintKpiChartLabelWrap = true;
+    Chart.register({
+      id: 'maintKpiWrapAxisLabels',
+      beforeUpdate: function (chart) {
+        if (!document.body.classList.contains('mode-kpi-overview')) return;
+        var id = chart.canvas && chart.canvas.id;
+        if (id !== 'compare-chart' && id !== 'chart-category') return;
+        if (chart.data._maintLabelsWrapped) return;
+        var maxLen = id === 'compare-chart' ? 14 : 12;
+        chart.data.labels = (chart.data.labels || []).map(function (lbl) {
+          return wrapChartAxisLabel(lbl, maxLen);
+        });
+        chart.data._maintLabelsWrapped = true;
+        var x = chart.options.scales && chart.options.scales.x;
+        if (x) {
+          x.ticks = x.ticks || {};
+          x.ticks.autoSkip = false;
+          x.ticks.maxRotation = 0;
+          x.ticks.minRotation = 0;
+          x.ticks.padding = 6;
+        }
+        chart.options.layout = chart.options.layout || {};
+        chart.options.layout.padding = Object.assign({ bottom: id === 'compare-chart' ? 28 : 12 }, chart.options.layout.padding || {});
+      },
+    });
+  }
+
   function kpiOverviewShowInMode() {
     return String(state.filters.showIn || 'Thousands').toLowerCase();
   }
@@ -1573,17 +1625,13 @@
     if (!isFinite(n)) return '—';
     var mode = kpiOverviewShowInMode();
     if (mode === 'thousands') return (n / 1e6).toFixed(2) + ' M';
-    if (mode === 'percentage') return n.toFixed(2) + ' %';
-    return Math.round(n).toLocaleString('en-US');
+    return Math.round(n).toLocaleString('en-US') + ' h';
   }
 
   function formatKpiOverviewHoursTrend(values) {
-    var mode = kpiOverviewShowInMode();
     return (values || []).map(function (v) {
       var n = Number(v);
-      if (!isFinite(n)) return 0;
-      if (mode === 'thousands') return n / 1e6;
-      return n;
+      return isFinite(n) ? n : 0;
     });
   }
 
@@ -1703,9 +1751,7 @@
     var hoursLabel =
       kpiOverviewShowInMode() === 'thousands'
         ? 'Unplanned DT Hours (M)'
-        : kpiOverviewShowInMode() === 'percentage'
-          ? 'Unplanned DT Hours'
-          : 'Unplanned Downtime Hours';
+        : 'Unplanned Downtime Hours';
 
     var html =
       '<div class="metric-card metric-card-with-trend">' +
@@ -1789,15 +1835,48 @@
     renderKpiOverviewMetricStrip();
   }
 
+  function installKpiMetricStripGuard() {
+    if (window.__kpiMetricStripGuard) return;
+    window.__kpiMetricStripGuard = true;
+    var obs = new MutationObserver(function () {
+      if (state.page !== 'kpi-overview' && !document.body.classList.contains('mode-kpi-overview')) {
+        return;
+      }
+      document.querySelectorAll('.metric-strip-root').forEach(function (strip) {
+        if (strip.classList.contains('metric-strip-ytd-trends')) return;
+        if (strip.textContent && strip.textContent.indexOf('OEE') >= 0) {
+          renderKpiOverviewMetricStrip();
+        }
+      });
+    });
+    var watch = function (el) {
+      if (el && el.classList && el.classList.contains('metric-strip-root')) {
+        obs.observe(el, { childList: true, subtree: true, characterData: true });
+      }
+    };
+    document.querySelectorAll('.metric-strip-root').forEach(watch);
+    new MutationObserver(function (mutations) {
+      mutations.forEach(function (m) {
+        m.addedNodes.forEach(function (node) {
+          if (node.nodeType !== 1) return;
+          if (node.matches && node.matches('.metric-strip-root')) watch(node);
+          if (node.querySelectorAll) node.querySelectorAll('.metric-strip-root').forEach(watch);
+        });
+      });
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+
   function patchKpiOverviewMetricStripHooks() {
     var mc = window.ManufacturingConsole;
     if (!mc || mc.__kpiStripHooksPatched) return;
     mc.__kpiStripHooksPatched = true;
+    installKpiMetricStripGuard();
     if (typeof mc.applyShowIn === 'function') {
       var origApply = mc.applyShowIn.bind(mc);
       mc.applyShowIn = function () {
         origApply();
         afterKpiOverviewMetricsUpdated();
+        requestAnimationFrame(afterKpiOverviewMetricsUpdated);
       };
     }
   }
@@ -2616,6 +2695,7 @@
     window.__maintenanceConsoleInitDone = true;
     patchConsoleDataFetch();
     patchKpiOverviewMetricStripHooks();
+    registerKpiChartLabelWrapPlugin();
     syncFromConsoleFilters();
     state.filters.year = state.filters.year || '2026';
     state.filters.timeframe = state.filters.timeframe || 'ptd';

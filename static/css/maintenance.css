@@ -14,6 +14,14 @@ body.mode-kpi-overview .app-banner.has-subnav { --header-h: calc(var(--header-br
 body.mode-kpi-overview #top-nav-secondary.visible,
 body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 
+body.mode-kpi-overview .metric-strip-root:not(.metric-strip-ytd-trends) > .metric-card:nth-child(4) {
+  display: none !important;
+}
+
+body.mode-kpi-overview .compare-chart-wrap {
+  padding-bottom: 8px;
+}
+
 .maint-hidden { display: none !important; }
 
 .maint-filter-wip .slicer-disabled .slicer-trigger {
