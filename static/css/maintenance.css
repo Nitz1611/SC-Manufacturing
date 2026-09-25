@@ -158,6 +158,13 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
   max-height: min(320px, calc(100vh - 120px));
   margin-top: 0;
 }
+.maint-filter-bar .slicer.open .slicer-panel.maint-slicer-panel-fixed {
+  position: fixed;
+  min-width: 0;
+  width: auto;
+  margin-top: 0;
+  transition: none;
+}
 .maint-root .maint-kpi-row,
 .maint-root .maint-content {
   position: relative;

@@ -403,27 +403,73 @@
     if (bar) bar.classList.remove('maint-slicers-open');
   }
 
+  function maintSlicerViewport() {
+    var vv = window.visualViewport;
+    if (!vv) {
+      return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    }
+    return { left: vv.offsetLeft, top: vv.offsetTop, width: vv.width, height: vv.height };
+  }
+
   function positionMaintSlicerPanel(slicer) {
     if (!slicer) return;
     var panel = slicer.querySelector('.slicer-panel');
-    if (!panel) return;
-    panel.style.position = '';
-    panel.style.top = '';
-    panel.style.left = '';
-    panel.style.minWidth = '';
-    panel.style.width = '';
-    panel.style.zIndex = '';
+    var trigger = slicer.querySelector('.slicer-trigger');
+    if (!panel || !trigger) return;
+    var slicerId = slicer.dataset.slicerId || '';
+    var rect = trigger.getBoundingClientRect();
+    var vp = maintSlicerViewport();
+    var edge = 8;
+    var minW = Math.max(rect.width, slicerId === 'showIn' ? 160 : 230);
+    var width = Math.min(Math.max(minW, 160), Math.min(320, vp.width - edge * 2));
+    var left = slicerId === 'showIn' ? rect.right - width : rect.left;
+    if (left + width > vp.left + vp.width - edge) {
+      left = rect.right - width;
+    }
+    if (left < vp.left + edge) {
+      left = vp.left + edge;
+    }
+    if (left + width > vp.left + vp.width - edge) {
+      left = Math.max(vp.left + edge, vp.left + vp.width - width - edge);
+    }
+    var top = rect.bottom + 4;
+    var maxH = Math.min(320, vp.top + vp.height - top - edge);
+    if (maxH < 96 && rect.top - vp.top > 140) {
+      maxH = Math.min(320, rect.top - vp.top - edge - 4);
+      top = Math.max(vp.top + edge, rect.top - maxH - 4);
+    }
+    panel.style.position = 'fixed';
+    panel.style.top = top + 'px';
+    panel.style.left = left + 'px';
+    panel.style.right = 'auto';
+    panel.style.minWidth = width + 'px';
+    panel.style.width = width + 'px';
+    panel.style.maxHeight = maxH + 'px';
+    panel.style.zIndex = '10060';
+    panel.style.opacity = '1';
+    panel.style.visibility = 'visible';
+    panel.style.transform = 'none';
+    panel.style.pointerEvents = 'auto';
+    panel.classList.add('maint-slicer-panel-fixed');
   }
 
   function resetMaintSlicerPanel(slicer) {
     if (!slicer) return;
     var panel = slicer.querySelector('.slicer-panel');
     if (!panel) return;
+    panel.classList.remove('maint-slicer-panel-fixed');
     panel.style.position = '';
     panel.style.top = '';
     panel.style.left = '';
+    panel.style.right = '';
     panel.style.minWidth = '';
+    panel.style.width = '';
+    panel.style.maxHeight = '';
     panel.style.zIndex = '';
+    panel.style.opacity = '';
+    panel.style.visibility = '';
+    panel.style.transform = '';
+    panel.style.pointerEvents = '';
   }
 
   function repositionOpenMaintSlicers() {
@@ -435,6 +481,10 @@
     window.__maintSlicerViewportBound = true;
     window.addEventListener('scroll', repositionOpenMaintSlicers, true);
     window.addEventListener('resize', repositionOpenMaintSlicers);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', repositionOpenMaintSlicers);
+      window.visualViewport.addEventListener('scroll', repositionOpenMaintSlicers);
+    }
   }
 
   function refreshSlicerOptions(id) {
