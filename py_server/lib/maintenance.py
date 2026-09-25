@@ -162,12 +162,35 @@ def _env_float_target(*keys: str, default: float) -> float:
     return default
 
 
-def _resolve_mtbf_target(_metrics: MetricsPayload) -> float:
-    return _env_float_target(
-        "MAINTENANCE_MTBF_TARGET_HRS",
-        "DATABRICKS_MTBF_TARGET_HRS",
-        default=MTBF_TARGET_HRS,
-    )
+def _env_mtbf_target_configured() -> float | None:
+    for key in ("MAINTENANCE_MTBF_TARGET_HRS", "DATABRICKS_MTBF_TARGET_HRS"):
+        raw = (os.environ.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            val = float(raw)
+            return val if math.isfinite(val) else None
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_mtbf_target(metrics: MetricsPayload) -> float:
+    """Target from SQL YTD slice of MTBF measure — mirrors _resolve_unplanned_target."""
+    card = metrics.get("maintenance_mtbf") or {}
+    raw = _metric_row_value(card, "ytd_target_mtbf_hrs")
+    if raw is not None:
+        try:
+            val = float(raw)
+            return val if math.isfinite(val) else 0.0
+        except (TypeError, ValueError):
+            pass
+    env_target = _env_mtbf_target_configured()
+    if env_target is not None:
+        return env_target
+    if _metrics_is_live(metrics):
+        return 0.0
+    return MTBF_TARGET_HRS
 
 
 def _kpi_status_dot(value: float, target: float, *, higher_is_better: bool = False) -> str:
@@ -564,12 +587,8 @@ def _build_mtbf_kpi_card(
             or 0
         )
     )
-    unplanned_hrs = float(
-        _metric_row_value(card, "current_unplanned_hrs")
-        or _parse_hours((kpis.get("downtime_hrs") or {}).get("value"))
-        or 0
-    )
-    mttr = round(unplanned_hrs / max(stops_val, 1), 2) if stops_val else 0.0
+    mttr_raw = _metric_row_value(card, "current_mttr_hrs")
+    mttr = round(float(mttr_raw or 0), 2) if mttr_raw is not None else 0.0
 
     last_shift_mtbf = _metric_row_value(card, "last_shift_mtbf_hrs")
     last_shift_display = None
