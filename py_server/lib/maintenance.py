@@ -176,9 +176,11 @@ def _env_mtbf_target_configured() -> float | None:
 
 
 def _resolve_mtbf_target(metrics: MetricsPayload) -> float:
-    """Target from SQL YTD slice of MTBF measure — mirrors _resolve_unplanned_target."""
+    """YTD MTBF target from SQL (YTD Flag only) — fixed vs timeframe, like unplanned YTD target."""
     card = metrics.get("maintenance_mtbf") or {}
     raw = _metric_row_value(card, "ytd_target_mtbf_hrs")
+    if raw is None and metrics.get("mtbf_ytd_target_hrs") is not None:
+        raw = metrics.get("mtbf_ytd_target_hrs")
     if raw is not None:
         try:
             val = float(raw)

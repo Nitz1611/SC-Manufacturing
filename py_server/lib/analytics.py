@@ -442,12 +442,31 @@ def _metrics_is_partial(metrics: dict[str, Any] | None) -> bool:
     return bool(meta.get('partial'))
 
 
-def _maintenance_kpi_data_ready(metrics: dict[str, Any] | None) -> bool:
+def _needs_maintenance_kpi_enrich(metrics: dict[str, Any] | None) -> bool:
     if not metrics:
+        return True
+    trend = metrics.get("ytd_period_trend") or []
+    unplanned = metrics.get("maintenance_unplanned") or {}
+    mtbf = metrics.get("maintenance_mtbf") or {}
+    if not trend or unplanned.get("current_dt_pct") is None:
+        return True
+    ytd_unplanned = unplanned.get("ytd_target_dt_pct")
+    if ytd_unplanned is None:
+        for k, v in unplanned.items():
+            if str(k).lower() == "ytd_target_dt_pct" and v is not None:
+                ytd_unplanned = v
+                break
+    if ytd_unplanned is None:
+        return True
+    if metrics.get("mtbf_ytd_target_hrs") is not None:
         return False
-    trend = metrics.get('ytd_period_trend') or []
-    unplanned = metrics.get('maintenance_unplanned') or {}
-    return bool(trend) and unplanned.get('current_dt_pct') is not None
+    ytd_mtbf = mtbf.get("ytd_target_mtbf_hrs")
+    if ytd_mtbf is None:
+        for k, v in mtbf.items():
+            if str(k).lower() == "ytd_target_mtbf_hrs" and v is not None:
+                ytd_mtbf = v
+                break
+    return ytd_mtbf is None
 
 
 def enrich_metrics_for_maintenance_kpis(
@@ -458,7 +477,7 @@ def enrich_metrics_for_maintenance_kpis(
     Ensure KPI cards + YTD sparklines exist even when metrics bundle is still partial.
     Sparkline SQL intentionally ignores timeframe; headline cards use the active timeframe.
     """
-    if not sql_configured() or _maintenance_kpi_data_ready(metrics):
+    if not sql_configured() or not _needs_maintenance_kpi_enrich(metrics):
         return metrics
     norm = normalize_params(filters or {})
     m = copy.deepcopy(metrics)
@@ -773,6 +792,7 @@ __all__ = [
     'schedule_extended_metrics_load',
     'schedule_metrics_refresh',
     'get_metrics_bundle',
+    'enrich_metrics_for_maintenance_kpis',
     'run_analytics_query',
     'metrics_bundle_to_console_payload',
     'verify_metric_view_access',

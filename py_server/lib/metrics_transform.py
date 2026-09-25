@@ -94,6 +94,7 @@ class MetricsPayload(TypedDict, total=False):
     key_insights: List[KeyInsight]
     maintenance_unplanned: Dict[str, Any]
     maintenance_mtbf: Dict[str, Any]
+    mtbf_ytd_target_hrs: Optional[float]
     kpi_raw: Dict[str, Any]
     ytd_period_trend: List[float]
     ytd_periods: List[str]
@@ -945,6 +946,15 @@ def apply_maintenance_kpi_sql_rows(
         metrics["maintenance_unplanned"] = (maintenance_unplanned_card or [{}])[0]
     if maintenance_mtbf_card:
         metrics["maintenance_mtbf"] = (maintenance_mtbf_card or [{}])[0]
+        row = metrics["maintenance_mtbf"] or {}
+        ytd_target = row.get("ytd_target_mtbf_hrs")
+        if ytd_target is None:
+            for k, v in row.items():
+                if str(k).lower() == "ytd_target_mtbf_hrs" and v is not None:
+                    ytd_target = v
+                    break
+        if ytd_target is not None:
+            metrics["mtbf_ytd_target_hrs"] = float(ytd_target)
 
     if maintenance_dt_trend_ytd is not None:
         ytd_period_labels = _sort_periods([
@@ -1073,6 +1083,14 @@ def build_metrics_from_sql(
 
     maintenance_unplanned = (results.get("maintenanceUnplannedCard") or [{}])[0]
     maintenance_mtbf = (results.get("maintenanceMtbfCard") or [{}])[0]
+    ytd_mtbf_target_raw = None
+    if maintenance_mtbf:
+        ytd_mtbf_target_raw = maintenance_mtbf.get("ytd_target_mtbf_hrs")
+        if ytd_mtbf_target_raw is None:
+            for k, v in maintenance_mtbf.items():
+                if str(k).lower() == "ytd_target_mtbf_hrs" and v is not None:
+                    ytd_mtbf_target_raw = v
+                    break
 
     ytd_period_labels = _sort_periods([
         str(r.get("period_label") or "")
@@ -1173,6 +1191,9 @@ def build_metrics_from_sql(
         "shift_comparison": shift_comparison,
         "maintenance_unplanned": maintenance_unplanned,
         "maintenance_mtbf": maintenance_mtbf,
+        "mtbf_ytd_target_hrs": float(ytd_mtbf_target_raw)
+        if ytd_mtbf_target_raw is not None
+        else None,
         "ytd_period_trend": ytd_period_trend,
         "ytd_periods": ytd_period_labels,
         "mtbf_ytd_period_trend": mtbf_ytd_period_trend,
