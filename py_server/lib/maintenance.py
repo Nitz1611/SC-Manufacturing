@@ -509,35 +509,35 @@ def _build_kpis(metrics: MetricsPayload, filters: dict[str, Any] | None) -> dict
     }
 
 
+def _read_mtbf_measure_hrs(metrics: MetricsPayload) -> float | None:
+    """Headline MTBF from SQL MEASURE(MTBF (Hours)) — not sched/stops."""
+    card = metrics.get("maintenance_mtbf") or {}
+    raw = _metric_row_value(card, "current_mtbf_hrs")
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return val if math.isfinite(val) else None
+
+
 def _build_mtbf_kpi_card(
     metrics: MetricsPayload,
     filters: dict[str, Any] | None,
 ) -> dict[str, Any]:
     card = metrics.get("maintenance_mtbf") or {}
     kpis = metrics.get("kpis") or {}
-    raw_mtbf = _metric_row_value(card, "current_mtbf_hrs")
+    measured = _read_mtbf_measure_hrs(metrics)
     value_source = "mtbf_measure"
-    if raw_mtbf is not None:
-        mtbf = float(raw_mtbf or 0)
+    if measured is not None:
+        mtbf = measured
     elif _metrics_is_live(metrics):
-        # Do not substitute sched/stops — that ratio often differs from MEASURE(MTBF (Hours)).
         mtbf = 0.0
         value_source = "missing"
     else:
-        stops = int(
-            float(
-                _metric_row_value(card, "current_stops")
-                or (kpis.get("stops") or {}).get("value")
-                or 0
-            )
-        )
-        sched = float(
-            _metric_row_value(card, "current_sched_hours")
-            or _metric_row_value(metrics.get("kpi_raw") or {}, "scheduled_hours")
-            or 0
-        )
-        mtbf = round(sched / max(stops, 1), 2) if sched and stops else 0.0
-        value_source = "ratio_fallback"
+        mtbf = 0.0
+        value_source = "missing"
 
     target = _resolve_mtbf_target(metrics)
     prev_mtbf = float(_metric_row_value(card, "prev_period_mtbf_hrs") or 0)
@@ -577,7 +577,7 @@ def _build_mtbf_kpi_card(
         shift_delta = round(float(last_shift_mtbf) - mtbf, 2)
         last_shift_display = f"{shift_delta:+.2f} hrs"
 
-    has_live = raw_mtbf is not None and math.isfinite(mtbf) and mtbf > 0
+    has_live = measured is not None and measured > 0
     last_period_class = (
         "bad" if last_period_delta < 0 else "good" if last_period_delta > 0 else "neutral"
     )
@@ -920,7 +920,11 @@ def _build_alerts(metrics: MetricsPayload) -> list[dict[str, Any]]:
                     {
                         "label": "Failure Frequency",
                         "value": f"{_locale_number(stops)} Stops" if stops else "—",
-                        "sub": f"MTBF: {round(sched / max(stops, 1), 2)} hrs" if sched else "",
+                        "sub": (
+                            f"MTBF: {measured:.2f} hrs"
+                            if (measured := _read_mtbf_measure_hrs(metrics)) is not None
+                            else "MTBF: —"
+                        ),
                     },
                 ],
                 "driver_bars": driver_bars,
