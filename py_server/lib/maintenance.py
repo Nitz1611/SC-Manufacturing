@@ -735,7 +735,6 @@ def _build_secondary_kpis(metrics: MetricsPayload) -> list[dict[str, Any]]:
             "id": "backlog",
             "label": "% Backlog Planned Maintenance",
             "value": None,
-            "target": "< 10.0 %",
             "wip": True,
         },
     ]

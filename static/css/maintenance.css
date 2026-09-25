@@ -1646,6 +1646,60 @@ body.maint-report-open { overflow: hidden; }
   padding: 2px 8px; border-radius: 999px;
 }
 
+.maint-kpi-card.maint-kpi-card-wip-placeholder {
+  display: flex;
+  flex-direction: column;
+  min-height: 168px;
+  border: 2px dashed #cbd5e1;
+  background: #f8fafc;
+  box-shadow: none;
+}
+
+.maint-kpi-card.maint-kpi-card-wip-placeholder .maint-kpi-head {
+  padding: 10px 14px 0;
+}
+
+.maint-kpi-card.maint-kpi-card-wip-placeholder .maint-kpi-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.maint-kpi-card.maint-kpi-card-wip-placeholder .maint-status-dot.muted {
+  background: #94a3b8;
+  box-shadow: none;
+}
+
+.maint-kpi-wip-banner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px 14px 14px;
+  padding: 20px 16px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e2e8f0 0%, #f1f5f9 48%, #e2e8f0 100%);
+  border: 1px solid #cbd5e1;
+  text-align: center;
+}
+
+.maint-kpi-wip-banner-text {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #64748b;
+  line-height: 1;
+}
+
+.maint-kpi-wip-banner-sub {
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  letter-spacing: 0.02em;
+}
+
 .maint-fab {
   position: fixed; bottom: 24px; right: 24px; width: 52px; height: 52px;
   border-radius: 50%; border: none; cursor: pointer;

@@ -1114,8 +1114,26 @@
   function renderSecondaryKpis(list) {
     return (list || [])
       .map(function (k, i) {
+        if (k.wip) {
+          return (
+            '<article class="maint-kpi-card maint-kpi-card-wip-placeholder" style="animation-delay:' +
+            i * 0.05 +
+            's" aria-label="' +
+            esc(k.label || 'KPI') +
+            ' — work in progress">' +
+            '<div class="maint-kpi-head">' +
+            '<span class="maint-kpi-title">' +
+            esc(k.label) +
+            '</span>' +
+            '<span class="maint-status-dot muted" aria-hidden="true"></span>' +
+            '</div>' +
+            '<div class="maint-kpi-wip-banner" role="status">' +
+            '<span class="maint-kpi-wip-banner-text">WIP</span>' +
+            '<span class="maint-kpi-wip-banner-sub">Metric not available yet</span>' +
+            '</div></article>'
+          );
+        }
         var val = k.value || '—';
-        var wip = k.wip ? ' <span class="maint-wip-badge">WIP</span>' : '';
         var target = k.target ? 'Target <strong>' + esc(k.target) + '</strong>' : '';
         return (
           '<article class="maint-kpi-card" style="animation-delay:' +
@@ -1124,7 +1142,6 @@
           '<div class="maint-kpi-head">' +
           '<span class="maint-kpi-title">' +
           esc(k.label) +
-          wip +
           '</span>' +
           '<span class="maint-status-dot critical"></span>' +
           '</div>' +
@@ -1140,9 +1157,7 @@
           '<div class="maint-kpi-trend"><canvas id="maint-spark-sec-' +
           i +
           '"></canvas></div>' +
-          '</div>' +
-          '<div class="maint-period-delta">Last Period <span>+1.20%</span></div>' +
-          '</article>'
+          '</div></article>'
         );
       })
       .join('');
