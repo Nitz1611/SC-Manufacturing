@@ -552,6 +552,9 @@ def _filters_dict_from_norm(norm: dict[str, str | None]) -> dict[str, Any]:
         'line': norm.get('line'),
         'department': norm.get('department'),
         'shift': norm.get('shift_filter'),
+        'timeframe': norm.get('timeframe') or 'ptd',
+        'dateFrom': norm.get('date_from'),
+        'dateTo': norm.get('date_to'),
     }
 
 

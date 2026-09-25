@@ -41,31 +41,84 @@ body.mode-kpi-overview .compare-chart-wrap {
   padding: 2px 8px;
 }
 
-.maint-root { padding: 0 0 80px; min-height: 320px; }
-.maint-root.maint-loading:not(:empty) { opacity: 0.6; pointer-events: none; }
+.maint-root { padding: 0 0 80px; min-height: 320px; position: relative; }
+.maint-root.maint-loading { pointer-events: none; }
 
-.maint-loading-shell {
+.maint-loading-view {
+  padding: 8px 0 24px;
+  animation: maint-loading-fade-in 0.35s ease;
+}
+.maint-loading-header {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 12px;
-  min-height: 280px;
-  padding: 48px 24px;
-  color: var(--text-muted, #5a6a7a);
-  text-align: center;
+  margin-bottom: 20px;
 }
-.maint-loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid rgba(0, 40, 85, 0.15);
-  border-top-color: #002855;
+.maint-loading-pulse {
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  animation: maint-spin 0.8s linear infinite;
+  background: #1565c0;
+  flex-shrink: 0;
+  animation: maint-loading-pulse 1.2s ease-in-out infinite;
 }
-.maint-loading-text { margin: 0; font-size: 15px; font-weight: 600; color: #002855; }
-.maint-loading-sub { margin: 0; font-size: 13px; max-width: 420px; }
-@keyframes maint-spin { to { transform: rotate(360deg); } }
+.maint-loading-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #002855;
+  letter-spacing: 0.01em;
+}
+.maint-loading-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.maint-loading-card {
+  background: #fff;
+  border: 1px solid rgba(0, 40, 85, 0.08);
+  border-radius: 12px;
+  padding: 18px 16px;
+  box-shadow: 0 2px 12px rgba(0, 40, 85, 0.06);
+}
+.maint-loading-line {
+  height: 10px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 40, 85, 0.08) 0%,
+    rgba(0, 40, 85, 0.14) 45%,
+    rgba(0, 40, 85, 0.08) 90%
+  );
+  background-size: 200% 100%;
+  animation: maint-shimmer 1.4s ease-in-out infinite;
+}
+.maint-loading-line + .maint-loading-line { margin-top: 10px; }
+.maint-loading-line.w40 { width: 40%; }
+.maint-loading-line.w55 { width: 55%; }
+.maint-loading-line.w70 { width: 70%; }
+.maint-loading-line.w85 { width: 85%; }
+.maint-loading-line.tall { height: 28px; margin-top: 14px; }
+.maint-loading-panel {
+  background: #fff;
+  border: 1px solid rgba(0, 40, 85, 0.08);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 12px rgba(0, 40, 85, 0.05);
+}
+@keyframes maint-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@keyframes maint-loading-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@keyframes maint-loading-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 .maint-filter-bar {
   background: rgba(255, 255, 255, 0.92);

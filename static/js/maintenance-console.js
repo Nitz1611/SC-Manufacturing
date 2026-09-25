@@ -199,10 +199,8 @@
       if (url && url.indexOf('/api/console-data') !== -1 && init && init.body) {
         try {
           var body = JSON.parse(init.body);
-          var mc = window.ManufacturingConsole;
-          var extras = (mc && mc.state && mc.state.maintFilterExtras) || {};
-          if (body.filters && extras) {
-            body.filters = Object.assign({}, body.filters, extras);
+          if (body.filters) {
+            body.filters = Object.assign({}, body.filters, buildConsoleDataFilters());
             init = Object.assign({}, init, { body: JSON.stringify(body) });
           }
         } catch (err) {
@@ -243,6 +241,82 @@
       dateFrom: custom && f.dateFrom ? f.dateFrom : null,
       dateTo: custom && f.dateTo ? f.dateTo : null,
     };
+  }
+
+  function mapConsolePeriod(timeframe) {
+    var tf = String(timeframe || 'ptd').toLowerCase();
+    var map = {
+      fy: 'fiscal_year',
+      ytd: 'fiscal_year',
+      quarter: 'quarter',
+      month: 'month',
+      week: 'week',
+      wtd: 'week',
+      year: 'fiscal_year',
+      ptd: 'period',
+    };
+    return map[tf] || tf;
+  }
+
+  /** Filters sent to /api/console-data — always mirrors maintenance slicers. */
+  function buildConsoleDataFilters() {
+    var payload = buildFilterPayload();
+    return {
+      showIn: state.filters.showIn || 'Thousands',
+      timeframe: payload.timeframe,
+      year: payload.year,
+      site: state.filters.site || 'All',
+      region: normalizeRegionList(state.filters.region),
+      period: mapConsolePeriod(payload.timeframe),
+      department: payload.department,
+      line: payload.line,
+      shift: payload.shift,
+      dateFrom: payload.dateFrom,
+      dateTo: payload.dateTo,
+    };
+  }
+
+  function consoleFilterSignature() {
+    return JSON.stringify(buildConsoleDataFilters());
+  }
+
+  function invalidateConsoleMetricsCache() {
+    var mc = window.ManufacturingConsole;
+    if (!mc || !mc.state) return;
+    mc.state.lastDataFilterKey = null;
+    if (mc.state.metricsCache && typeof mc.state.metricsCache.clear === 'function') {
+      mc.state.metricsCache.clear();
+    }
+  }
+
+  function updateEngineFilterContextBar() {
+    var bar = $('#filter-context-bar');
+    if (!bar) return;
+    var parts = [];
+    parts.push('Show: ' + (state.filters.showIn || 'Thousands'));
+    parts.push(
+      slicerDisplayValue('timeframe', state.filters.timeframe) + ' ' + (state.filters.year || '2026')
+    );
+    if (state.filters.site && state.filters.site !== 'All') {
+      parts.push('Site: ' + state.filters.site);
+    }
+    var regions = normalizeRegionList(state.filters.region);
+    if (regions.length === 1) {
+      parts.push('Region: ' + regions[0]);
+    } else if (regions.length > 1) {
+      parts.push('Regions: ' + regions.length + ' selected');
+    }
+    bar.innerHTML =
+      '<span class="filter-context-label">Active filters</span>' +
+      '<span class="filter-context-value">' +
+      esc(parts.join(' · ')) +
+      '</span>';
+  }
+
+  function kpiOverviewTimeframeCaption() {
+    var tf = String(state.filters.timeframe || 'ptd').toLowerCase();
+    if (tf === 'custom') return 'Custom range';
+    return PERIOD_LABELS[tf] || tf.toUpperCase();
   }
 
   function fetchMaintenanceData(silent, forceRefresh) {
@@ -939,14 +1013,26 @@
     var root = $('#maint-root');
     if (!root || !state.loading) return;
     root.classList.add('maint-loading');
-    if (!root.querySelector('.maint-loading-shell')) {
-      root.innerHTML =
-        '<div class="maint-loading-shell" role="status" aria-live="polite">' +
-        '<div class="maint-loading-spinner" aria-hidden="true"></div>' +
-        '<p class="maint-loading-text">Loading live maintenance data from Databricks…</p>' +
-        '<p class="maint-loading-sub">First load can take 1–3 minutes. Do not refresh — waiting for Databricks SQL.</p>' +
-        '</div>';
-    }
+    if (root.querySelector('.maint-loading-view')) return;
+    root.innerHTML =
+      '<div class="maint-loading-view" role="status" aria-live="polite" aria-busy="true">' +
+      '<div class="maint-loading-header">' +
+      '<span class="maint-loading-pulse" aria-hidden="true"></span>' +
+      '<p class="maint-loading-title">Loading data</p>' +
+      '</div>' +
+      '<div class="maint-loading-grid">' +
+      '<div class="maint-loading-card"><div class="maint-loading-line w55"></div>' +
+      '<div class="maint-loading-line tall w70"></div><div class="maint-loading-line w40"></div></div>' +
+      '<div class="maint-loading-card"><div class="maint-loading-line w55"></div>' +
+      '<div class="maint-loading-line tall w70"></div><div class="maint-loading-line w40"></div></div>' +
+      '<div class="maint-loading-card"><div class="maint-loading-line w55"></div>' +
+      '<div class="maint-loading-line tall w70"></div><div class="maint-loading-line w40"></div></div>' +
+      '</div>' +
+      '<div class="maint-loading-panel">' +
+      '<div class="maint-loading-line w85"></div>' +
+      '<div class="maint-loading-line w70"></div>' +
+      '<div class="maint-loading-line w55"></div>' +
+      '</div></div>';
   }
 
   function statusDotClass(pct, target) {
@@ -1753,6 +1839,8 @@
         ? 'Unplanned DT Hours (M)'
         : 'Unplanned Downtime Hours';
 
+    var trendCaption = esc(kpiOverviewTimeframeCaption());
+
     var html =
       '<div class="metric-card metric-card-with-trend">' +
       '<div class="metric-card-main">' +
@@ -1765,8 +1853,10 @@
       '">' +
       esc(dt.delta || '') +
       '</div>' +
-      '<div class="metric-trend-caption">YTD by period</div></div>' +
-      '<div class="metric-card-trend"><canvas id="kpi-strip-dt-pct" aria-label="Unplanned downtime percent YTD trend"></canvas></div></div>' +
+      '<div class="metric-trend-caption">' +
+      trendCaption +
+      '</div></div>' +
+      '<div class="metric-card-trend"><canvas id="kpi-strip-dt-pct" aria-label="Unplanned downtime percent trend"></canvas></div></div>' +
       '<div class="metric-card metric-card-with-trend">' +
       '<div class="metric-card-main">' +
       '<div class="metric-label">' +
@@ -1780,8 +1870,10 @@
       '">' +
       esc(hrs.delta || '') +
       '</div>' +
-      '<div class="metric-trend-caption">YTD by period</div></div>' +
-      '<div class="metric-card-trend"><canvas id="kpi-strip-dt-hrs" aria-label="Unplanned downtime hours YTD trend"></canvas></div></div>' +
+      '<div class="metric-trend-caption">' +
+      trendCaption +
+      '</div></div>' +
+      '<div class="metric-card-trend"><canvas id="kpi-strip-dt-hrs" aria-label="Unplanned downtime hours trend"></canvas></div></div>' +
       '<div class="metric-card metric-card-with-trend">' +
       '<div class="metric-card-main">' +
       '<div class="metric-label">STOPS</div>' +
@@ -1793,8 +1885,10 @@
       '">' +
       esc(stops.delta || '') +
       '</div>' +
-      '<div class="metric-trend-caption">YTD by period</div></div>' +
-      '<div class="metric-card-trend"><canvas id="kpi-strip-stops" aria-label="Stops YTD trend"></canvas></div></div>';
+      '<div class="metric-trend-caption">' +
+      trendCaption +
+      '</div></div>' +
+      '<div class="metric-card-trend"><canvas id="kpi-strip-stops" aria-label="Stops trend"></canvas></div></div>';
 
     document.querySelectorAll('.metric-strip-root').forEach(function (strip) {
       strip.classList.add('metric-strip-ytd-trends');
@@ -2552,9 +2646,14 @@
     var toEl = $('#maint-filter-to');
     if (fromEl) state.filters.dateFrom = fromEl.value;
     if (toEl) state.filters.dateTo = toEl.value;
+    var nextSig = consoleFilterSignature();
+    var forceReload = !!(state._consoleFilterSig && state._consoleFilterSig !== nextSig);
+    state._consoleFilterSig = nextSig;
     syncToConsoleFilters();
-    reloadConsoleMetrics(false);
-    fetchMaintenanceData(false, false);
+    invalidateConsoleMetricsCache();
+    updateEngineFilterContextBar();
+    reloadConsoleMetrics(forceReload);
+    fetchMaintenanceData(false, forceReload);
   }
 
   function buildPrimaryNav() {
@@ -2699,6 +2798,9 @@
     syncFromConsoleFilters();
     state.filters.year = state.filters.year || '2026';
     state.filters.timeframe = state.filters.timeframe || 'ptd';
+    syncToConsoleFilters();
+    state._consoleFilterSig = consoleFilterSignature();
+    updateEngineFilterContextBar();
     buildPrimaryNav();
     buildFilterBar();
     resetAllMaintSlicerInlineStyles();
@@ -2735,6 +2837,7 @@
         syncToConsoleFilters();
         var out = engineReloadMetrics(force, opts);
         var done = function () {
+          updateEngineFilterContextBar();
           afterKpiOverviewMetricsUpdated();
           if (state.page === 'maintenance') {
             updateShellForPage('maintenance');
