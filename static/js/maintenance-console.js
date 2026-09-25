@@ -226,7 +226,7 @@
         try {
           var body = JSON.parse(init.body);
           if (body.filters) {
-            body.filters = Object.assign({}, body.filters, buildConsoleDataFilters());
+            body.filters = Object.assign({}, buildConsoleDataFilters(), body.filters, buildConsoleDataFilters());
             init = Object.assign({}, init, { body: JSON.stringify(body) });
           }
         } catch (err) {
@@ -307,10 +307,26 @@
     return JSON.stringify(buildConsoleDataFilters());
   }
 
+  function syncConsoleMetricsCacheKey() {
+    var mc = window.ManufacturingConsole;
+    if (!mc || !mc.state) return;
+    var sig = consoleFilterSignature();
+    mc.state.lastDataFilterKey = sig;
+    mc.state.maintFilterSig = sig;
+    if (
+      mc.state.metricsBase &&
+      mc.state.metricsCache &&
+      typeof mc.state.metricsCache.set === 'function'
+    ) {
+      mc.state.metricsCache.set(sig, mc.state.metricsBase);
+    }
+  }
+
   function invalidateConsoleMetricsCache() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
     mc.state.lastDataFilterKey = null;
+    mc.state.maintFilterSig = null;
     if (mc.state.metricsCache && typeof mc.state.metricsCache.clear === 'function') {
       mc.state.metricsCache.clear();
     }
@@ -330,6 +346,9 @@
       parts.push('Region: ' + regions[0]);
     } else if (regions.length > 1) {
       parts.push('Regions: ' + regions.length + ' selected');
+    }
+    if (isCustomTimeframe() && state.filters.dateFrom && state.filters.dateTo) {
+      parts.push('Range: ' + state.filters.dateFrom + ' → ' + state.filters.dateTo);
     }
     bar.innerHTML =
       '<span class="filter-context-label">Active filters</span>' +
@@ -353,6 +372,9 @@
       document.body.classList.add('maint-filters-applying');
       var status = $('#maint-filter-status');
       if (status) status.textContent = 'Updating metrics…';
+      if (state.page === 'kpi-overview') {
+        renderKpiOverviewMetricStripPending();
+      }
     }
   }
 
@@ -361,13 +383,6 @@
     if (state.filterLoadsInFlight <= 0) {
       state.filterLoadsInFlight = 0;
       clearFiltersApplying();
-    }
-  }
-
-  function markFiltersApplying() {
-    beginFilterLoad();
-    if (state.page === 'kpi-overview') {
-      renderKpiOverviewMetricStripPending();
     }
   }
 
@@ -431,7 +446,6 @@
         return r.json();
       })
       .then(function (data) {
-        if (reqGen !== (state.filterRequestGen || 0)) return;
         if (data.error) throw new Error(data.error);
         state.payload = data;
         applyFilterOptions(data.filter_options || {});
@@ -467,11 +481,25 @@
     return String(state.filters.timeframe || '').toLowerCase() === 'custom';
   }
 
+  function updateCustomRangeStatus() {
+    if (!isCustomTimeframe()) return;
+    var status = $('#maint-filter-status');
+    if (!status) return;
+    if (!customRangeReady()) {
+      status.textContent = 'Choose valid from and to dates, then click Apply.';
+      return;
+    }
+    status.textContent = 'Click Apply to load this custom date range.';
+  }
+
   function updateDateFilterVisibility() {
     var show = isCustomTimeframe();
     $$('.maint-date-filter').forEach(function (el) {
       el.classList.toggle('maint-hidden', !show);
     });
+    var applyBtn = $('#maint-custom-apply');
+    if (applyBtn) applyBtn.classList.toggle('maint-hidden', !show);
+    if (show) updateCustomRangeStatus();
   }
 
   function withSelectAllOption(options) {
@@ -693,6 +721,11 @@
       }
       if (id === 'timeframe') {
         updateDateFilterVisibility();
+        if (value === 'custom') {
+          state._awaitCustomApply = true;
+        } else {
+          state._awaitCustomApply = false;
+        }
       }
     }
     closeAllSlicers();
@@ -882,8 +915,33 @@
       esc(label) +
       '" />' +
       '</label></div>';
-    group.querySelector('input').addEventListener('change', onFilterChange);
+    group.querySelector('input').addEventListener('change', function () {
+      var input = group.querySelector('input');
+      if (id === 'from' && input) state.filters.dateFrom = input.value;
+      if (id === 'to' && input) state.filters.dateTo = input.value;
+      updateEngineFilterContextBar();
+      updateCustomRangeStatus();
+    });
     return group;
+  }
+
+  function createCustomApplyButton() {
+    var wrap = document.createElement('div');
+    wrap.className = 'filter-group maint-filter-group maint-date-filter maint-hidden';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'maint-custom-apply';
+    btn.className = 'maint-custom-apply-btn';
+    btn.textContent = 'Apply range';
+    btn.addEventListener('click', function () {
+      if (!customRangeReady()) {
+        updateCustomRangeStatus();
+        return;
+      }
+      applyFiltersNow(true);
+    });
+    wrap.appendChild(btn);
+    return wrap;
   }
 
   function applyFilterOptions(opts) {
@@ -2746,6 +2804,7 @@
     bar.appendChild(createShowInSelectGroup());
     bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
     bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
+    bar.appendChild(createCustomApplyButton());
 
     var status = document.createElement('div');
     status.id = 'maint-filter-status';
@@ -2772,20 +2831,25 @@
     if (fromEl) state.filters.dateFrom = fromEl.value;
     if (toEl) state.filters.dateTo = toEl.value;
 
-    if (isCustomTimeframe() && !customRangeReady()) {
+    updateDateFilterVisibility();
+
+    if (isCustomTimeframe()) {
       updateEngineFilterContextBar();
-      var status = $('#maint-filter-status');
-      if (status) status.textContent = 'Select a valid from and to date.';
+      updateCustomRangeStatus();
+      if (state._awaitCustomApply) {
+        state._awaitCustomApply = false;
+        return;
+      }
       return;
     }
 
     clearTimeout(filterChangeTimer);
-    var delay = isCustomTimeframe() ? 450 : 80;
-    filterChangeTimer = setTimeout(applyFiltersNow, delay);
+    filterChangeTimer = setTimeout(function () {
+      applyFiltersNow(false);
+    }, 80);
   }
 
   function filterChangeRequiresForceSql() {
-    if (isCustomTimeframe()) return true;
     if (normalizeMultiList(state.filters.line).length) return true;
     if (normalizeMultiList(state.filters.department).length) return true;
     if (normalizeMultiList(state.filters.shift).length) return true;
@@ -2794,28 +2858,38 @@
     return false;
   }
 
-  function applyFiltersNow() {
-    if (isCustomTimeframe() && !customRangeReady()) return;
+  function applyFiltersNow(isCustomApply) {
+    if (isCustomTimeframe() && !customRangeReady()) {
+      updateCustomRangeStatus();
+      return;
+    }
+    var sig = consoleFilterSignature();
+    var changed = sig !== state._appliedFilterSig;
+    state._appliedFilterSig = sig;
     state.filterRequestGen = (state.filterRequestGen || 0) + 1;
     beginFilterLoad();
-    var nextSig = consoleFilterSignature();
-    state._consoleFilterSig = nextSig;
     syncToConsoleFilters();
-    var forceSql = filterChangeRequiresForceSql();
-    if (forceSql) {
+    if (changed || isCustomApply) {
       invalidateConsoleMetricsCache();
     }
     updateEngineFilterContextBar();
-    var maintReq = fetchMaintenanceData(false, forceSql);
+    var forceSql = changed && filterChangeRequiresForceSql();
+    var maintReq = fetchMaintenanceData(false, false);
     var mc = window.ManufacturingConsole;
     var consoleReq = Promise.resolve();
     if (mc && typeof mc.reloadMetrics === 'function') {
-      var out = mc.reloadMetrics(!!forceSql, {
-        background: state.page !== 'kpi-overview' && !forceSql,
+      mc.state.lastDataFilterKey = changed ? null : mc.state.lastDataFilterKey;
+      var out = mc.reloadMetrics(changed || !!isCustomApply, {
+        background: false,
       });
       consoleReq = out && typeof out.then === 'function' ? out : Promise.resolve(out);
     }
-    Promise.all([maintReq, consoleReq]).finally(endFilterLoad);
+    Promise.all([maintReq, consoleReq])
+      .then(function () {
+        syncConsoleMetricsCacheKey();
+        afterKpiOverviewMetricsUpdated();
+      })
+      .finally(endFilterLoad);
   }
 
   function buildPrimaryNav() {
@@ -2961,6 +3035,7 @@
     state.filters.timeframe = state.filters.timeframe || 'ptd';
     syncToConsoleFilters();
     state._consoleFilterSig = consoleFilterSignature();
+    state._appliedFilterSig = state._consoleFilterSig;
     updateEngineFilterContextBar();
     buildPrimaryNav();
     buildFilterBar();
@@ -2996,8 +3071,13 @@
       var engineReloadMetrics = mc.reloadMetrics.bind(mc);
       mc.reloadMetrics = function (force, opts) {
         syncToConsoleFilters();
+        var sig = consoleFilterSignature();
+        if (sig !== state._appliedFilterSig) {
+          mc.state.lastDataFilterKey = null;
+        }
         var out = engineReloadMetrics(force, opts);
         var done = function () {
+          syncConsoleMetricsCacheKey();
           updateEngineFilterContextBar();
           afterKpiOverviewMetricsUpdated();
           if (state.page === 'maintenance') {
