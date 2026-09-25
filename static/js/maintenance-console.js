@@ -2061,7 +2061,7 @@
     applyShowInToEngine();
     updateEngineFilterContextBar();
     reflowDashboardCharts();
-    reloadConsoleMetrics(true);
+    reloadConsoleMetrics(false);
     afterKpiOverviewMetricsUpdated();
   }
 
@@ -2706,16 +2706,26 @@
     filterChangeTimer = setTimeout(applyFiltersNow, delay);
   }
 
+  function filterChangeRequiresForceSql() {
+    var f = state.filters;
+    if (isCustomTimeframe()) return true;
+    if (f.line !== 'All' || f.department !== 'All' || f.shift !== 'All') return true;
+    return false;
+  }
+
   function applyFiltersNow() {
     if (isCustomTimeframe() && !customRangeReady()) return;
     markFiltersApplying();
     var nextSig = consoleFilterSignature();
     state._consoleFilterSig = nextSig;
     syncToConsoleFilters();
-    invalidateConsoleMetricsCache();
+    var forceSql = filterChangeRequiresForceSql();
+    if (forceSql) {
+      invalidateConsoleMetricsCache();
+    }
     updateEngineFilterContextBar();
-    reloadConsoleMetrics(true);
-    fetchMaintenanceData(false, true);
+    reloadConsoleMetrics(forceSql);
+    fetchMaintenanceData(false, forceSql);
   }
 
   function buildPrimaryNav() {

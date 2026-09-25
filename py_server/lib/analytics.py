@@ -144,6 +144,74 @@ def _has_extra_sql_filters(norm: dict[str, str | None]) -> bool:
     )
 
 
+def _requires_sql_dimensions(norm: dict[str, str | None]) -> bool:
+    """Filters that cannot be derived by slicing a network metric-view snapshot."""
+    return bool(
+        norm.get("line")
+        or norm.get("department")
+        or norm.get("shift_filter")
+        or norm.get("date_from")
+        or norm.get("date_to")
+    )
+
+
+def _snapshot_norm(norm: dict[str, str | None]) -> dict[str, str | None]:
+    """One cached SQL load per timeframe (network-wide metric view snapshot)."""
+    return {
+        "year": norm.get("year"),
+        "site": None,
+        "regions": None,
+        "line": None,
+        "department": None,
+        "shift_filter": None,
+        "timeframe": norm.get("timeframe") or "ptd",
+        "date_from": norm.get("date_from"),
+        "date_to": norm.get("date_to"),
+    }
+
+
+def _get_memory_entry(norm: dict[str, str | None]) -> dict[str, Any] | None:
+    key = filter_cache_key(norm)
+    hit = _memory_cache.get(key)
+    if not hit or (time.time() * 1000) - hit["ts"] > MEMORY_TTL_MS:
+        return None
+    data = hit["data"]
+    if live_data_required() and not _is_live_metrics(data):
+        return None
+    return data
+
+
+def _read_disk_entry(norm: dict[str, str | None]) -> dict[str, Any] | None:
+    cached = cache_get(disk_cache_key(norm))
+    if _valid_sql_cache(cached):
+        return cached
+    return None
+
+
+def _try_serve_from_network_snapshot(norm: dict[str, str | None]) -> dict[str, Any] | None:
+    """
+    Serve site / region / timeframe changes instantly from a network-wide snapshot
+    (same data as querying the metric view once per timeframe, then slicing in-app).
+    """
+    if _requires_sql_dimensions(norm):
+        return None
+    snap = _snapshot_norm(norm)
+    bundle = _get_memory_entry(snap)
+    if not bundle or _metrics_is_partial(bundle):
+        disk = _read_disk_entry(snap)
+        if disk and not _metrics_is_partial(disk):
+            _memory_cache[filter_cache_key(snap)] = {"data": disk, "ts": time.time() * 1000}
+            bundle = disk
+    if not bundle or _metrics_is_partial(bundle):
+        return None
+    print(
+        f"[analytics] network snapshot slice filters={filter_cache_key(norm)} "
+        f"from={filter_cache_key(snap)}",
+        flush=True,
+    )
+    return apply_site_filter(copy.deepcopy(bundle), norm.get("site"))
+
+
 def _read_disk_cached(norm: dict[str, str | None]) -> dict[str, Any] | None:
     cached = cache_get(disk_cache_key(norm))
     if _valid_sql_cache(cached):
@@ -378,8 +446,13 @@ def store_metrics_bundle_to_cache(
     norm: dict[str, str | None],
     metrics: dict[str, Any],
 ) -> None:
-    """Memory + filter-scoped disk cache (one entry per year/site/regions)."""
-    scoped = apply_site_filter(metrics, norm.get('site'))
+    """Memory + disk: always store network snapshot; also store site-scoped view when needed."""
+    snap = _snapshot_norm(norm)
+    full = copy.deepcopy(metrics)
+    if not _metrics_is_partial(full):
+        _set_memory_cached(snap, full)
+        cache_set(disk_cache_key(snap), full)
+    scoped = apply_site_filter(copy.deepcopy(full), norm.get("site"))
     _set_memory_cached(norm, scoped)
     cache_set(disk_cache_key(norm), scoped)
 
@@ -424,6 +497,9 @@ def warm_memory_cache_from_disk() -> int:
 def get_cached_metrics_bundle(filters: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Memory or disk — may be stale but valid live SQL data."""
     norm = normalize_params(filters or {})
+    snap = _try_serve_from_network_snapshot(norm)
+    if snap is not None:
+        return snap
     mem = _get_memory_cached(norm)
     if mem:
         return mem
@@ -632,6 +708,11 @@ def get_metrics_bundle(
 ) -> dict[str, Any]:
     """Return metrics for the active filter selection — cache first, then SQL."""
     norm = normalize_params(filters or {})
+    snap = _try_serve_from_network_snapshot(norm)
+    if snap is not None:
+        _set_memory_cached(norm, snap)
+        return snap
+
     mem = _get_memory_cached(norm)
     if mem and not _metrics_is_partial(mem):
         print(f'[analytics] memory cache hit filters={filter_cache_key(norm)}', flush=True)
@@ -798,23 +879,24 @@ coarse_cache_key = filter_cache_key
 
 
 def warmup_default_metrics_async() -> None:
-    """Background load for common timeframe slices — makes first filter selection faster."""
+    """Background load of network metric-view snapshots (per timeframe)."""
     if not sql_configured():
         return
 
     def _run() -> None:
         try:
             warm_memory_cache_from_disk()
+            warm_default_combo()
             prefetch_raw = (os.getenv('METRICS_PREFETCH_TIMEFRAMES') or 'ptd,ytd,wtd').strip()
-            timeframes = [t.strip().lower() for t in prefetch_raw.split(',') if t.strip()]
-            for tf in timeframes:
-                default_filters: dict[str, Any] = {'timeframe': tf, 'site': None, 'region': None}
-                if get_fresh_metrics_bundle(default_filters):
-                    print(f'[analytics] prefetch cache warm for timeframe={tf}', flush=True)
+            for tf in prefetch_raw.split(','):
+                tf = tf.strip().lower()
+                if not tf or tf == 'ptd':
                     continue
-                print(f'[analytics] prefetching metrics for timeframe={tf}…', flush=True)
-                refresh_metrics_bundle(default_filters)
-                print(f'[analytics] prefetch complete timeframe={tf}', flush=True)
+                filters: dict[str, Any] = {'timeframe': tf, 'site': None, 'region': None}
+                if get_fresh_metrics_bundle(filters):
+                    continue
+                print(f'[analytics] prefetching network snapshot timeframe={tf}…', flush=True)
+                refresh_metrics_bundle({'timeframe': tf, 'site': 'All', 'region': []})
         except Exception as exc:
             print(f'[analytics] default warmup failed: {exc}', flush=True)
 

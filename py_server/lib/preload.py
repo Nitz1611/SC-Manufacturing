@@ -26,6 +26,7 @@ INTERVAL_MS = int(os.getenv('PRELOAD_INTERVAL_MINUTES') or 15) * 60 * 1000
 CONCURRENCY = max(1, int(os.getenv('PRELOAD_CONCURRENCY') or 1))
 DEFAULT_YEAR = os.getenv('PRELOAD_DEFAULT_YEAR') or '2026'
 FULL_CYCLE_DELAY_MS = int(os.getenv('PRELOAD_FULL_DELAY_MINUTES') or 10) * 60 * 1000
+SNAPSHOT_PRELOAD = (os.getenv('METRICS_NETWORK_SNAPSHOT') or 'true').lower() != 'false'
 
 
 def preload_enabled() -> bool:
@@ -67,7 +68,20 @@ _next_run_timer: threading.Timer | None = None
 _status_lock = threading.Lock()
 
 
+def _snapshot_preload_combos() -> list[dict[str, Any]]:
+    """One full metric-view SQL load per timeframe (network-wide) — instant site/region slicing."""
+    raw = (os.getenv('METRICS_PREFETCH_TIMEFRAMES') or 'ptd,ytd,wtd').strip()
+    combos: list[dict[str, Any]] = []
+    for tf in raw.split(','):
+        tf = tf.strip().lower()
+        if tf:
+            combos.append({'timeframe': tf, 'site': 'All', 'region': []})
+    return combos
+
+
 def _load_filter_combinations() -> list[dict[str, Any]]:
+    if SNAPSHOT_PRELOAD:
+        return _snapshot_preload_combos()
     result = run_analytics_query('dashboard_filter_options', {})
     rows = result.get('rows') or []
     options = build_filter_options(rows)
@@ -129,10 +143,9 @@ def _run_pool(
 
 def _default_filter_combo() -> dict[str, Any]:
     return {
-        'year': DEFAULT_YEAR,
         'site': 'All',
         'region': [],
-        'timeframe': 'FY',
+        'timeframe': 'ptd',
     }
 
 
@@ -142,12 +155,12 @@ def warm_default_combo() -> None:
         return
     combo = _default_filter_combo()
     if get_fresh_metrics_bundle(combo):
-        print('[preload] default FY combo already fresh in memory', flush=True)
+        print('[preload] default PTD network snapshot already fresh in memory', flush=True)
         return
     try:
-        print(f'[preload] warming default FY {DEFAULT_YEAR} combo…', flush=True)
+        print('[preload] warming default PTD network snapshot…', flush=True)
         refresh_metrics_bundle(combo)
-        print(f'[preload] default FY {DEFAULT_YEAR} combo ready', flush=True)
+        print('[preload] default PTD network snapshot ready', flush=True)
     except Exception as exc:
         print(f'[preload] default combo warmup failed: {exc}', flush=True)
 

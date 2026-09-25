@@ -1238,19 +1238,20 @@ def _metrics_for_timeframe(
     timeframe: str,
     fallback: MetricsPayload | None = None,
 ) -> MetricsPayload:
-    from py_server.lib.analytics import get_cached_metrics_bundle, get_metrics_bundle
+    from py_server.lib.analytics import get_cached_metrics_bundle, schedule_metrics_refresh
 
     scoped = dict(filters or {})
     scoped["timeframe"] = timeframe
     cached = get_cached_metrics_bundle(scoped)
+    meta = (cached or {}).get("meta") or {}
+    if cached and cached.get("kpis") and not meta.get("partial"):
+        return cached
+    schedule_metrics_refresh(scoped)
     if cached and cached.get("kpis"):
         return cached
-    try:
-        return get_metrics_bundle(scoped)
-    except Exception:
-        if fallback is not None:
-            return fallback
-        raise
+    if fallback is not None:
+        return fallback
+    return cached  # type: ignore[return-value]
 
 
 def build_maintenance_payload_from_filters(
