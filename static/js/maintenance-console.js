@@ -1621,6 +1621,36 @@
     var trendHrs = formatKpiOverviewHoursTrend(metrics.ytd_period_trend_hrs || []);
     var trendStops = metrics.ytd_stops_period_trend || [];
 
+    function padTrendSeries(arr, len) {
+      var out = (arr || []).slice();
+      while (out.length < len) {
+        out.push(0);
+      }
+      return out.slice(0, len);
+    }
+
+    var seriesLen = Math.max(
+      trendPct.length,
+      trendHrs.length,
+      trendStops.length,
+      labels.length
+    );
+    if (!seriesLen && trendPct.length) {
+      seriesLen = trendPct.length;
+    }
+    if (seriesLen) {
+      if (!labels.length) {
+        labels = padTrendSeries([], seriesLen).map(function (_, i) {
+          return 'P' + (i + 1);
+        });
+      } else {
+        labels = labels.slice(0, seriesLen);
+      }
+      trendPct = padTrendSeries(trendPct, seriesLen);
+      trendHrs = padTrendSeries(trendHrs, seriesLen);
+      trendStops = padTrendSeries(trendStops, seriesLen);
+    }
+
     if (!labels.length && trendPct.length) {
       labels = trendPct.map(function (_, i) {
         return 'P' + (i + 1);
@@ -1683,7 +1713,7 @@
     });
 
     requestAnimationFrame(function () {
-      var lbl = labels.slice(0, Math.max(trendPct.length, trendHrs.length, trendStops.length));
+      var lbl = labels;
       drawKpiStripSparkline(
         'kpi-strip-dt-pct',
         lbl,
@@ -2379,9 +2409,6 @@
     bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
     bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
     bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
-    bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
-    bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
-
     var showInGroup = createSlicerGroup(
       'showIn',
       'Show in',
@@ -2393,6 +2420,8 @@
     );
     showInGroup.classList.add('maint-showin-group', 'maint-hidden');
     bar.appendChild(showInGroup);
+    bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
+    bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
 
     updateDateFilterVisibility();
 

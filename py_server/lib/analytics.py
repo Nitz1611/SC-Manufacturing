@@ -470,6 +470,8 @@ def _needs_maintenance_kpi_enrich(metrics: dict[str, Any] | None) -> bool:
     unplanned = metrics.get("maintenance_unplanned") or {}
     if not trend or unplanned.get("current_dt_pct") is None:
         return True
+    if not metrics.get("ytd_period_trend_hrs") or not metrics.get("ytd_stops_period_trend"):
+        return True
     if row_val(unplanned, "ytd_target_dt_pct") is None:
         return True
 
@@ -493,7 +495,13 @@ def _needs_maintenance_kpi_enrich(metrics: dict[str, Any] | None) -> bool:
         return True
 
     total_trend = metrics.get("total_dt_ytd_period_trend") or []
-    return not bool(total_trend)
+    if not total_trend:
+        return True
+    if not metrics.get("ytd_period_trend_hrs"):
+        return True
+    if not metrics.get("ytd_stops_period_trend"):
+        return True
+    return False
 
 
 def enrich_metrics_for_maintenance_kpis(

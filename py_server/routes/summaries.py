@@ -10,6 +10,7 @@ from typing import Any
 from flask import Blueprint, jsonify, request
 
 from py_server.lib.analytics import (
+    enrich_metrics_for_maintenance_kpis,
     get_cached_metrics_bundle,
     get_fresh_metrics_bundle,
     get_metrics_bundle,
@@ -306,9 +307,15 @@ def console_data():
     filters = body.get('filters') or {}
     force = bool(body.get('force'))
 
+    def _with_kpi_ytd_trends(bundle: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not bundle or not sql_configured():
+            return bundle
+        return enrich_metrics_for_maintenance_kpis(bundle, filters)
+
     if not force:
         cached = get_cached_metrics_bundle(filters)
         if cached and cached.get('kpis'):
+            cached = _with_kpi_ytd_trends(cached) or cached
             meta = cached.get('meta') or {}
             partial = bool(meta.get('partial'))
             if partial:
@@ -335,6 +342,7 @@ def console_data():
 
     try:
         metrics = get_metrics_bundle(filters)
+        metrics = _with_kpi_ytd_trends(metrics) or metrics
         if not metrics or not metrics.get('kpis'):
             raise RuntimeError('No metrics returned from SQL')
         meta = metrics.get('meta') or {}
@@ -345,6 +353,7 @@ def console_data():
     except Exception as e:
         cached = get_cached_metrics_bundle(filters)
         if cached and cached.get('kpis'):
+            cached = _with_kpi_ytd_trends(cached) or cached
             meta = cached.get('meta') or {}
             meta['sql_warning'] = str(e)[:240]
             return jsonify(metrics_bundle_to_console_payload(cached, {

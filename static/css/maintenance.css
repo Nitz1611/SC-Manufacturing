@@ -128,6 +128,19 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 
 .maint-filter-bar.maint-slicers-open { z-index: 10040; }
 .maint-filter-bar .filter-group { position: relative; z-index: 1; }
+.maint-filter-bar .maint-showin-group {
+  min-width: 118px;
+}
+.maint-filter-bar .maint-showin-group .filter-label,
+.maint-filter-bar .maint-showin-group .maint-filter-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.maint-filter-bar .maint-showin-group .slicer-trigger {
+  min-width: 118px;
+  font-size: 13px;
+}
 .maint-filter-bar .filter-group.maint-filter-group-open,
 .maint-filter-bar .filter-group:has(.slicer.open) { z-index: 10045; }
 .maint-filter-bar .slicer.open .slicer-panel {
