@@ -1035,7 +1035,7 @@
   }
 
   function renderTotalDtKpi(kpi) {
-    if (!kpi || kpi.wip) return '';
+    if (!kpi) return '';
     var target = Number(kpi.target || 0);
     var deltaClass = kpi.delta_vs_target > 0 ? 'bad' : 'good';
     var deltaArrow = kpi.delta_vs_target > 0 ? '▲' : '▼';
@@ -1060,11 +1060,12 @@
       '" aria-hidden="true"></span>' +
       '<span class="maint-kpi-title">' +
       esc(kpi.label || 'Total Downtime %') +
+      (kpi.wip ? ' <span class="maint-wip-badge">WIP</span>' : '') +
       '</span></div>' +
       '<div class="maint-kpi-body">' +
       '<div class="maint-kpi-main">' +
       '<div class="maint-kpi-value">' +
-      esc(kpi.value_display || fmtPct(kpi.value)) +
+      esc(kpi.value_display || (kpi.wip ? '—' : fmtPct(kpi.value))) +
       '</div>' +
       '<div class="maint-kpi-target-row">' +
       '<span class="maint-kpi-target-label">Target</span> ' +

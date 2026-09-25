@@ -449,42 +449,43 @@ def _metrics_is_partial(metrics: dict[str, Any] | None) -> bool:
 
 
 def _needs_maintenance_kpi_enrich(metrics: dict[str, Any] | None) -> bool:
+    def row_val(row: dict[str, Any] | None, *keys: str) -> Any:
+        if not row:
+            return None
+        index = {str(k).lower(): v for k, v in row.items() if k is not None}
+        for key in keys:
+            if key.lower() in index and index[key.lower()] is not None:
+                return index[key.lower()]
+        return None
+
     if not metrics:
         return True
     trend = metrics.get("ytd_period_trend") or []
     unplanned = metrics.get("maintenance_unplanned") or {}
-    mtbf = metrics.get("maintenance_mtbf") or {}
     if not trend or unplanned.get("current_dt_pct") is None:
         return True
-    ytd_unplanned = unplanned.get("ytd_target_dt_pct")
-    if ytd_unplanned is None:
-        for k, v in unplanned.items():
-            if str(k).lower() == "ytd_target_dt_pct" and v is not None:
-                ytd_unplanned = v
-                break
-    if ytd_unplanned is None:
+    if row_val(unplanned, "ytd_target_dt_pct") is None:
         return True
-    if metrics.get("mtbf_ytd_target_hrs") is not None:
-        return False
-    ytd_mtbf = mtbf.get("ytd_target_mtbf_hrs")
-    if ytd_mtbf is None:
-        for k, v in mtbf.items():
-            if str(k).lower() == "ytd_target_mtbf_hrs" and v is not None:
-                ytd_mtbf = v
-                break
-    if ytd_mtbf is None:
+
+    mtbf = metrics.get("maintenance_mtbf") or {}
+    if metrics.get("mtbf_ytd_target_hrs") is None and row_val(mtbf, "ytd_target_mtbf_hrs") is None:
         return True
+
     total_dt = metrics.get("maintenance_total_downtime") or {}
-    if metrics.get("total_dt_ytd_target_pct") is not None:
-        return False
-    ytd_total = total_dt.get("ytd_target_total_dt_pct")
+    ytd_total = metrics.get("total_dt_ytd_target_pct")
     if ytd_total is None:
-        for k, v in total_dt.items():
-            if str(k).lower() == "ytd_target_total_dt_pct" and v is not None:
-                ytd_total = v
-                break
+        ytd_total = row_val(total_dt, "ytd_target_total_dt_pct")
     if ytd_total is None:
         return True
+
+    total_pct = row_val(total_dt, "current_total_dt_pct")
+    if total_pct is None:
+        total_pct = row_val(unplanned, "total_downtime_pct")
+    if total_pct is None:
+        total_pct = row_val(metrics.get("kpi_raw") or {}, "total_downtime_pct")
+    if total_pct is None:
+        return True
+
     total_trend = metrics.get("total_dt_ytd_period_trend") or []
     return not bool(total_trend)
 

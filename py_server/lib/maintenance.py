@@ -637,14 +637,30 @@ def _build_mtbf_kpi_card(
     }
 
 
+def _read_total_dt_pct(metrics: MetricsPayload) -> tuple[float | None, str]:
+    """Total downtime % from dedicated card, then unplanned card / KPI raw (same MEASURE)."""
+    card = metrics.get("maintenance_total_downtime") or {}
+    raw = _metric_row_value(card, "current_total_dt_pct")
+    if raw is not None:
+        return _parse_pct(raw), "total_dt_card"
+    unplanned = metrics.get("maintenance_unplanned") or {}
+    raw = _metric_row_value(unplanned, "total_downtime_pct")
+    if raw is not None:
+        return _parse_pct(raw), "unplanned_card"
+    raw = _metric_row_value(metrics.get("kpi_raw") or {}, "total_downtime_pct")
+    if raw is not None:
+        return _parse_pct(raw), "kpi_raw"
+    return None, "missing"
+
+
 def _build_total_dt_kpi_card(
     metrics: MetricsPayload,
     filters: dict[str, Any] | None,
 ) -> dict[str, Any]:
     card = metrics.get("maintenance_total_downtime") or {}
-    raw_pct = _metric_row_value(card, "current_total_dt_pct")
-    has_live = raw_pct is not None
-    dt_pct = _parse_pct(raw_pct) if has_live else 0.0
+    dt_pct, value_source = _read_total_dt_pct(metrics)
+    has_live = dt_pct is not None
+    dt_pct = float(dt_pct or 0.0)
 
     target = _resolve_total_dt_target(metrics)
     prev_period_pct = _parse_pct(_metric_row_value(card, "prev_period_total_dt_pct"))
@@ -676,6 +692,15 @@ def _build_total_dt_kpi_card(
 
     total_hrs_raw = _metric_row_value(card, "current_total_dt_hrs")
     total_hrs = float(total_hrs_raw or 0) if total_hrs_raw is not None else 0.0
+    sched_raw = _metric_row_value(card, "current_sched_hours")
+    if sched_raw is None:
+        sched_raw = _metric_row_value(
+            metrics.get("maintenance_unplanned") or {},
+            "current_sched_hours",
+        )
+    sched = float(sched_raw or 0)
+    if total_hrs <= 0 and sched > 0 and dt_pct > 0:
+        total_hrs = round(sched * dt_pct / 100.0, 1)
     footer_hours = f"{total_hrs:,.1f}" if total_hrs > 0 else None
 
     last_period_class = (
@@ -685,6 +710,7 @@ def _build_total_dt_kpi_card(
     return {
         "label": "Total Downtime %",
         "value": dt_pct,
+        "value_source": value_source,
         "value_display": f"{dt_pct:.2f} %" if has_live else None,
         "target": target,
         "target_display": f"{target:.2f} %",
@@ -699,7 +725,7 @@ def _build_total_dt_kpi_card(
         "footer_right": footer_hours,
         "footer_right_label": "Total Downtime Hours",
         "status_dot": _kpi_status_dot(dt_pct, target, higher_is_better=False),
-        "wip": not has_live,
+        "wip": not has_live and not _metrics_is_live(metrics),
     }
 
 
