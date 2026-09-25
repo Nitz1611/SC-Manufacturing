@@ -77,6 +77,7 @@
   var engineSwitchPage = null;
   var engineSwitchKpiTab = null;
   var engineEnterKpiOverview = null;
+  var filterChangeTimer = null;
 
   var state = {
     page: 'maintenance',
@@ -94,6 +95,8 @@
     },
     payload: null,
     loading: false,
+    filtersApplying: false,
+    filterRequestGen: 0,
     insightsLoading: false,
     insightTab: 'alerts',
     reportTab: 'snapshot',
@@ -161,17 +164,20 @@
       var tf = String(f.timeframe).toLowerCase();
       state.filters.timeframe = tf === 'fy' ? 'ytd' : tf;
     }
-    if (f.year) state.filters.year = f.year;
     if (f.site) state.filters.site = f.site;
     state.filters.region = regionFilterLabel(f.region);
     if (f.showIn) state.filters.showIn = f.showIn;
+  }
+
+  function hiddenEngineYear() {
+    return String(new Date().getFullYear());
   }
 
   function syncToConsoleFilters() {
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
     mc.state.filters.timeframe = String(state.filters.timeframe || 'ptd').toLowerCase();
-    mc.state.filters.year = state.filters.year === 'All' ? '2026' : state.filters.year;
+    mc.state.filters.year = hiddenEngineYear();
     mc.state.filters.site = state.filters.site;
     mc.state.filters.region = normalizeRegionList(state.filters.region);
     mc.state.filters.showIn = state.filters.showIn || 'Thousands';
@@ -232,7 +238,6 @@
     var custom = isCustomTimeframe();
     return {
       timeframe: String(f.timeframe || 'ptd').toLowerCase(),
-      year: f.year === 'All' ? '2026' : f.year,
       site: f.site === 'All' ? null : f.site,
       region: normalizeRegionList(f.region).join(',') || null,
       department: f.department === 'All' ? null : f.department,
@@ -264,7 +269,6 @@
     return {
       showIn: state.filters.showIn || 'Thousands',
       timeframe: payload.timeframe,
-      year: payload.year,
       site: state.filters.site || 'All',
       region: normalizeRegionList(state.filters.region),
       period: mapConsolePeriod(payload.timeframe),
@@ -294,9 +298,7 @@
     if (!bar) return;
     var parts = [];
     parts.push('Show: ' + (state.filters.showIn || 'Thousands'));
-    parts.push(
-      slicerDisplayValue('timeframe', state.filters.timeframe) + ' ' + (state.filters.year || '2026')
-    );
+    parts.push(slicerDisplayValue('timeframe', state.filters.timeframe));
     if (state.filters.site && state.filters.site !== 'All') {
       parts.push('Site: ' + state.filters.site);
     }
@@ -313,6 +315,44 @@
       '</span>';
   }
 
+  function customRangeReady() {
+    if (!isCustomTimeframe()) return true;
+    var from = state.filters.dateFrom;
+    var to = state.filters.dateTo;
+    if (!from || !to) return false;
+    return from <= to;
+  }
+
+  function markFiltersApplying() {
+    state.filtersApplying = true;
+    state.filterRequestGen = (state.filterRequestGen || 0) + 1;
+    document.body.classList.add('maint-filters-applying');
+    var status = $('#maint-filter-status');
+    if (status) status.textContent = 'Updating metrics for selected filters…';
+    if (state.page === 'kpi-overview') {
+      renderKpiOverviewMetricStripPending();
+    }
+  }
+
+  function clearFiltersApplying() {
+    state.filtersApplying = false;
+    document.body.classList.remove('maint-filters-applying');
+    var status = $('#maint-filter-status');
+    if (status) status.textContent = '';
+  }
+
+  function renderKpiOverviewMetricStripPending() {
+    document.querySelectorAll('.metric-strip-root').forEach(function (strip) {
+      strip.classList.add('metric-strip-pending');
+      strip.querySelectorAll('.metric-value').forEach(function (el) {
+        el.textContent = '—';
+      });
+      strip.querySelectorAll('.metric-delta').forEach(function (el) {
+        el.textContent = '';
+      });
+    });
+  }
+
   function kpiOverviewTimeframeCaption() {
     var tf = String(state.filters.timeframe || 'ptd').toLowerCase();
     if (tf === 'custom') return 'Custom range';
@@ -320,7 +360,12 @@
   }
 
   function fetchMaintenanceData(silent, forceRefresh) {
-    if (!silent) {
+    if (!customRangeReady()) {
+      updateEngineFilterContextBar();
+      return Promise.resolve();
+    }
+    var reqGen = state.filterRequestGen || 0;
+    if (!silent && !state.payload) {
       state.loading = true;
       renderLoading();
     }
@@ -349,6 +394,7 @@
         return r.json();
       })
       .then(function (data) {
+        if (reqGen !== (state.filterRequestGen || 0)) return;
         if (data.error) throw new Error(data.error);
         state.payload = data;
         applyFilterOptions(data.filter_options || {});
@@ -376,7 +422,10 @@
         }
       })
       .finally(function () {
-        state.loading = false;
+        if (reqGen === (state.filterRequestGen || 0)) {
+          state.loading = false;
+          clearFiltersApplying();
+        }
       });
   }
 
@@ -535,8 +584,6 @@
       populateSlicerOptions('timeframe', TIMEFRAME_OPTIONS, state.filters.timeframe, false);
     } else if (id === 'region') {
       populateSlicerOptions('region', regionSlicerOptions(), state.filters.region, true);
-    } else if (id === 'year') {
-      populateSlicerOptions('year', [{ value: state.filters.year, label: state.filters.year }], state.filters.year, false);
     }
   }
 
@@ -784,13 +831,6 @@
     }
     if (opts.lines && opts.lines.length) {
       updateLineSlicerOptions(opts.lines);
-    }
-    if (opts.years && opts.years.length) {
-      var yearOpts = opts.years.map(function (y) {
-        return { value: String(y), label: String(y) };
-      });
-      populateSlicerOptions('year', yearOpts, state.filters.year, false);
-      updateSlicerDisplay('year', state.filters.year);
     }
     if (opts.shifts && opts.shifts.length) {
       var shiftOpts = opts.shifts.map(function (s) {
@@ -1499,6 +1539,7 @@
     var root = $('#maint-root');
     if (!root || !state.payload) return;
     root.classList.remove('maint-loading');
+    root.classList.toggle('maint-content-pending', !!state.filtersApplying);
     var p = state.payload;
     var kpi = p.kpis && p.kpis.primary;
     var mtbf = p.kpis && p.kpis.mtbf;
@@ -1892,6 +1933,7 @@
 
     document.querySelectorAll('.metric-strip-root').forEach(function (strip) {
       strip.classList.add('metric-strip-ytd-trends');
+      strip.classList.remove('metric-strip-pending');
       strip.innerHTML = html;
     });
 
@@ -2017,6 +2059,7 @@
     }
 
     applyShowInToEngine();
+    updateEngineFilterContextBar();
     reflowDashboardCharts();
     reloadConsoleMetrics(true);
     afterKpiOverviewMetricsUpdated();
@@ -2615,9 +2658,6 @@
     bar.appendChild(
       createSlicerGroup('timeframe', 'Timeframe', TIMEFRAME_OPTIONS, state.filters.timeframe, false)
     );
-    bar.appendChild(
-      createSlicerGroup('year', 'Fiscal Year', [{ value: '2026', label: '2026' }], state.filters.year, false)
-    );
     bar.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, false, true));
     bar.appendChild(
       createSlicerGroup('region', 'Region', regionSlicerOptions(), state.filters.region, true)
@@ -2628,6 +2668,13 @@
     bar.appendChild(createShowInSelectGroup());
     bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
     bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
+
+    var status = document.createElement('div');
+    status.id = 'maint-filter-status';
+    status.className = 'maint-filter-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    bar.appendChild(status);
 
     updateDateFilterVisibility();
 
@@ -2646,14 +2693,29 @@
     var toEl = $('#maint-filter-to');
     if (fromEl) state.filters.dateFrom = fromEl.value;
     if (toEl) state.filters.dateTo = toEl.value;
+
+    if (isCustomTimeframe() && !customRangeReady()) {
+      updateEngineFilterContextBar();
+      var status = $('#maint-filter-status');
+      if (status) status.textContent = 'Select a valid from and to date.';
+      return;
+    }
+
+    clearTimeout(filterChangeTimer);
+    var delay = isCustomTimeframe() ? 450 : 80;
+    filterChangeTimer = setTimeout(applyFiltersNow, delay);
+  }
+
+  function applyFiltersNow() {
+    if (isCustomTimeframe() && !customRangeReady()) return;
+    markFiltersApplying();
     var nextSig = consoleFilterSignature();
-    var forceReload = !!(state._consoleFilterSig && state._consoleFilterSig !== nextSig);
     state._consoleFilterSig = nextSig;
     syncToConsoleFilters();
     invalidateConsoleMetricsCache();
     updateEngineFilterContextBar();
-    reloadConsoleMetrics(forceReload);
-    fetchMaintenanceData(false, forceReload);
+    reloadConsoleMetrics(true);
+    fetchMaintenanceData(false, true);
   }
 
   function buildPrimaryNav() {
@@ -2796,7 +2858,6 @@
     patchKpiOverviewMetricStripHooks();
     registerKpiChartLabelWrapPlugin();
     syncFromConsoleFilters();
-    state.filters.year = state.filters.year || '2026';
     state.filters.timeframe = state.filters.timeframe || 'ptd';
     syncToConsoleFilters();
     state._consoleFilterSig = consoleFilterSignature();

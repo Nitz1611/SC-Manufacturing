@@ -17,7 +17,7 @@ from py_server.lib.analytics import (
     schedule_metrics_refresh,
 )
 from py_server.lib.claude_summary import claude_configured, invoke_claude
-from py_server.lib.config import normalize_params
+from py_server.lib.config import normalize_params, maintenance_insights_timeframe
 from py_server.lib.maintenance import build_maintenance_payload, build_maintenance_payload_from_filters
 from py_server.lib.metrics_transform import build_tab_insights
 from py_server.lib.summary_provider import resolve_summary_provider
@@ -40,7 +40,7 @@ def _metrics_for_request(filters: dict[str, Any]) -> dict[str, Any]:
 
 def _insights_cache_key(filters: dict[str, Any]) -> str:
     scoped = dict(filters or {})
-    scoped["timeframe"] = "ptd"
+    scoped["timeframe"] = maintenance_insights_timeframe()
     norm = normalize_params(scoped)
     return json.dumps(norm, sort_keys=True)
 
@@ -179,16 +179,16 @@ def maintenance_insights():
             })
 
     try:
-        ptd_filters = dict(filters or {})
-        ptd_filters["timeframe"] = "ptd"
-        metrics = get_metrics_bundle(ptd_filters)
+        insights_filters = dict(filters or {})
+        insights_filters["timeframe"] = maintenance_insights_timeframe()
+        metrics = get_metrics_bundle(insights_filters)
         source = "template"
         payload = build_maintenance_payload_from_filters(metrics, filters)
         ai_summaries = payload["ai_summaries"]
 
         if provider == "claude" and claude_configured():
             try:
-                ai_summaries = _claude_maintenance_insights(ptd_filters, metrics)
+                ai_summaries = _claude_maintenance_insights(insights_filters, metrics)
                 source = "claude"
             except Exception as claude_err:
                 if not body.get("allowFallback", True):

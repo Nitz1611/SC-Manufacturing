@@ -1257,13 +1257,19 @@ def build_maintenance_payload_from_filters(
     metrics: MetricsPayload,
     filters: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    alerts_m = _metrics_for_timeframe(filters, "yesterday", fallback=metrics)
-    insights_m = _metrics_for_timeframe(filters, "ptd", fallback=metrics)
+    from py_server.lib.config import maintenance_alerts_timeframe, maintenance_insights_timeframe
+
+    alerts_tf = maintenance_alerts_timeframe()
+    insights_tf = maintenance_insights_timeframe()
+    alerts_m = _metrics_for_timeframe(filters, alerts_tf, fallback=metrics)
+    insights_m = _metrics_for_timeframe(filters, insights_tf, fallback=metrics)
     return build_maintenance_payload(
         metrics,
         filters,
         alerts_metrics=alerts_m,
         insights_metrics=insights_m,
+        alerts_timeframe=alerts_tf,
+        insights_timeframe=insights_tf,
     )
 
 
@@ -1285,6 +1291,8 @@ def build_maintenance_payload(
     filters: dict[str, Any] | None = None,
     alerts_metrics: MetricsPayload | None = None,
     insights_metrics: MetricsPayload | None = None,
+    alerts_timeframe: str | None = None,
+    insights_timeframe: str | None = None,
 ) -> dict[str, Any]:
     """Build maintenance console dashboard payload from live MetricsPayload."""
     effective_filters = filters
@@ -1303,11 +1311,16 @@ def build_maintenance_payload(
     kpis_block["total_downtime"] = _build_total_dt_kpi_card(metrics, effective_filters)
     primary_target = float((kpis_block.get("primary") or {}).get("target") or 0)
 
+    from py_server.lib.config import maintenance_alerts_timeframe, maintenance_insights_timeframe
+
+    alerts_tf = alerts_timeframe or maintenance_alerts_timeframe()
+    insights_tf = insights_timeframe or maintenance_insights_timeframe()
+
     return {
         "meta": {
             **(metrics.get("meta") or {}),
-            "alerts_timeframe": "yesterday",
-            "insights_timeframe": "ptd",
+            "alerts_timeframe": alerts_tf,
+            "insights_timeframe": insights_tf,
         },
         "kpis": kpis_block,
         "secondary_kpis": _build_secondary_kpis(metrics),

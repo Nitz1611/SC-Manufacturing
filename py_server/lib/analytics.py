@@ -405,9 +405,10 @@ def warm_memory_cache_from_disk() -> int:
                 'regions': parsed.get('regions') or None,
                 'line': parsed.get('line') or None,
                 'department': parsed.get('department') or None,
-                'shift_filter': parsed.get('shift') or None,
-                'period': 'week',
-                'timeframe': 'FY',
+                'shift_filter': parsed.get('shift') or parsed.get('shift_filter') or None,
+                'timeframe': str(parsed.get('timeframe') or 'ptd').lower(),
+                'date_from': parsed.get('date_from'),
+                'date_to': parsed.get('date_to'),
             }
             mem_key = filter_cache_key(norm)
             if mem_key not in _memory_cache:
@@ -797,20 +798,23 @@ coarse_cache_key = filter_cache_key
 
 
 def warmup_default_metrics_async() -> None:
-    """Background load for FY 2026 / all sites — makes first page visit instant."""
+    """Background load for common timeframe slices — makes first filter selection faster."""
     if not sql_configured():
         return
 
     def _run() -> None:
         try:
             warm_memory_cache_from_disk()
-            default_filters: dict[str, Any] = {'year': '2026', 'site': None, 'region': None}
-            if get_fresh_metrics_bundle(default_filters):
-                print('[analytics] default FY 2026 cache already warm', flush=True)
-                return
-            print('[analytics] warming default FY 2026 metrics in background…', flush=True)
-            refresh_metrics_bundle(default_filters)
-            print('[analytics] default FY 2026 metrics ready', flush=True)
+            prefetch_raw = (os.getenv('METRICS_PREFETCH_TIMEFRAMES') or 'ptd,ytd,wtd').strip()
+            timeframes = [t.strip().lower() for t in prefetch_raw.split(',') if t.strip()]
+            for tf in timeframes:
+                default_filters: dict[str, Any] = {'timeframe': tf, 'site': None, 'region': None}
+                if get_fresh_metrics_bundle(default_filters):
+                    print(f'[analytics] prefetch cache warm for timeframe={tf}', flush=True)
+                    continue
+                print(f'[analytics] prefetching metrics for timeframe={tf}…', flush=True)
+                refresh_metrics_bundle(default_filters)
+                print(f'[analytics] prefetch complete timeframe={tf}', flush=True)
         except Exception as exc:
             print(f'[analytics] default warmup failed: {exc}', flush=True)
 

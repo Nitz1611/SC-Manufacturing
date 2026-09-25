@@ -330,7 +330,14 @@ def mttr_hours_measure() -> str:
 
 
 def year_filter_expression() -> str:
-    return f"(:year IS NULL OR YEAR({date_column()}) = :year)"
+    """Timeframe flag columns scope the grain; fiscal year is not a user filter."""
+    if (os.environ.get("ENABLE_FISCAL_YEAR_SQL_FILTER") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return f"(:year IS NULL OR YEAR({date_column()}) = :year)"
+    return "1=1"
 
 
 def _apply_sql_fragments(sql: str) -> str:
@@ -503,9 +510,8 @@ def console_demo_mode() -> bool:
 
 
 def filter_cache_key(params: dict[str, str | None]) -> str:
-    """Cache key for all SQL-bound slicers including timeframe and custom dates."""
+    """Cache key for SQL-bound slicers (timeframe + dimensions, not fiscal year)."""
     payload = {
-        "year": params.get("year") or "2026",
         "site": params.get("site"),
         "regions": params.get("regions"),
         "line": params.get("line"),
@@ -516,6 +522,41 @@ def filter_cache_key(params: dict[str, str | None]) -> str:
         "date_to": params.get("date_to"),
     }
     return json.dumps(payload, sort_keys=True)
+
+
+def _parse_maintenance_panel_timeframe(env_key: str, default: str) -> str:
+    """
+    Map env values like YTD, PTD, WTD, Previous_Day to internal timeframe keys
+    used by build_timeframe_filter_sql (PTD Flag, YTD Flag, etc.).
+    """
+    raw = (os.environ.get(env_key) or default).strip().upper().replace("-", "_").replace(" ", "_")
+    mapping = {
+        "YTD": "ytd",
+        "PTD": "ptd",
+        "WTD": "wtd",
+        "PREVIOUS_DAY": "yesterday",
+        "PREV_DAY": "yesterday",
+        "YESTERDAY": "yesterday",
+        "PREV_WEEK": "prev_week",
+        "PREVIOUS_WEEK": "prev_week",
+        "PREV_PERIOD": "prev_period",
+        "PREVIOUS_PERIOD": "prev_period",
+        "TODAY": "today",
+    }
+    if raw in mapping:
+        return mapping[raw]
+    lowered = raw.lower()
+    if lowered in TIMEFRAME_FLAG_COLUMNS:
+        return lowered
+    return default.lower()
+
+
+def maintenance_alerts_timeframe() -> str:
+    return _parse_maintenance_panel_timeframe("MAINTENANCE_ALERTS_TIMEFRAME", "YESTERDAY")
+
+
+def maintenance_insights_timeframe() -> str:
+    return _parse_maintenance_panel_timeframe("MAINTENANCE_INSIGHTS_TIMEFRAME", "PTD")
 
 
 def coarse_cache_key(params: dict[str, str | None]) -> str:
