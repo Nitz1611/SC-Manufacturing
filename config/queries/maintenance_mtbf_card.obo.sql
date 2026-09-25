@@ -1,9 +1,9 @@
 -- maintenance_mtbf_card.obo.sql
--- MTBF KPI: scheduled hours / stops for current timeframe, prev period, last shift, and driver hours.
+-- MTBF KPI from MEASURE(MTBF (Hours)); stops/hours for MTTR footer.
 SELECT
-  (SELECT ROUND({{scheduled_hours_m}} / NULLIF({{stops_m}}, 0), 2)
+  (SELECT ROUND({{mtbf_m}}, 2)
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-   WHERE {{dt_stops_filter}}
+   WHERE {{mtbf_filter}}
      AND {{year_filter}}
      AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
      AND {{region_filter}}
@@ -45,9 +45,9 @@ SELECT
      AND {{shift_filter}}
      AND {{timeframe_filter}}
   ) AS current_unplanned_hrs,
-  (SELECT ROUND({{scheduled_hours_m}} / NULLIF({{stops_m}}, 0), 2)
+  (SELECT ROUND({{mtbf_m}}, 2)
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-   WHERE {{dt_stops_filter}}
+   WHERE {{mtbf_filter}}
      AND {{year_filter}}
      AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
      AND {{region_filter}}
@@ -56,9 +56,9 @@ SELECT
      AND {{shift_filter}}
      AND {{prev_period_flag_filter}}
   ) AS prev_period_mtbf_hrs,
-  (SELECT ROUND({{scheduled_hours_m}} / NULLIF({{stops_m}}, 0), 2)
+  (SELECT ROUND({{mtbf_m}}, 2)
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view v
-   WHERE {{dt_stops_filter}}
+   WHERE {{mtbf_filter}}
      AND {{year_filter}}
      AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
      AND {{region_filter}}
@@ -68,7 +68,7 @@ SELECT
      AND CAST(v.{{period_sort}} AS INT) = (
        SELECT MAX(CAST({{period_sort}} AS INT))
        FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-       WHERE {{dt_stops_filter}}
+       WHERE {{mtbf_filter}}
          AND {{year_filter}}
          AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
          AND {{region_filter}}
@@ -79,7 +79,7 @@ SELECT
      AND CAST(v.{{week_sort}} AS INT) = (
        SELECT MAX(CAST({{week_sort}} AS INT))
        FROM {{catalog}}.pgt_plnt_prodtn_metric_view w
-       WHERE {{dt_stops_filter}}
+       WHERE {{mtbf_filter}}
          AND {{year_filter}}
          AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
          AND {{region_filter}}
@@ -89,7 +89,7 @@ SELECT
          AND CAST(w.{{period_sort}} AS INT) = (
            SELECT MAX(CAST({{period_sort}} AS INT))
            FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-           WHERE {{dt_stops_filter}}
+           WHERE {{mtbf_filter}}
              AND {{year_filter}}
              AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
              AND {{region_filter}}
@@ -99,9 +99,9 @@ SELECT
          )
      )
   ) AS latest_week_mtbf_hrs,
-  (SELECT ROUND({{scheduled_hours_m}} / NULLIF({{stops_m}}, 0), 2)
+  (SELECT ROUND({{mtbf_m}}, 2)
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-   WHERE {{dt_stops_filter}}
+   WHERE {{mtbf_filter}}
      AND {{year_filter}}
      AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
      AND {{region_filter}}
@@ -112,7 +112,7 @@ SELECT
      AND CAST(Shift AS INT) = (
        SELECT MAX(CAST(Shift AS INT))
        FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-       WHERE {{dt_stops_filter}}
+       WHERE {{mtbf_filter}}
          AND {{year_filter}}
          AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
          AND {{region_filter}}
@@ -170,7 +170,7 @@ SELECT
   ) AS last_shift_stops,
   (SELECT MAX(CAST(Shift AS INT))
    FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-   WHERE {{dt_stops_filter}}
+   WHERE {{mtbf_filter}}
      AND {{year_filter}}
      AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
      AND {{region_filter}}

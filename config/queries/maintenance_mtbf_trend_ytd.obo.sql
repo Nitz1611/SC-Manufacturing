@@ -1,10 +1,10 @@
 -- maintenance_mtbf_trend_ytd.obo.sql
--- Sparkline: MTBF (scheduled hours / stops) by production period for the fiscal year.
+-- Sparkline: MEASURE(MTBF (Hours)) by production period for the fiscal year (no timeframe filter).
 SELECT
   {{period_expr}} AS period_label,
-  ROUND({{scheduled_hours_m}} / NULLIF({{stops_m}}, 0), 2) AS mtbf_hrs
+  ROUND({{mtbf_m}}, 2) AS mtbf_hrs
 FROM {{catalog}}.pgt_plnt_prodtn_metric_view
-WHERE {{dt_stops_filter}}
+WHERE {{mtbf_filter}}
   AND {{year_filter}}
   AND (:site IS NULL OR UPPER({{site_col}}) = UPPER(:site))
   AND {{region_filter}}

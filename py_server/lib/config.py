@@ -28,6 +28,7 @@ GOLD_NAMES = {
     "region": "Region",
     "department": "Department Name",
     "scheduledHours": "Scheduled Hours",
+    "mtbfHours": "MTBF (Hours)",
 }
 
 
@@ -135,6 +136,10 @@ def department_column() -> str:
 
 def scheduled_hours_column() -> str:
     return _resolve_column("DATABRICKS_SCHEDULED_HOURS_COLUMN", GOLD_NAMES["scheduledHours"])
+
+
+def mtbf_hours_column() -> str:
+    return _resolve_column("DATABRICKS_MTBF_HOURS_COLUMN", GOLD_NAMES["mtbfHours"])
 
 
 def _flag_filter(flag_column: str) -> str:
@@ -302,6 +307,10 @@ def scheduled_hours_measure() -> str:
     return _measure_expr(scheduled_hours_column())
 
 
+def mtbf_hours_measure() -> str:
+    return _measure_expr(mtbf_hours_column())
+
+
 def year_filter_expression() -> str:
     return f"(:year IS NULL OR YEAR({date_column()}) = :year)"
 
@@ -330,6 +339,8 @@ def _apply_sql_fragments(sql: str) -> str:
         .replace("{{total_dt_pct_m}}", total_downtime_pct_measure())
         .replace("{{stops_m}}", stops_measure())
         .replace("{{scheduled_hours_m}}", scheduled_hours_measure())
+        .replace("{{mtbf_m}}", mtbf_hours_measure())
+        .replace("{{mtbf_filter}}", dt_measure_context_filter())
         .replace("{{ytd_flag_filter}}", ytd_flag_filter())
         .replace("{{prev_period_flag_filter}}", prev_period_flag_filter())
         .replace("{{yesterday_flag_filter}}", yesterday_flag_filter())
