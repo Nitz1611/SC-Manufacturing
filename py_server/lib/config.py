@@ -222,16 +222,70 @@ def build_optional_eq_filter(column_expr: str, value: str | None) -> str:
     return f"UPPER(TRIM({col})) = UPPER('{escaped}')"
 
 
+def _parse_multi_csv(value: str | list | None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = str(value).split(",")
+    out: list[str] = []
+    for item in raw:
+        text = str(item).strip()
+        if text and text.lower() not in ("all", ""):
+            out.append(text)
+    return out
+
+
+def build_multi_in_filter(column_expr: str, value: str | None) -> str:
+    items = _parse_multi_csv(value)
+    if not items:
+        return "1=1"
+    col = _sql_string_expr(column_expr)
+    if len(items) == 1:
+        return build_optional_eq_filter(column_expr, items[0])
+    in_list = ", ".join(
+        f"UPPER('{item.replace(chr(39), chr(39) * 2)}')" for item in items
+    )
+    return f"UPPER(TRIM({col})) IN ({in_list})"
+
+
+def build_site_filter_sql(site_value: str | None) -> str:
+    sites = _parse_multi_csv(site_value)
+    if not sites:
+        return "1=1"
+    col = _sql_string_expr(site_column())
+    if len(sites) == 1:
+        esc = sites[0].replace("'", "''").upper()
+        return f"UPPER(TRIM({col})) = '{esc}'"
+    in_list = ", ".join(
+        f"'{s.replace(chr(39), chr(39) * 2).upper()}'" for s in sites
+    )
+    return f"UPPER(TRIM({col})) IN ({in_list})"
+
+
 def build_shift_filter_sql(shift: str | None) -> str:
-    if not shift or str(shift).strip().lower() in ("all", ""):
+    items = _parse_multi_csv(shift)
+    if not items:
         return "1=1"
     col = _sql_string_expr(quote_ident(GOLD_NAMES["shift"]))
-    raw = str(shift).strip().replace("'", "''")
-    digit = re.search(r"\d+", raw)
-    if digit:
-        d = digit.group()
-        return f"(TRIM({col}) = '{d}' OR UPPER(TRIM({col})) = UPPER('{raw}'))"
-    return f"UPPER(TRIM({col})) = UPPER('{raw}')"
+    if len(items) == 1:
+        raw = items[0].replace("'", "''")
+        digit = re.search(r"\d+", raw)
+        if digit:
+            d = digit.group()
+            return f"(TRIM({col}) = '{d}' OR UPPER(TRIM({col})) = UPPER('{raw}'))"
+        return f"UPPER(TRIM({col})) = UPPER('{raw}')"
+    clauses: list[str] = []
+    for item in items:
+        raw = item.replace("'", "''")
+        digit = re.search(r"\d+", raw)
+        if digit:
+            d = digit.group()
+            clauses.append(f"(TRIM({col}) = '{d}' OR UPPER(TRIM({col})) = UPPER('{raw}'))")
+        else:
+            clauses.append(f"UPPER(TRIM({col})) = UPPER('{raw}')")
+    return "(" + " OR ".join(clauses) + ")"
 
 
 def build_region_filter_sql(regions_csv: str | None) -> str:
@@ -407,11 +461,10 @@ def load_query_sql(query_key: str) -> str:
 
 def bind_sql_params(sql: str, params: dict[str, str | None]) -> str:
     year_lit = str(params["year"]) if params.get("year") else "NULL"
-    site = params.get("site")
-    site_lit = f"'{site.replace(chr(39), chr(39) * 2).upper()}'" if site else "NULL"
+    site_filter = build_site_filter_sql(params.get("site"))
     region_filter = build_region_filter_sql(params.get("regions"))
-    line_filter = build_optional_eq_filter(line_column(), params.get("line"))
-    department_filter = build_optional_eq_filter(department_column(), params.get("department"))
+    line_filter = build_multi_in_filter(line_column(), params.get("line"))
+    department_filter = build_multi_in_filter(department_column(), params.get("department"))
     shift_filter = build_shift_filter_sql(params.get("shift_filter"))
     timeframe_filter = build_timeframe_filter_sql(
         params.get("timeframe"),
@@ -419,7 +472,13 @@ def bind_sql_params(sql: str, params: dict[str, str | None]) -> str:
         params.get("date_to"),
     )
     sql = re.sub(r":year\b", year_lit, sql)
-    sql = re.sub(r":site\b", site_lit, sql)
+    sql = re.sub(
+        r"\(:site IS NULL OR UPPER\([^)]+\)\s*=\s*UPPER\(:site\)\)",
+        site_filter,
+        sql,
+        flags=re.I,
+    )
+    sql = re.sub(r":site\b", "NULL", sql)
     sql = sql.replace("{{region_filter}}", region_filter)
     sql = sql.replace("{{line_filter}}", line_filter)
     sql = sql.replace("{{department_filter}}", department_filter)
@@ -432,6 +491,15 @@ def _optional_filter_value(raw: dict, *keys: str) -> str | None:
     for key in keys:
         val = raw.get(key)
         if val is None:
+            continue
+        if isinstance(val, list):
+            items = [
+                str(x).strip()
+                for x in val
+                if str(x).strip() and str(x).strip().lower() != "all"
+            ]
+            if items:
+                return ",".join(items)
             continue
         text = str(val).strip()
         if text and text.lower() != "all":
@@ -472,7 +540,18 @@ def normalize_params(raw: dict | None = None) -> dict[str, str | None]:
     else:
         year = "2026"
     site_val = raw.get("site")
-    site = str(site_val).upper() if site_val and str(site_val).lower() != "all" else None
+    if isinstance(site_val, list):
+        site_items = [
+            str(s).strip().upper()
+            for s in site_val
+            if str(s).strip() and str(s).strip().lower() != "all"
+        ]
+        site = ",".join(site_items) if site_items else None
+    elif site_val and str(site_val).strip().lower() not in ("all", ""):
+        site = ",".join(s.upper() for s in _parse_multi_csv(str(site_val)))
+        site = site or None
+    else:
+        site = None
     regions: str | None = None
     region_val = raw.get("region")
     if isinstance(region_val, list) and region_val:

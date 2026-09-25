@@ -146,6 +146,9 @@ def _has_extra_sql_filters(norm: dict[str, str | None]) -> bool:
 
 def _requires_sql_dimensions(norm: dict[str, str | None]) -> bool:
     """Filters that cannot be derived by slicing a network metric-view snapshot."""
+    site = norm.get("site") or ""
+    if "," in str(site):
+        return True
     return bool(
         norm.get("line")
         or norm.get("department")

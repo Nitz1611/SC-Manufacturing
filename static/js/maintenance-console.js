@@ -96,6 +96,7 @@
     payload: null,
     loading: false,
     filtersApplying: false,
+    filterLoadsInFlight: 0,
     filterRequestGen: 0,
     insightsLoading: false,
     insightTab: 'alerts',
@@ -151,6 +152,21 @@
       .filter(Boolean);
   }
 
+  var normalizeMultiList = normalizeRegionList;
+
+  function multiFilterDisplay(value) {
+    var list = normalizeMultiList(value);
+    if (!list.length) return 'Select All';
+    if (list.length === 1) return list[0];
+    if (list.length === 2) return list.join(', ');
+    return list.length + ' selected';
+  }
+
+  function multiPayloadValue(raw) {
+    var list = normalizeMultiList(raw);
+    return list.length ? list.join(',') : null;
+  }
+
   function regionFilterLabel(value) {
     var list = normalizeRegionList(value);
     return list.length ? list.join(', ') : 'All';
@@ -178,8 +194,11 @@
     if (!mc || !mc.state) return;
     mc.state.filters.timeframe = String(state.filters.timeframe || 'ptd').toLowerCase();
     mc.state.filters.year = hiddenEngineYear();
-    mc.state.filters.site = state.filters.site;
-    mc.state.filters.region = normalizeRegionList(state.filters.region);
+    mc.state.filters.site =
+      normalizeMultiList(state.filters.site).length === 1
+        ? normalizeMultiList(state.filters.site)[0]
+        : 'All';
+    mc.state.filters.region = normalizeMultiList(state.filters.region);
     mc.state.filters.showIn = state.filters.showIn || 'Thousands';
     syncMaintFilterExtrasToConsole();
   }
@@ -188,9 +207,10 @@
     var mc = window.ManufacturingConsole;
     if (!mc || !mc.state) return;
     mc.state.maintFilterExtras = {
-      department: state.filters.department === 'All' ? null : state.filters.department,
-      line: state.filters.line === 'All' ? null : state.filters.line,
-      shift: state.filters.shift === 'All' ? null : state.filters.shift,
+      sites: normalizeMultiList(state.filters.site),
+      department: state.filters.department === 'All' ? null : multiPayloadValue(state.filters.department),
+      line: state.filters.line === 'All' ? null : multiPayloadValue(state.filters.line),
+      shift: state.filters.shift === 'All' ? null : multiPayloadValue(state.filters.shift),
       dateFrom: isCustomTimeframe() && state.filters.dateFrom ? state.filters.dateFrom : null,
       dateTo: isCustomTimeframe() && state.filters.dateTo ? state.filters.dateTo : null,
     };
@@ -238,11 +258,11 @@
     var custom = isCustomTimeframe();
     return {
       timeframe: String(f.timeframe || 'ptd').toLowerCase(),
-      site: f.site === 'All' ? null : f.site,
-      region: normalizeRegionList(f.region).join(',') || null,
-      department: f.department === 'All' ? null : f.department,
-      line: f.line === 'All' ? null : f.line,
-      shift: f.shift === 'All' ? null : f.shift,
+      site: multiPayloadValue(f.site),
+      region: multiPayloadValue(f.region),
+      department: multiPayloadValue(f.department),
+      line: multiPayloadValue(f.line),
+      shift: multiPayloadValue(f.shift),
       dateFrom: custom && f.dateFrom ? f.dateFrom : null,
       dateTo: custom && f.dateTo ? f.dateTo : null,
     };
@@ -269,8 +289,11 @@
     return {
       showIn: state.filters.showIn || 'Thousands',
       timeframe: payload.timeframe,
-      site: state.filters.site || 'All',
-      region: normalizeRegionList(state.filters.region),
+      site:
+        normalizeMultiList(state.filters.site).length === 1
+          ? normalizeMultiList(state.filters.site)[0]
+          : 'All',
+      region: normalizeMultiList(state.filters.region),
       period: mapConsolePeriod(payload.timeframe),
       department: payload.department,
       line: payload.line,
@@ -299,10 +322,10 @@
     var parts = [];
     parts.push('Show: ' + (state.filters.showIn || 'Thousands'));
     parts.push(slicerDisplayValue('timeframe', state.filters.timeframe));
-    if (state.filters.site && state.filters.site !== 'All') {
-      parts.push('Site: ' + state.filters.site);
-    }
-    var regions = normalizeRegionList(state.filters.region);
+    var sites = normalizeMultiList(state.filters.site);
+    if (sites.length === 1) parts.push('Site: ' + sites[0]);
+    else if (sites.length > 1) parts.push('Sites: ' + sites.length + ' selected');
+    var regions = normalizeMultiList(state.filters.region);
     if (regions.length === 1) {
       parts.push('Region: ' + regions[0]);
     } else if (regions.length > 1) {
@@ -323,12 +346,26 @@
     return from <= to;
   }
 
+  function beginFilterLoad() {
+    state.filterLoadsInFlight = (state.filterLoadsInFlight || 0) + 1;
+    if (state.filterLoadsInFlight === 1) {
+      state.filtersApplying = true;
+      document.body.classList.add('maint-filters-applying');
+      var status = $('#maint-filter-status');
+      if (status) status.textContent = 'Updating metrics…';
+    }
+  }
+
+  function endFilterLoad() {
+    state.filterLoadsInFlight = Math.max(0, (state.filterLoadsInFlight || 1) - 1);
+    if (state.filterLoadsInFlight <= 0) {
+      state.filterLoadsInFlight = 0;
+      clearFiltersApplying();
+    }
+  }
+
   function markFiltersApplying() {
-    state.filtersApplying = true;
-    state.filterRequestGen = (state.filterRequestGen || 0) + 1;
-    document.body.classList.add('maint-filters-applying');
-    var status = $('#maint-filter-status');
-    if (status) status.textContent = 'Updating metrics for selected filters…';
+    beginFilterLoad();
     if (state.page === 'kpi-overview') {
       renderKpiOverviewMetricStripPending();
     }
@@ -422,10 +459,7 @@
         }
       })
       .finally(function () {
-        if (reqGen === (state.filterRequestGen || 0)) {
-          state.loading = false;
-          clearFiltersApplying();
-        }
+        state.loading = false;
       });
   }
 
@@ -492,7 +526,9 @@
 
   function slicerDisplayValue(id, value) {
     if (value == null || value === '' || value === 'All') return 'Select All';
-    if (id === 'region') return regionFilterLabel(value) === 'All' ? 'Select All' : regionFilterLabel(value);
+    if (id === 'region' || id === 'site' || id === 'department' || id === 'line' || id === 'shift') {
+      return multiFilterDisplay(value);
+    }
     if (Array.isArray(value)) return value.length ? value.join(', ') : 'Select All';
     if (id === 'timeframe') {
       var tfMatch = TIMEFRAME_OPTIONS.filter(function (o) {
@@ -592,7 +628,10 @@
     if (!wrap) return;
     wrap.innerHTML = '';
     var normalized = multi ? withSelectAllOption(options) : (options || []).slice();
-    var selected = multi ? normalizeRegionList(currentValue) : [currentValue || 'All'];
+    var selected = multi ? normalizeMultiList(currentValue) : [currentValue || 'All'];
+    if (!multi) {
+      selected = [currentValue || 'All'];
+    }
 
     normalized.forEach(function (opt) {
       var val = typeof opt === 'object' ? opt.value : opt;
@@ -631,16 +670,20 @@
   function onSlicerSelect(id, value, multi) {
     if (multi) {
       if (value === 'All') {
-        state.filters.region = 'All';
+        state.filters[id] = 'All';
       } else {
-        var list = normalizeRegionList(state.filters.region);
+        var list = normalizeMultiList(state.filters[id]);
         var idx = list.indexOf(value);
         if (idx >= 0) list.splice(idx, 1);
         else list.push(value);
-        state.filters.region = list.length ? list.join(', ') : 'All';
+        state.filters[id] = list.length ? list.join(', ') : 'All';
       }
-      populateSlicerOptions('region', regionSlicerOptions(), state.filters.region, true);
-      updateSlicerDisplay('region', state.filters.region);
+      if (id === 'site') {
+        state.filters.line = 'All';
+        updateSlicerDisplay('line', 'All');
+      }
+      refreshMultiSlicerOptions(id);
+      updateSlicerDisplay(id, state.filters[id]);
     } else {
       state.filters[id] = value;
       updateSlicerDisplay(id, value);
@@ -656,6 +699,46 @@
     onFilterChange();
   }
 
+  function refreshMultiSlicerOptions(id) {
+    if (id === 'region') {
+      populateSlicerOptions('region', regionSlicerOptions(), state.filters.region, true);
+    } else if (id === 'site') {
+      var siteOpts = (liveFilterOptions.sites || []).map(function (s) {
+        return { value: s, label: s };
+      });
+      populateSlicerOptions('site', siteOpts, state.filters.site, true);
+    } else if (id === 'department') {
+      var deptOpts = (liveFilterOptions.departments || []).map(function (d) {
+        return { value: d, label: d };
+      });
+      populateSlicerOptions('department', deptOpts, state.filters.department, true);
+    } else if (id === 'line') {
+      populateSlicerOptions('line', lineSlicerOptions(), state.filters.line, true);
+    } else if (id === 'shift') {
+      var shiftOpts = (liveFilterOptions.shifts || []).map(function (s) {
+        return { value: s, label: s };
+      });
+      populateSlicerOptions('shift', shiftOpts, state.filters.shift, true);
+    }
+  }
+
+  function lineSlicerOptions() {
+    return (liveFilterOptions.lines || []).map(function (l) {
+      return { value: l, label: l };
+    });
+  }
+
+  function sanitizeMultiFilter(id, allowed) {
+    if (!allowed || !allowed.length) {
+      state.filters[id] = 'All';
+      return;
+    }
+    var list = normalizeMultiList(state.filters[id]).filter(function (v) {
+      return allowed.indexOf(v) >= 0;
+    });
+    state.filters[id] = list.length ? list.join(', ') : 'All';
+  }
+
   function regionSlicerOptions() {
     return (liveFilterOptions.regions || []).map(function (r) {
       return { value: r, label: r };
@@ -663,15 +746,7 @@
   }
 
   function sanitizeRegionSelection() {
-    var allowed = liveFilterOptions.regions || [];
-    if (!allowed.length) {
-      state.filters.region = 'All';
-      return;
-    }
-    var list = normalizeRegionList(state.filters.region).filter(function (r) {
-      return allowed.indexOf(r) >= 0;
-    });
-    state.filters.region = list.length ? list.join(', ') : 'All';
+    sanitizeMultiFilter('region', liveFilterOptions.regions || []);
   }
 
   function createShowInSelectGroup() {
@@ -823,27 +898,30 @@
       site_regions: opts.site_regions || {},
     };
     if (opts.sites && opts.sites.length) {
+      sanitizeMultiFilter('site', opts.sites);
       var siteOpts = opts.sites.map(function (s) {
         return { value: s, label: s };
       });
-      populateSlicerOptions('site', siteOpts, state.filters.site, false);
+      populateSlicerOptions('site', siteOpts, state.filters.site, true);
       updateSlicerDisplay('site', state.filters.site);
     }
     if (opts.lines && opts.lines.length) {
       updateLineSlicerOptions(opts.lines);
     }
     if (opts.shifts && opts.shifts.length) {
+      sanitizeMultiFilter('shift', opts.shifts);
       var shiftOpts = opts.shifts.map(function (s) {
         return { value: s, label: s };
       });
-      populateSlicerOptions('shift', shiftOpts, state.filters.shift, false);
+      populateSlicerOptions('shift', shiftOpts, state.filters.shift, true);
       updateSlicerDisplay('shift', state.filters.shift);
     }
     if (opts.departments && opts.departments.length) {
+      sanitizeMultiFilter('department', opts.departments);
       var deptOpts = opts.departments.map(function (d) {
         return { value: d, label: d };
       });
-      populateSlicerOptions('department', deptOpts, state.filters.department, false);
+      populateSlicerOptions('department', deptOpts, state.filters.department, true);
       updateSlicerDisplay('department', state.filters.department);
     }
     if (opts.regions && opts.regions.length) {
@@ -859,10 +937,11 @@
   }
 
   function updateLineSlicerOptions(lines) {
-    var lineOpts = lines.map(function (l) {
+    sanitizeMultiFilter('line', lines || []);
+    var lineOpts = (lines || []).map(function (l) {
       return { value: l, label: l };
     });
-    populateSlicerOptions('line', lineOpts, state.filters.line, false);
+    populateSlicerOptions('line', lineOpts, state.filters.line, true);
     updateSlicerDisplay('line', state.filters.line);
   }
 
@@ -1539,7 +1618,6 @@
     var root = $('#maint-root');
     if (!root || !state.payload) return;
     root.classList.remove('maint-loading');
-    root.classList.toggle('maint-content-pending', !!state.filtersApplying);
     var p = state.payload;
     var kpi = p.kpis && p.kpis.primary;
     var mtbf = p.kpis && p.kpis.mtbf;
@@ -2658,13 +2736,13 @@
     bar.appendChild(
       createSlicerGroup('timeframe', 'Timeframe', TIMEFRAME_OPTIONS, state.filters.timeframe, false)
     );
-    bar.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, false, true));
+    bar.appendChild(createSlicerGroup('site', 'Site (Plant)', [], state.filters.site, true, true));
     bar.appendChild(
       createSlicerGroup('region', 'Region', regionSlicerOptions(), state.filters.region, true)
     );
-    bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
-    bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
-    bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
+    bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, true, true));
+    bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, true, true));
+    bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, true, false));
     bar.appendChild(createShowInSelectGroup());
     bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
     bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
@@ -2707,15 +2785,19 @@
   }
 
   function filterChangeRequiresForceSql() {
-    var f = state.filters;
     if (isCustomTimeframe()) return true;
-    if (f.line !== 'All' || f.department !== 'All' || f.shift !== 'All') return true;
+    if (normalizeMultiList(state.filters.line).length) return true;
+    if (normalizeMultiList(state.filters.department).length) return true;
+    if (normalizeMultiList(state.filters.shift).length) return true;
+    if (normalizeMultiList(state.filters.site).length > 1) return true;
+    if (normalizeMultiList(state.filters.region).length) return true;
     return false;
   }
 
   function applyFiltersNow() {
     if (isCustomTimeframe() && !customRangeReady()) return;
-    markFiltersApplying();
+    state.filterRequestGen = (state.filterRequestGen || 0) + 1;
+    beginFilterLoad();
     var nextSig = consoleFilterSignature();
     state._consoleFilterSig = nextSig;
     syncToConsoleFilters();
@@ -2724,8 +2806,16 @@
       invalidateConsoleMetricsCache();
     }
     updateEngineFilterContextBar();
-    reloadConsoleMetrics(forceSql);
-    fetchMaintenanceData(false, forceSql);
+    var maintReq = fetchMaintenanceData(false, forceSql);
+    var mc = window.ManufacturingConsole;
+    var consoleReq = Promise.resolve();
+    if (mc && typeof mc.reloadMetrics === 'function') {
+      var out = mc.reloadMetrics(!!forceSql, {
+        background: state.page !== 'kpi-overview' && !forceSql,
+      });
+      consoleReq = out && typeof out.then === 'function' ? out : Promise.resolve(out);
+    }
+    Promise.all([maintReq, consoleReq]).finally(endFilterLoad);
   }
 
   function buildPrimaryNav() {

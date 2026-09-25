@@ -144,16 +144,6 @@ body.mode-kpi-overview .compare-chart-wrap {
   margin-top: -4px;
 }
 
-body.maint-filters-applying .maint-filter-status:not(:empty) {
-  animation: maint-loading-pulse 1.2s ease-in-out infinite;
-}
-
-.maint-root.maint-content-pending {
-  opacity: 0.55;
-  filter: saturate(0.85);
-  transition: opacity 0.2s ease;
-}
-
 body.maint-filters-applying .metric-strip-root.metric-strip-pending .metric-value {
   color: #78909c;
 }
