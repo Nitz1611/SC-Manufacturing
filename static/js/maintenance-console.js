@@ -385,6 +385,11 @@
   }
 
   function updateSlicerDisplay(id, value) {
+    if (id === 'showIn') {
+      var sel = $('#maint-showin-select');
+      if (sel) sel.value = value || 'Thousands';
+      return;
+    }
     var slicer = $('.maint-filter-bar .slicer[data-slicer-id="' + id + '"]');
     if (!slicer) return;
     var el = slicer.querySelector('.slicer-value');
@@ -403,61 +408,9 @@
     if (bar) bar.classList.remove('maint-slicers-open');
   }
 
-  function maintSlicerViewport() {
-    var vv = window.visualViewport;
-    if (!vv) {
-      return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-    }
-    return { left: vv.offsetLeft, top: vv.offsetTop, width: vv.width, height: vv.height };
-  }
-
-  function positionMaintSlicerPanel(slicer) {
-    if (!slicer) return;
-    var panel = slicer.querySelector('.slicer-panel');
-    var trigger = slicer.querySelector('.slicer-trigger');
-    if (!panel || !trigger) return;
-    var slicerId = slicer.dataset.slicerId || '';
-    var rect = trigger.getBoundingClientRect();
-    var vp = maintSlicerViewport();
-    var edge = 8;
-    var minW = Math.max(rect.width, slicerId === 'showIn' ? 160 : 230);
-    var width = Math.min(Math.max(minW, 160), Math.min(320, vp.width - edge * 2));
-    var left = slicerId === 'showIn' ? rect.right - width : rect.left;
-    if (left + width > vp.left + vp.width - edge) {
-      left = rect.right - width;
-    }
-    if (left < vp.left + edge) {
-      left = vp.left + edge;
-    }
-    if (left + width > vp.left + vp.width - edge) {
-      left = Math.max(vp.left + edge, vp.left + vp.width - width - edge);
-    }
-    var top = rect.bottom + 4;
-    var maxH = Math.min(320, vp.top + vp.height - top - edge);
-    if (maxH < 96 && rect.top - vp.top > 140) {
-      maxH = Math.min(320, rect.top - vp.top - edge - 4);
-      top = Math.max(vp.top + edge, rect.top - maxH - 4);
-    }
-    panel.style.position = 'fixed';
-    panel.style.top = top + 'px';
-    panel.style.left = left + 'px';
-    panel.style.right = 'auto';
-    panel.style.minWidth = width + 'px';
-    panel.style.width = width + 'px';
-    panel.style.maxHeight = maxH + 'px';
-    panel.style.zIndex = '10060';
-    panel.style.opacity = '1';
-    panel.style.visibility = 'visible';
-    panel.style.transform = 'none';
-    panel.style.pointerEvents = 'auto';
-    panel.classList.add('maint-slicer-panel-fixed');
-  }
-
-  function resetMaintSlicerPanel(slicer) {
-    if (!slicer) return;
-    var panel = slicer.querySelector('.slicer-panel');
+  function clearMaintSlicerPanelInlineStyles(panel) {
     if (!panel) return;
-    panel.classList.remove('maint-slicer-panel-fixed');
+    panel.classList.remove('maint-slicer-panel-portal');
     panel.style.position = '';
     panel.style.top = '';
     panel.style.left = '';
@@ -470,6 +423,26 @@
     panel.style.visibility = '';
     panel.style.transform = '';
     panel.style.pointerEvents = '';
+    panel.style.display = '';
+  }
+
+  function resetAllMaintSlicerInlineStyles() {
+    $$('.maint-filter-bar .slicer-panel').forEach(clearMaintSlicerPanelInlineStyles);
+  }
+
+  /** Never use viewport fixed positioning on panels inside the sticky filter bar. */
+  function positionMaintSlicerPanel(slicer) {
+    if (!slicer) return;
+    var panel = slicer.querySelector('.slicer-panel');
+    if (!panel) return;
+    clearMaintSlicerPanelInlineStyles(panel);
+  }
+
+  function resetMaintSlicerPanel(slicer) {
+    if (!slicer) return;
+    var panel = slicer.querySelector('.slicer-panel');
+    if (!panel) return;
+    clearMaintSlicerPanelInlineStyles(panel);
   }
 
   function repositionOpenMaintSlicers() {
@@ -481,10 +454,6 @@
     window.__maintSlicerViewportBound = true;
     window.addEventListener('scroll', repositionOpenMaintSlicers, true);
     window.addEventListener('resize', repositionOpenMaintSlicers);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', repositionOpenMaintSlicers);
-      window.visualViewport.addEventListener('scroll', repositionOpenMaintSlicers);
-    }
   }
 
   function refreshSlicerOptions(id) {
@@ -501,7 +470,7 @@
     var wrap = $('.maint-filter-bar .slicer-options[data-slicer-options="' + id + '"]');
     if (!wrap) return;
     wrap.innerHTML = '';
-    var normalized = withSelectAllOption(options);
+    var normalized = multi ? withSelectAllOption(options) : (options || []).slice();
     var selected = multi ? normalizeRegionList(currentValue) : [currentValue || 'All'];
 
     normalized.forEach(function (opt) {
@@ -554,16 +523,6 @@
     } else {
       state.filters[id] = value;
       updateSlicerDisplay(id, value);
-      if (id === 'showIn') {
-        closeAllSlicers();
-        syncToConsoleFilters();
-        applyShowInToEngine();
-        if (state.page === 'kpi-overview') {
-          reloadConsoleMetrics(false);
-          afterKpiOverviewMetricsUpdated();
-        }
-        return;
-      }
       if (id === 'site') {
         state.filters.line = 'All';
         updateSlicerDisplay('line', 'All');
@@ -592,6 +551,40 @@
       return allowed.indexOf(r) >= 0;
     });
     state.filters.region = list.length ? list.join(', ') : 'All';
+  }
+
+  function createShowInSelectGroup() {
+    var group = document.createElement('div');
+    group.className = 'filter-group maint-filter-group maint-showin-group maint-hidden';
+    group.innerHTML = '<span class="filter-label maint-filter-label">Show in</span>';
+
+    var wrap = document.createElement('div');
+    wrap.className = 'maint-showin-select-wrap';
+
+    var select = document.createElement('select');
+    select.id = 'maint-showin-select';
+    select.className = 'maint-showin-select';
+    select.setAttribute('aria-label', 'Show in');
+    SHOW_IN_OPTIONS.forEach(function (v) {
+      var opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      select.appendChild(opt);
+    });
+    select.value = state.filters.showIn || 'Thousands';
+    select.addEventListener('change', function () {
+      state.filters.showIn = select.value;
+      syncToConsoleFilters();
+      applyShowInToEngine();
+      if (state.page === 'kpi-overview') {
+        reloadConsoleMetrics(false);
+        afterKpiOverviewMetricsUpdated();
+      }
+    });
+
+    wrap.appendChild(select);
+    group.appendChild(wrap);
+    return group;
   }
 
   function createSlicerGroup(id, label, options, currentValue, multi, searchable) {
@@ -2459,17 +2452,7 @@
     bar.appendChild(createSlicerGroup('department', 'Department', [], state.filters.department, false, true));
     bar.appendChild(createSlicerGroup('line', 'Line', [], state.filters.line, false, true));
     bar.appendChild(createSlicerGroup('shift', 'Shift', [], state.filters.shift, false, false));
-    var showInGroup = createSlicerGroup(
-      'showIn',
-      'Show in',
-      SHOW_IN_OPTIONS.map(function (v) {
-        return { value: v, label: v };
-      }),
-      state.filters.showIn,
-      false
-    );
-    showInGroup.classList.add('maint-showin-group', 'maint-hidden');
-    bar.appendChild(showInGroup);
+    bar.appendChild(createShowInSelectGroup());
     bar.appendChild(createDateGroup('from', 'From date', state.filters.dateFrom));
     bar.appendChild(createDateGroup('to', 'To date', state.filters.dateTo));
 
@@ -2638,6 +2621,7 @@
     state.filters.timeframe = state.filters.timeframe || 'ptd';
     buildPrimaryNav();
     buildFilterBar();
+    resetAllMaintSlicerInlineStyles();
     initDates();
     bindGlobalEvents();
 

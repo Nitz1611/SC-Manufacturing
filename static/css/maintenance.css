@@ -130,6 +130,7 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 .maint-filter-bar .filter-group { position: relative; z-index: 1; }
 .maint-filter-bar .maint-showin-group {
   min-width: 118px;
+  flex-shrink: 0;
 }
 .maint-filter-bar .maint-showin-group .filter-label,
 .maint-filter-bar .maint-showin-group .maint-filter-label {
@@ -140,6 +141,46 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
 .maint-filter-bar .maint-showin-group .slicer-trigger {
   min-width: 118px;
   font-size: 13px;
+}
+.maint-showin-select-wrap {
+  position: relative;
+  min-width: 118px;
+}
+.maint-showin-select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  min-width: 118px;
+  padding: 8px 28px 8px 12px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.maint-showin-select:hover {
+  border-color: var(--blue-accent);
+}
+.maint-showin-select:focus {
+  outline: none;
+  border-color: var(--blue-accent);
+  box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.12);
+}
+.maint-showin-select-wrap::after {
+  content: '';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  margin-top: -2px;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-muted);
+  pointer-events: none;
 }
 .maint-filter-bar .filter-group.maint-filter-group-open,
 .maint-filter-bar .filter-group:has(.slicer.open) { z-index: 10045; }
@@ -157,13 +198,6 @@ body.mode-kpi-overview .top-nav-secondary.visible { display: flex !important; }
   width: max(100%, 260px);
   max-height: min(320px, calc(100vh - 120px));
   margin-top: 0;
-}
-.maint-filter-bar .slicer.open .slicer-panel.maint-slicer-panel-fixed {
-  position: fixed;
-  min-width: 0;
-  width: auto;
-  margin-top: 0;
-  transition: none;
 }
 .maint-root .maint-kpi-row,
 .maint-root .maint-content {
