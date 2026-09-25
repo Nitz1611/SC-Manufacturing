@@ -175,6 +175,42 @@
     mc.state.filters.site = state.filters.site;
     mc.state.filters.region = normalizeRegionList(state.filters.region);
     mc.state.filters.showIn = state.filters.showIn || 'Thousands';
+    syncMaintFilterExtrasToConsole();
+  }
+
+  function syncMaintFilterExtrasToConsole() {
+    var mc = window.ManufacturingConsole;
+    if (!mc || !mc.state) return;
+    mc.state.maintFilterExtras = {
+      department: state.filters.department === 'All' ? null : state.filters.department,
+      line: state.filters.line === 'All' ? null : state.filters.line,
+      shift: state.filters.shift === 'All' ? null : state.filters.shift,
+      dateFrom: isCustomTimeframe() && state.filters.dateFrom ? state.filters.dateFrom : null,
+      dateTo: isCustomTimeframe() && state.filters.dateTo ? state.filters.dateTo : null,
+    };
+  }
+
+  function patchConsoleDataFetch() {
+    if (window.__maintConsoleDataFetchPatch) return;
+    window.__maintConsoleDataFetchPatch = true;
+    var nativeFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      var url = typeof input === 'string' ? input : input && input.url;
+      if (url && url.indexOf('/api/console-data') !== -1 && init && init.body) {
+        try {
+          var body = JSON.parse(init.body);
+          var mc = window.ManufacturingConsole;
+          var extras = (mc && mc.state && mc.state.maintFilterExtras) || {};
+          if (body.filters && extras) {
+            body.filters = Object.assign({}, body.filters, extras);
+            init = Object.assign({}, init, { body: JSON.stringify(body) });
+          }
+        } catch (err) {
+          /* keep original body */
+        }
+      }
+      return nativeFetch(input, init);
+    };
   }
 
   function applyShowInToEngine() {
@@ -470,7 +506,11 @@
       updateSlicerDisplay(id, value);
       if (id === 'showIn') {
         closeAllSlicers();
+        syncToConsoleFilters();
         applyShowInToEngine();
+        if (state.page === 'kpi-overview') {
+          reloadConsoleMetrics(false);
+        }
         return;
       }
       if (id === 'site') {
@@ -1507,6 +1547,7 @@
     document.body.classList.remove('mode-maintenance');
     document.body.classList.add('mode-kpi-overview');
     updateShellForPage('kpi-overview');
+    updateSlicerDisplay('showIn', state.filters.showIn || 'Thousands');
 
     if (typeof engineEnterKpiOverview === 'function') {
       engineEnterKpiOverview(true);
@@ -1517,7 +1558,12 @@
 
     applyShowInToEngine();
     reflowDashboardCharts();
-    reloadConsoleMetrics();
+    reloadConsoleMetrics(true);
+  }
+
+  function openKpiOverviewFromReport() {
+    closeMyReport();
+    goToKpiOverview();
   }
 
   function openMyReport() {
@@ -1602,6 +1648,22 @@
       barSkel +
       '</div></div></div>'
     );
+  }
+
+  function bindReportDonutNavigation() {
+    var card = $('.maint-report-donut-clickable');
+    if (!card || card.dataset.kpiNavBound) return;
+    card.dataset.kpiNavBound = '1';
+    card.addEventListener('click', function (e) {
+      e.preventDefault();
+      openKpiOverviewFromReport();
+    });
+    card.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openKpiOverviewFromReport();
+      }
+    });
   }
 
   function closeMyReport() {
@@ -1772,6 +1834,7 @@
     requestAnimationFrame(function () {
       if (state.reportTab === 'snapshot') {
         drawReportDonut('report-donut', kpi, animate);
+        bindReportDonutNavigation();
       } else if (state.reportTab === 'drivers') {
         drawDriversDonut('report-drivers-donut', p.downtime_drivers);
       }
@@ -1819,7 +1882,7 @@
       '<option>Total DT %</option></select></div>' +
       '<div class="maint-snapshot-grid">' +
       '<div class="maint-snapshot-col-left">' +
-      '<div class="maint-report-donut-card maint-donut-card-plain">' +
+      '<div class="maint-report-donut-card maint-donut-card-plain maint-report-donut-clickable" data-action="kpi-overview-from-report" role="button" tabindex="0" aria-label="Open KPI Overview with current filters">' +
       '<div class="maint-donut-visual-panel">' +
       '<div class="maint-donut-wrap maint-donut-wrap-report"><canvas id="report-donut"></canvas></div></div>' +
       '<div class="maint-donut-meta-stack">' +
@@ -2274,6 +2337,7 @@
       return;
     }
     window.__maintenanceConsoleInitDone = true;
+    patchConsoleDataFetch();
     syncFromConsoleFilters();
     state.filters.year = state.filters.year || '2026';
     state.filters.timeframe = state.filters.timeframe || 'ptd';
@@ -2309,6 +2373,7 @@
     if (typeof mc.reloadMetrics === 'function') {
       var engineReloadMetrics = mc.reloadMetrics.bind(mc);
       mc.reloadMetrics = function (force, opts) {
+        syncToConsoleFilters();
         var out = engineReloadMetrics(force, opts);
         if (state.page === 'maintenance') {
           var reassert = function () {

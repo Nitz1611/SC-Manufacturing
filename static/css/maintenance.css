@@ -1139,6 +1139,29 @@ body.maint-report-open { overflow: hidden; }
   background: #ffffff;
 }
 
+.maint-report-donut-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.maint-report-donut-clickable:hover,
+.maint-report-donut-clickable:focus-visible {
+  border-color: #0066cc;
+  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.18);
+  outline: none;
+}
+
+.maint-report-donut-clickable::after {
+  content: 'Open KPI Overview';
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #0066cc;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
 .maint-donut-wrap {
   position: relative;
   height: 142px;
