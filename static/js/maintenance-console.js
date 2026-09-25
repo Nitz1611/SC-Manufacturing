@@ -252,7 +252,7 @@
         if (data._partial || data._refreshing) {
           window.setTimeout(function () {
             fetchMaintenanceData(true);
-          }, 4000);
+          }, 2500);
         }
       })
       .catch(function (err) {
@@ -2039,8 +2039,8 @@
     if (fromEl) state.filters.dateFrom = fromEl.value;
     if (toEl) state.filters.dateTo = toEl.value;
     syncToConsoleFilters();
-    reloadConsoleMetrics(true);
-    fetchMaintenanceData(false, true);
+    reloadConsoleMetrics(false);
+    fetchMaintenanceData(false, false);
   }
 
   function buildPrimaryNav() {

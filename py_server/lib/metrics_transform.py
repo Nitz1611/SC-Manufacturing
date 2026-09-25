@@ -932,6 +932,53 @@ def build_core_metrics_from_sql(
     return m
 
 
+def apply_maintenance_kpi_sql_rows(
+    metrics: MetricsPayload,
+    *,
+    maintenance_unplanned_card: List[Dict[str, Any]] | None = None,
+    maintenance_dt_trend_ytd: List[Dict[str, Any]] | None = None,
+    maintenance_mtbf_card: List[Dict[str, Any]] | None = None,
+    maintenance_mtbf_trend_ytd: List[Dict[str, Any]] | None = None,
+) -> None:
+    """Merge maintenance KPI card + YTD sparkline SQL into an existing metrics payload."""
+    if maintenance_unplanned_card:
+        metrics["maintenance_unplanned"] = (maintenance_unplanned_card or [{}])[0]
+    if maintenance_mtbf_card:
+        metrics["maintenance_mtbf"] = (maintenance_mtbf_card or [{}])[0]
+
+    if maintenance_dt_trend_ytd is not None:
+        ytd_period_labels = _sort_periods([
+            str(r.get("period_label") or "")
+            for r in maintenance_dt_trend_ytd
+            if r.get("period_label")
+        ])
+        ytd_period_trend: List[float] = []
+        for p in ytd_period_labels:
+            row = next(
+                (r for r in maintenance_dt_trend_ytd if str(r.get("period_label")) == p),
+                None,
+            )
+            ytd_period_trend.append(_round2(float(row.get("dt_pct") or 0)) if row else 0.0)
+        metrics["ytd_periods"] = ytd_period_labels
+        metrics["ytd_period_trend"] = ytd_period_trend
+
+    if maintenance_mtbf_trend_ytd is not None:
+        mtbf_ytd_period_labels = _sort_periods([
+            str(r.get("period_label") or "")
+            for r in maintenance_mtbf_trend_ytd
+            if r.get("period_label")
+        ])
+        mtbf_ytd_period_trend: List[float] = []
+        for p in mtbf_ytd_period_labels:
+            row = next(
+                (r for r in maintenance_mtbf_trend_ytd if str(r.get("period_label")) == p),
+                None,
+            )
+            mtbf_ytd_period_trend.append(_round2(float(row.get("mtbf_hrs") or 0)) if row else 0.0)
+        metrics["mtbf_ytd_periods"] = mtbf_ytd_period_labels
+        metrics["mtbf_ytd_period_trend"] = mtbf_ytd_period_trend
+
+
 def build_metrics_from_sql(
     results: SqlQueryResults,
     filters: Dict[str, Optional[str]],
@@ -1187,6 +1234,7 @@ __all__ = [
     "buildFilterOptions",
     "build_core_metrics_from_sql",
     "buildCoreMetricsFromSql",
+    "apply_maintenance_kpi_sql_rows",
     "build_metrics_from_sql",
     "buildMetricsFromSql",
 ]

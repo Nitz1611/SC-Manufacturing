@@ -9,6 +9,7 @@ from typing import Any
 from flask import Blueprint, jsonify, request
 
 from py_server.lib.analytics import (
+    enrich_metrics_for_maintenance_kpis,
     get_cached_metrics_bundle,
     get_fresh_metrics_bundle,
     get_metrics_bundle,
@@ -118,6 +119,7 @@ def maintenance_data():
     force_refresh = bool(body.get('forceRefresh') or body.get('refresh'))
 
     def _respond(metrics: dict[str, Any], *, source: str, cached: bool) -> Any:
+        metrics = enrich_metrics_for_maintenance_kpis(metrics, filters)
         payload = build_maintenance_payload_from_filters(metrics, filters)
         meta = metrics.get('meta') or {}
         partial = bool(meta.get('partial'))

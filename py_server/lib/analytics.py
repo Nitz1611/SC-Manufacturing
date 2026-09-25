@@ -30,6 +30,7 @@ from py_server.lib.config import (
 )
 from py_server.lib.databricks_sql import execute_statement, sql_configured, warmup_warehouse
 from py_server.lib.metrics_transform import (
+    apply_maintenance_kpi_sql_rows,
     apply_site_filter,
     build_core_metrics_from_sql,
     build_metrics_from_sql,
@@ -49,6 +50,12 @@ _last_sql_error: str | None = None
 _last_sql_success_at: float | None = None
 
 CRITICAL_QUERY_KEYS = ('dashboard_dt_kpis', 'dashboard_dt_site_kpis')
+MAINTENANCE_KPI_QUERY_KEYS = (
+    'maintenance_unplanned_card',
+    'maintenance_dt_trend_ytd',
+    'maintenance_mtbf_card',
+    'maintenance_mtbf_trend_ytd',
+)
 WAVE1_CHART_KEYS = (
     'dashboard_dt_period_trend',
     'dashboard_dt_site_by_period',
@@ -433,6 +440,50 @@ def _metrics_is_partial(metrics: dict[str, Any] | None) -> bool:
     if not isinstance(meta, dict):
         return False
     return bool(meta.get('partial'))
+
+
+def _maintenance_kpi_data_ready(metrics: dict[str, Any] | None) -> bool:
+    if not metrics:
+        return False
+    trend = metrics.get('ytd_period_trend') or []
+    unplanned = metrics.get('maintenance_unplanned') or {}
+    return bool(trend) and unplanned.get('current_dt_pct') is not None
+
+
+def enrich_metrics_for_maintenance_kpis(
+    metrics: dict[str, Any],
+    filters: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Ensure KPI cards + YTD sparklines exist even when metrics bundle is still partial.
+    Sparkline SQL intentionally ignores timeframe; headline cards use the active timeframe.
+    """
+    if not sql_configured() or _maintenance_kpi_data_ready(metrics):
+        return metrics
+    norm = normalize_params(filters or {})
+    m = copy.deepcopy(metrics)
+    rows: dict[str, list[dict[str, Any]]] = {}
+    workers = _sql_max_workers(len(MAINTENANCE_KPI_QUERY_KEYS))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_execute_query, key, norm): key for key in MAINTENANCE_KPI_QUERY_KEYS}
+        for fut in as_completed(futures):
+            key = futures[fut]
+            try:
+                rows[key] = fut.result()
+            except Exception as err:
+                print(f'[analytics] maintenance KPI {key} failed: {err}', flush=True)
+                rows[key] = []
+    apply_maintenance_kpi_sql_rows(
+        m,
+        maintenance_unplanned_card=rows.get('maintenance_unplanned_card'),
+        maintenance_dt_trend_ytd=rows.get('maintenance_dt_trend_ytd'),
+        maintenance_mtbf_card=rows.get('maintenance_mtbf_card'),
+        maintenance_mtbf_trend_ytd=rows.get('maintenance_mtbf_trend_ytd'),
+    )
+    meta = dict(m.get('meta') or {})
+    meta['maintenance_kpi_enriched'] = True
+    m['meta'] = meta
+    return m
 
 
 def _filters_dict_from_norm(norm: dict[str, str | None]) -> dict[str, Any]:
